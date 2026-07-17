@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Just Another FastAPI Authentication Library"
 authors = [{name = "João Vitória Silva", email = "joao@endurain.com"}]
 license = {text = "MIT"}
-readme = {file = "README", content-type = "text/markdown"}
+readme = {file = "README.md", content-type = "text/markdown"}
 requires-python = ">=3.13,<4.0"
 dependencies = [
     "fastapi>=0.136.0",
@@ -17,15 +17,6 @@ dependencies = [
     "authlib>=1.6.11",
     "httpx>=0.28.1",
     "user-agents>=2.2.0",
-]
-
-[project.optional-dependencies]
-# Extra pulled in for multi-node (`distributed`) deployments: Redis-backed
-# shared state / event bus and S3-compatible object storage. The default image
-# (`uv export --no-dev`) ships neither, so `local` deployments stay lean.
-distributed = [
-    "boto3>=1.35",
-    "redis>=7.4.0",
 ]
 
 [dependency-groups]

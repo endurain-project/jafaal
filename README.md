@@ -8,6 +8,21 @@
 [![Docs](https://img.shields.io/badge/docs-endurain--project.codeberg.page-blue)](https://jafaal.endurain.com/)
 [![Stars](https://img.shields.io/badge/dynamic/json?url=https://codeberg.org/api/v1/repos/endurain-project/jafaal&query=$.stars_count&label=stars&logo=codeberg)](https://codeberg.org/endurain-project/jafaal)
 
+## Sponsors
+
+A huge thank you to the project sponsors! Your support helps keep this project going.
+
+Support Endurain's development on:
+
+- [Buy Me a Coffee](https://buymeacoffee.com/endurain)
+- [liberapay](https://liberapay.com/endurain/)
+- [Patreon](https://patreon.com/u84745218)
+- [GitHub Sponsors using archived repo](https://github.com/endurain-project/endurain)
+
+## Contributing
+
+Contributions are welcomed! Please open an issue to discuss any changes or improvements before submitting a PR. Check out the [Contributing Guidelines](CONTRIBUTING.md) for more details.
+
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
