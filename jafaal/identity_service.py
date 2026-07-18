@@ -41,17 +41,17 @@ from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-import jafaal._internal.password_hasher as auth_password_hasher
-import jafaal._internal.services.account_security_service as auth_account_security_service
-import jafaal._internal.services.identity_link_service as auth_identity_link_service
-import jafaal._internal.services.mfa_workflow as auth_mfa_workflow
-import jafaal._internal.token_manager as auth_token_manager
-import jafaal.api_keys.crud as auth_api_keys_crud
-import jafaal.api_keys.utils as auth_api_keys_utils
-import jafaal.credentials.crud as auth_credentials_crud
-import jafaal.mfa.crud as auth_mfa_crud
-import jafaal.sessions.crud as auth_sessions_crud
-import jafaal.utils as auth_utils
+import jafaal._internal.password_hasher as jafaal_password_hasher
+import jafaal._internal.services.account_security_service as jafaal_account_security_service
+import jafaal._internal.services.identity_link_service as jafaal_identity_link_service
+import jafaal._internal.services.mfa_workflow as jafaal_mfa_workflow
+import jafaal._internal.token_manager as jafaal_token_manager
+import jafaal.api_keys.crud as jafaal_api_keys_crud
+import jafaal.api_keys.utils as jafaal_api_keys_utils
+import jafaal.credentials.crud as jafaal_credentials_crud
+import jafaal.mfa.crud as jafaal_mfa_crud
+import jafaal.sessions.crud as jafaal_sessions_crud
+import jafaal.utils as jafaal_utils
 from jafaal.principal import (
     AccessTokenCred,
     ApiKeyCred,
@@ -64,13 +64,13 @@ from jafaal.principal import (
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    import jafaal._internal.security_stores as auth_security_stores
-    import jafaal.identity_providers.link_tokens.schema as auth_idp_link_tokens_schema
-    import jafaal.identity_providers.links.schema as auth_identity_links_schema
-    import jafaal.mfa.backup_codes.schema as auth_mfa_backup_codes_schema
-    import jafaal.mfa.schema as auth_mfa_schema
-    import jafaal.mfa.setup_store as auth_mfa_setup_store
-    import jafaal.sessions.schema as auth_sessions_schema
+    import jafaal._internal.security_stores as jafaal_security_stores
+    import jafaal.identity_providers.link_tokens.schema as jafaal_idp_link_tokens_schema
+    import jafaal.identity_providers.links.schema as jafaal_identity_links_schema
+    import jafaal.mfa.backup_codes.schema as jafaal_mfa_backup_codes_schema
+    import jafaal.mfa.schema as jafaal_mfa_schema
+    import jafaal.mfa.setup_store as jafaal_mfa_setup_store
+    import jafaal.sessions.schema as jafaal_sessions_schema
 
 __all__ = [
     "DefaultIdentityService",
@@ -359,7 +359,7 @@ class IdentityService(Protocol):
     # only through this contract, never imported directly by non-auth code.
     # ------------------------------------------------------------------
 
-    def get_user_sessions(self, user_id: int) -> list[auth_sessions_schema.UsersSessionsRead]:
+    def get_user_sessions(self, user_id: int) -> list[jafaal_sessions_schema.UsersSessionsRead]:
         """Return the authenticated user's active sessions.
 
         Args:
@@ -400,7 +400,7 @@ class IdentityService(Protocol):
         current_password: str,
         new_password: str,
         mfa_code: str | None,
-        step_up_store: auth_security_stores.StepUpStore,
+        step_up_store: jafaal_security_stores.StepUpStore,
         revoke_other_sessions: bool = False,
         current_session_id: str | None = None,
     ) -> None:
@@ -440,7 +440,7 @@ class IdentityService(Protocol):
         """
         ...
 
-    def get_mfa_status(self, user_id: int) -> auth_mfa_schema.MFAStatusResponse:
+    def get_mfa_status(self, user_id: int) -> jafaal_mfa_schema.MFAStatusResponse:
         """Return whether MFA is enabled for the user.
 
         Args:
@@ -451,7 +451,7 @@ class IdentityService(Protocol):
         """
         ...
 
-    def get_backup_code_status(self, user_id: int) -> auth_mfa_backup_codes_schema.MFABackupCodeStatus:
+    def get_backup_code_status(self, user_id: int) -> jafaal_mfa_backup_codes_schema.MFABackupCodeStatus:
         """Return the user's MFA backup-code status.
 
         Args:
@@ -465,8 +465,8 @@ class IdentityService(Protocol):
     def setup_mfa(
         self,
         user_id: int,
-        mfa_secret_store: auth_mfa_setup_store.MFASecretStoreBackend,
-    ) -> auth_mfa_schema.MFASetupResponse:
+        mfa_secret_store: jafaal_mfa_setup_store.MFASecretStoreBackend,
+    ) -> jafaal_mfa_schema.MFASetupResponse:
         """Create MFA setup material and store the pending setup secret.
 
         Args:
@@ -480,10 +480,10 @@ class IdentityService(Protocol):
 
     def enable_mfa(
         self,
-        request: auth_mfa_schema.MFASetupRequest,
+        request: jafaal_mfa_schema.MFASetupRequest,
         user_id: int,
-        step_up_store: auth_security_stores.StepUpStore,
-        mfa_secret_store: auth_mfa_setup_store.MFASecretStoreBackend,
+        step_up_store: jafaal_security_stores.StepUpStore,
+        mfa_secret_store: jafaal_mfa_setup_store.MFASecretStoreBackend,
     ) -> dict:
         """Enable MFA using the pending secret and a verification code.
 
@@ -503,9 +503,9 @@ class IdentityService(Protocol):
 
     def disable_mfa(
         self,
-        request: auth_mfa_schema.MFADisableRequest,
+        request: jafaal_mfa_schema.MFADisableRequest,
         user_id: int,
-        step_up_store: auth_security_stores.StepUpStore,
+        step_up_store: jafaal_security_stores.StepUpStore,
     ) -> dict:
         """Disable MFA after step-up verification.
 
@@ -522,7 +522,7 @@ class IdentityService(Protocol):
         """
         ...
 
-    def verify_mfa(self, request: auth_mfa_schema.MFARequest, user_id: int) -> dict:
+    def verify_mfa(self, request: jafaal_mfa_schema.MFARequest, user_id: int) -> dict:
         """Verify an MFA code for the authenticated user.
 
         Args:
@@ -541,8 +541,8 @@ class IdentityService(Protocol):
         self,
         step_up: users_schema.StepUpVerification,
         user_id: int,
-        step_up_store: auth_security_stores.StepUpStore,
-    ) -> auth_mfa_backup_codes_schema.MFABackupCodesResponse:
+        step_up_store: jafaal_security_stores.StepUpStore,
+    ) -> jafaal_mfa_backup_codes_schema.MFABackupCodesResponse:
         """Generate new backup codes for an MFA-enabled account.
 
         Args:
@@ -561,11 +561,11 @@ class IdentityService(Protocol):
     def generate_link_token(
         self,
         idp_id: int,
-        link_request: auth_idp_link_tokens_schema.IdpLinkTokenRequest,
+        link_request: jafaal_idp_link_tokens_schema.IdpLinkTokenRequest,
         request: Request,
         user_id: int,
-        step_up_store: auth_security_stores.StepUpStore,
-    ) -> auth_idp_link_tokens_schema.IdpLinkTokenResponse:
+        step_up_store: jafaal_security_stores.StepUpStore,
+    ) -> jafaal_idp_link_tokens_schema.IdpLinkTokenResponse:
         """Generate a one-time IdP link token after step-up verification.
 
         Args:
@@ -589,7 +589,7 @@ class IdentityService(Protocol):
         idp_id: int,
         step_up: users_schema.StepUpVerification,
         user_id: int,
-        step_up_store: auth_security_stores.StepUpStore,
+        step_up_store: jafaal_security_stores.StepUpStore,
     ) -> None:
         """Unlink an IdP while enforcing anti-lockout checks.
 
@@ -611,7 +611,7 @@ class IdentityService(Protocol):
     def get_user_identity_provider_links(
         self,
         user_id: int,
-    ) -> list[auth_identity_links_schema.UsersIdentityProviderResponse]:
+    ) -> list[jafaal_identity_links_schema.UsersIdentityProviderResponse]:
         """Return enriched identity-provider links for the user.
 
         Args:
@@ -698,8 +698,8 @@ class DefaultIdentityService:
     def __init__(
         self,
         db: Session,
-        token_manager: auth_token_manager.TokenManager,
-        password_hasher: auth_password_hasher.PasswordHasher,
+        token_manager: jafaal_token_manager.TokenManager,
+        password_hasher: jafaal_password_hasher.PasswordHasher,
     ) -> None:
         """
         Initialise the service with per-request dependencies.
@@ -769,7 +769,7 @@ class DefaultIdentityService:
             HTTPException: 401 if the credentials are
                 invalid or the account does not exist.
         """
-        user = auth_utils.authenticate_user(
+        user = jafaal_utils.authenticate_user(
             username,
             password,
             self._password_hasher,
@@ -853,8 +853,8 @@ class DefaultIdentityService:
             HTTPException: 401 if the key is not found,
                 revoked, or expired.
         """
-        computed_hash = auth_api_keys_utils.hash_api_key(raw_key)
-        db_key = auth_api_keys_crud.get_api_key_by_hash(computed_hash, self._db)
+        computed_hash = jafaal_api_keys_utils.hash_api_key(raw_key)
+        db_key = jafaal_api_keys_crud.get_api_key_by_hash(computed_hash, self._db)
 
         # Constant-time comparison prevents timing attacks
         # even when the key is not found.
@@ -888,7 +888,7 @@ class DefaultIdentityService:
 
         # Best-effort last_used_at update; never fails the request.
         try:
-            auth_api_keys_crud.update_last_used(db_key.id, self._db)
+            jafaal_api_keys_crud.update_last_used(db_key.id, self._db)
         except SQLAlchemyError as err:
             logger.warning(f"Failed to update last_used_at for API key {db_key.id}: {err}", exc_info=err)
 
@@ -902,7 +902,7 @@ class DefaultIdentityService:
             },
         )
 
-        scopes = auth_api_keys_utils.json_to_scopes(db_key.scopes)
+        scopes = jafaal_api_keys_utils.json_to_scopes(db_key.scopes)
         return self._build_principal(
             user,
             scopes,
@@ -930,7 +930,7 @@ class DefaultIdentityService:
             HTTPException: 401 if the session is not
                 found or has expired.
         """
-        db_session = auth_sessions_crud.get_session_by_id_not_expired(session_id, self._db)
+        db_session = jafaal_sessions_crud.get_session_by_id_not_expired(session_id, self._db)
         if db_session is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -965,7 +965,7 @@ class DefaultIdentityService:
                 access_token, refresh_token_exp,
                 refresh_token, csrf_token)``.
         """
-        return auth_utils.create_tokens(user, self._token_manager, session_id)
+        return jafaal_utils.create_tokens(user, self._token_manager, session_id)
 
     def revoke_session(
         self,
@@ -983,7 +983,7 @@ class DefaultIdentityService:
             HTTPException: 404 if the session is not
                 found for this user.
         """
-        auth_sessions_crud.delete_session(session_id, user_id, self._db)
+        jafaal_sessions_crud.delete_session(session_id, user_id, self._db)
 
     def check_scope(
         self,
@@ -1033,7 +1033,7 @@ class DefaultIdentityService:
                 min_length,
                 password_type,
             )
-        except auth_password_hasher.PasswordPolicyError as err:
+        except jafaal_password_hasher.PasswordPolicyError as err:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=str(err),
@@ -1079,7 +1079,7 @@ class DefaultIdentityService:
         Returns:
             The stored password hash, or ``None`` if no credential exists.
         """
-        credential = auth_credentials_crud.get_credential(user_id, self._db)
+        credential = jafaal_credentials_crud.get_credential(user_id, self._db)
         return credential.password_hash if credential is not None else None
 
     def has_local_password(self, user_id: int) -> bool:
@@ -1095,7 +1095,7 @@ class DefaultIdentityService:
         Returns:
             True if a local credential row exists, False otherwise.
         """
-        return auth_credentials_crud.get_credential(user_id, self._db) is not None
+        return jafaal_credentials_crud.get_credential(user_id, self._db) is not None
 
     def set_local_password_hash(self, user_id: int, password_hash: str) -> None:
         """Insert or update a user's local password hash.
@@ -1107,7 +1107,7 @@ class DefaultIdentityService:
         Returns:
             None.
         """
-        auth_credentials_crud.upsert_password_hash(user_id, password_hash, self._db)
+        jafaal_credentials_crud.upsert_password_hash(user_id, password_hash, self._db)
 
     def clear_local_password(self, user_id: int) -> None:
         """Remove a user's local password credential, if present.
@@ -1118,7 +1118,7 @@ class DefaultIdentityService:
         Returns:
             None.
         """
-        auth_credentials_crud.delete_credential(user_id, self._db)
+        jafaal_credentials_crud.delete_credential(user_id, self._db)
 
     def initialize_user_mfa(self, user_id: int) -> None:
         """Create the default (disabled) MFA row for a new user.
@@ -1132,23 +1132,23 @@ class DefaultIdentityService:
         Returns:
             None.
         """
-        auth_mfa_crud.create_users_mfa_row(user_id, self._db)
+        jafaal_mfa_crud.create_users_mfa_row(user_id, self._db)
 
     # ------------------------------------------------------------------
     # Account-security workflows (delegate to auth._internal.services.*)
     # ------------------------------------------------------------------
 
-    def get_user_sessions(self, user_id: int) -> list[auth_sessions_schema.UsersSessionsRead]:
+    def get_user_sessions(self, user_id: int) -> list[jafaal_sessions_schema.UsersSessionsRead]:
         """Return the authenticated user's active sessions."""
-        return auth_account_security_service.get_user_sessions(user_id, self._db)
+        return jafaal_account_security_service.get_user_sessions(user_id, self._db)
 
     def delete_user_session(self, session_id: str, user_id: int) -> None:
         """Delete one of the authenticated user's own sessions."""
-        auth_account_security_service.delete_user_session(session_id, user_id, self._db)
+        jafaal_account_security_service.delete_user_session(session_id, user_id, self._db)
 
     def delete_other_user_sessions(self, user_id: int, current_session_id: str) -> None:
         """Delete all of the authenticated user's sessions except the current one."""
-        auth_account_security_service.delete_other_user_sessions(
+        jafaal_account_security_service.delete_other_user_sessions(
             user_id,
             current_session_id,
             self._db,
@@ -1160,12 +1160,12 @@ class DefaultIdentityService:
         current_password: str,
         new_password: str,
         mfa_code: str | None,
-        step_up_store: auth_security_stores.StepUpStore,
+        step_up_store: jafaal_security_stores.StepUpStore,
         revoke_other_sessions: bool = False,
         current_session_id: str | None = None,
     ) -> None:
         """Change the authenticated user's password after step-up verification."""
-        auth_account_security_service.change_own_password(
+        jafaal_account_security_service.change_own_password(
             user_id,
             current_password,
             new_password,
@@ -1179,38 +1179,38 @@ class DefaultIdentityService:
 
     def change_managed_user_password(self, user_id: int, new_password: str) -> None:
         """Change a managed user's password and revoke their auth state."""
-        auth_account_security_service.change_managed_user_password(
+        jafaal_account_security_service.change_managed_user_password(
             user_id,
             new_password,
             self,
             self._db,
         )
 
-    def get_mfa_status(self, user_id: int) -> auth_mfa_schema.MFAStatusResponse:
+    def get_mfa_status(self, user_id: int) -> jafaal_mfa_schema.MFAStatusResponse:
         """Return whether MFA is enabled for the user."""
-        return auth_mfa_workflow.get_mfa_status(user_id, self._db)
+        return jafaal_mfa_workflow.get_mfa_status(user_id, self._db)
 
-    def get_backup_code_status(self, user_id: int) -> auth_mfa_backup_codes_schema.MFABackupCodeStatus:
+    def get_backup_code_status(self, user_id: int) -> jafaal_mfa_backup_codes_schema.MFABackupCodeStatus:
         """Return the user's MFA backup-code status."""
-        return auth_mfa_workflow.get_backup_code_status(user_id, self._db)
+        return jafaal_mfa_workflow.get_backup_code_status(user_id, self._db)
 
     def setup_mfa(
         self,
         user_id: int,
-        mfa_secret_store: auth_mfa_setup_store.MFASecretStoreBackend,
-    ) -> auth_mfa_schema.MFASetupResponse:
+        mfa_secret_store: jafaal_mfa_setup_store.MFASecretStoreBackend,
+    ) -> jafaal_mfa_schema.MFASetupResponse:
         """Create MFA setup material and store the pending setup secret."""
-        return auth_mfa_workflow.setup_mfa(user_id, self._db, mfa_secret_store)
+        return jafaal_mfa_workflow.setup_mfa(user_id, self._db, mfa_secret_store)
 
     def enable_mfa(
         self,
-        request: auth_mfa_schema.MFASetupRequest,
+        request: jafaal_mfa_schema.MFASetupRequest,
         user_id: int,
-        step_up_store: auth_security_stores.StepUpStore,
-        mfa_secret_store: auth_mfa_setup_store.MFASecretStoreBackend,
+        step_up_store: jafaal_security_stores.StepUpStore,
+        mfa_secret_store: jafaal_mfa_setup_store.MFASecretStoreBackend,
     ) -> dict:
         """Enable MFA using the pending secret and a verification code."""
-        return auth_mfa_workflow.enable_mfa(
+        return jafaal_mfa_workflow.enable_mfa(
             request,
             user_id,
             self,
@@ -1221,36 +1221,36 @@ class DefaultIdentityService:
 
     def disable_mfa(
         self,
-        request: auth_mfa_schema.MFADisableRequest,
+        request: jafaal_mfa_schema.MFADisableRequest,
         user_id: int,
-        step_up_store: auth_security_stores.StepUpStore,
+        step_up_store: jafaal_security_stores.StepUpStore,
     ) -> dict:
         """Disable MFA after step-up verification."""
-        return auth_mfa_workflow.disable_mfa(request, user_id, self, step_up_store, self._db)
+        return jafaal_mfa_workflow.disable_mfa(request, user_id, self, step_up_store, self._db)
 
-    def verify_mfa(self, request: auth_mfa_schema.MFARequest, user_id: int) -> dict:
+    def verify_mfa(self, request: jafaal_mfa_schema.MFARequest, user_id: int) -> dict:
         """Verify an MFA code for the authenticated user."""
-        return auth_mfa_workflow.verify_mfa(request, user_id, self, self._db)
+        return jafaal_mfa_workflow.verify_mfa(request, user_id, self, self._db)
 
     def generate_backup_codes(
         self,
         step_up: users_schema.StepUpVerification,
         user_id: int,
-        step_up_store: auth_security_stores.StepUpStore,
-    ) -> auth_mfa_backup_codes_schema.MFABackupCodesResponse:
+        step_up_store: jafaal_security_stores.StepUpStore,
+    ) -> jafaal_mfa_backup_codes_schema.MFABackupCodesResponse:
         """Generate new backup codes for an MFA-enabled account."""
-        return auth_mfa_workflow.generate_backup_codes(step_up, user_id, self, step_up_store, self._db)
+        return jafaal_mfa_workflow.generate_backup_codes(step_up, user_id, self, step_up_store, self._db)
 
     def generate_link_token(
         self,
         idp_id: int,
-        link_request: auth_idp_link_tokens_schema.IdpLinkTokenRequest,
+        link_request: jafaal_idp_link_tokens_schema.IdpLinkTokenRequest,
         request: Request,
         user_id: int,
-        step_up_store: auth_security_stores.StepUpStore,
-    ) -> auth_idp_link_tokens_schema.IdpLinkTokenResponse:
+        step_up_store: jafaal_security_stores.StepUpStore,
+    ) -> jafaal_idp_link_tokens_schema.IdpLinkTokenResponse:
         """Generate a one-time IdP link token after step-up verification."""
-        return auth_identity_link_service.generate_link_token(
+        return jafaal_identity_link_service.generate_link_token(
             idp_id,
             link_request,
             request,
@@ -1265,10 +1265,10 @@ class DefaultIdentityService:
         idp_id: int,
         step_up: users_schema.StepUpVerification,
         user_id: int,
-        step_up_store: auth_security_stores.StepUpStore,
+        step_up_store: jafaal_security_stores.StepUpStore,
     ) -> None:
         """Unlink an IdP while enforcing anti-lockout checks."""
-        auth_identity_link_service.delete_identity_provider_link(
+        jafaal_identity_link_service.delete_identity_provider_link(
             idp_id,
             step_up,
             user_id,
@@ -1280,9 +1280,9 @@ class DefaultIdentityService:
     def get_user_identity_provider_links(
         self,
         user_id: int,
-    ) -> list[auth_identity_links_schema.UsersIdentityProviderResponse]:
+    ) -> list[jafaal_identity_links_schema.UsersIdentityProviderResponse]:
         """Return enriched identity-provider links for the user."""
-        return auth_identity_link_service.get_user_identity_provider_links(user_id, self._db)
+        return jafaal_identity_link_service.get_user_identity_provider_links(user_id, self._db)
 
     def admin_delete_identity_provider_link(
         self,
@@ -1290,7 +1290,7 @@ class DefaultIdentityService:
         idp_id: int,
     ) -> None:
         """Unlink an IdP from a user as an administrator (no step-up)."""
-        auth_identity_link_service.admin_delete_identity_provider_link(
+        jafaal_identity_link_service.admin_delete_identity_provider_link(
             user_id,
             idp_id,
             self._db,
@@ -1303,7 +1303,7 @@ class DefaultIdentityService:
         client_ip: str | None,
     ) -> int:
         """Validate, IP-check, and atomically claim a browser-redirect link token."""
-        return auth_identity_link_service.validate_and_claim_browser_link_token(
+        return jafaal_identity_link_service.validate_and_claim_browser_link_token(
             link_token,
             idp_id,
             client_ip,
@@ -1312,7 +1312,7 @@ class DefaultIdentityService:
 
     def get_identity_link_counts_for_users(self, user_ids: list[int]) -> dict[int, int]:
         """Return identity-link count per user ID in a single grouped query."""
-        return auth_identity_link_service.get_identity_link_counts_for_users(user_ids, self._db)
+        return jafaal_identity_link_service.get_identity_link_counts_for_users(user_ids, self._db)
 
 
 # ---------------------------------------------------------------------------
@@ -1323,12 +1323,12 @@ class DefaultIdentityService:
 def get_identity_service(
     db: Annotated[Session, Depends(core_database.get_db)],
     token_manager: Annotated[
-        auth_token_manager.TokenManager,
-        Depends(auth_token_manager.get_token_manager),
+        jafaal_token_manager.TokenManager,
+        Depends(jafaal_token_manager.get_token_manager),
     ],
     password_hasher: Annotated[
-        auth_password_hasher.PasswordHasher,
-        Depends(auth_password_hasher.get_password_hasher),
+        jafaal_password_hasher.PasswordHasher,
+        Depends(jafaal_password_hasher.get_password_hasher),
     ],
 ) -> IdentityService:
     """FastAPI dependency that yields a per-request IdentityService.

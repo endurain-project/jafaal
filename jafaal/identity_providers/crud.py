@@ -7,7 +7,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-import jafaal.identity_providers.links.crud as auth_identity_links_crud
+import jafaal.identity_providers.links.crud as jafaal_identity_links_crud
 import jafaal.identity_providers.models as idp_models
 import jafaal.identity_providers.schema as idp_schema
 from jafaal._core import db_errors
@@ -267,7 +267,7 @@ def delete_identity_provider(idp_id: int, db: Session) -> None:
         )
 
     # Check if any users are linked to this provider
-    db_user_idp = auth_identity_links_crud.check_user_identity_providers_by_idp_id(idp_id, db)
+    db_user_idp = jafaal_identity_links_crud.check_user_identity_providers_by_idp_id(idp_id, db)
     if db_user_idp:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

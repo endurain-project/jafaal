@@ -19,18 +19,18 @@ from fastapi import (
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
-import jafaal._internal.internal_dependencies as auth_internal_dependencies
-import jafaal._internal.password_hasher as auth_password_hasher
-import jafaal._internal.security_stores as auth_security_stores
-import jafaal._internal.token_manager as auth_token_manager
+import jafaal._internal.internal_dependencies as jafaal_internal_dependencies
+import jafaal._internal.password_hasher as jafaal_password_hasher
+import jafaal._internal.security_stores as jafaal_security_stores
+import jafaal._internal.token_manager as jafaal_token_manager
 import jafaal.identity_providers.utils as idp_utils
-import jafaal.identity_service as auth_identity_service
+import jafaal.identity_service as jafaal_identity_service
 import jafaal.mfa.service as mfa_service
-import jafaal.schema as auth_schema
-import jafaal.sessions.crud as auth_sessions_crud
-import jafaal.sessions.rotated_refresh_tokens.utils as auth_sessions_rotated_tokens_utils
-import jafaal.sessions.utils as auth_sessions_utils
-import jafaal.utils as auth_utils
+import jafaal.schema as jafaal_schema
+import jafaal.sessions.crud as jafaal_sessions_crud
+import jafaal.sessions.rotated_refresh_tokens.utils as jafaal_sessions_rotated_tokens_utils
+import jafaal.sessions.utils as jafaal_sessions_utils
+import jafaal.utils as jafaal_utils
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +71,7 @@ def _validate_pkce_query_params(
 
 
 def _raise_auth_security_store_unavailable(
-    err: auth_security_stores.AuthSecurityStoreUnavailableError,
+    err: jafaal_security_stores.AuthSecurityStoreUnavailableError,
 ) -> None:
     """
     Return a controlled response when auth security storage is down.
@@ -95,10 +95,10 @@ def _raise_auth_security_store_unavailable(
 @router.post(
     "/login",
     response_model=(
-        auth_schema.MFARequiredResponse
-        | auth_schema.MobileSessionResponse
-        | auth_schema.TokenResponseWeb
-        | auth_schema.TokenResponseMobile
+        jafaal_schema.MFARequiredResponse
+        | jafaal_schema.MobileSessionResponse
+        | jafaal_schema.TokenResponseWeb
+        | jafaal_schema.TokenResponseMobile
     ),
 )
 @core_rate_limit.limiter.limit(core_rate_limit.SENSITIVE)
@@ -106,22 +106,22 @@ async def login_for_access_token(
     response: Response,
     request: Request,
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
-    client_type: Annotated[str, Depends(auth_internal_dependencies.header_client_type_scheme)],
+    client_type: Annotated[str, Depends(jafaal_internal_dependencies.header_client_type_scheme)],
     failed_attempts: Annotated[
-        auth_security_stores.FailedLoginStore,
-        Depends(auth_security_stores.get_failed_login_attempts),
+        jafaal_security_stores.FailedLoginStore,
+        Depends(jafaal_security_stores.get_failed_login_attempts),
     ],
     pending_mfa_store: Annotated[
-        auth_security_stores.PendingMFAStore,
-        Depends(auth_security_stores.get_pending_mfa_store),
+        jafaal_security_stores.PendingMFAStore,
+        Depends(jafaal_security_stores.get_pending_mfa_store),
     ],
     password_hasher: Annotated[
-        auth_password_hasher.PasswordHasher,
-        Depends(auth_password_hasher.get_password_hasher),
+        jafaal_password_hasher.PasswordHasher,
+        Depends(jafaal_password_hasher.get_password_hasher),
     ],
     token_manager: Annotated[
-        auth_token_manager.TokenManager,
-        Depends(auth_token_manager.get_token_manager),
+        jafaal_token_manager.TokenManager,
+        Depends(jafaal_token_manager.get_token_manager),
     ],
     db: Annotated[
         Session,
@@ -165,10 +165,10 @@ async def login_for_access_token(
         code_challenge_method: PKCE method (must be S256 if provided, optional for mobile)
 
     Returns:
-        Union[auth_schema.MFARequiredResponse, dict, str]:
+        Union[jafaal_schema.MFARequiredResponse, dict, str]:
             - If MFA is required, returns an MFA-required response (schema or dict depending on client type)
             - If MFA is not required and mobile client with PKCE, returns session_id for token exchange
-            - If MFA is not required and no PKCE, proceeds with normal login via auth_utils.complete_login()
+            - If MFA is not required and no PKCE, proceeds with normal login via jafaal_utils.complete_login()
 
     Raises:
         HTTPException: If authentication fails, user is inactive, or account is locked
@@ -189,18 +189,18 @@ async def login_for_access_token(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                     detail=f"Account locked due to too many failed login attempts. Try again in {seconds_remaining} seconds.",
                 )
-    except auth_security_stores.AuthSecurityStoreUnavailableError as err:
+    except jafaal_security_stores.AuthSecurityStoreUnavailableError as err:
         _raise_auth_security_store_unavailable(err)
 
     # Authenticate user
     try:
-        user = auth_utils.authenticate_user(form_data.username, form_data.password, password_hasher, db)
+        user = jafaal_utils.authenticate_user(form_data.username, form_data.password, password_hasher, db)
     except HTTPException as err:
         # Record failed attempt on authentication errors (401 Unauthorized)
         if err.status_code == 401:
             try:
                 failed_attempts.record_failed_attempt(form_data.username)
-            except auth_security_stores.AuthSecurityStoreUnavailableError as store_err:
+            except jafaal_security_stores.AuthSecurityStoreUnavailableError as store_err:
                 _raise_auth_security_store_unavailable(store_err)
         raise err
 
@@ -212,7 +212,7 @@ async def login_for_access_token(
         # Store the user for pending MFA verification
         try:
             pending_mfa_store.add_pending_login(form_data.username, user.id)
-        except auth_security_stores.AuthSecurityStoreUnavailableError as err:
+        except jafaal_security_stores.AuthSecurityStoreUnavailableError as err:
             _raise_auth_security_store_unavailable(err)
 
         # Don't reset failed login attempts yet - wait for MFA verification
@@ -221,7 +221,7 @@ async def login_for_access_token(
         # Return MFA required response
         if client_type == "web":
             response.status_code = status.HTTP_202_ACCEPTED
-            return auth_schema.MFARequiredResponse(
+            return jafaal_schema.MFARequiredResponse(
                 mfa_required=True,
                 username=form_data.username,
                 message="MFA verification required",
@@ -237,14 +237,14 @@ async def login_for_access_token(
     # Reset failed login attempts counter
     try:
         failed_attempts.reset_attempts(form_data.username)
-    except auth_security_stores.AuthSecurityStoreUnavailableError as err:
+    except jafaal_security_stores.AuthSecurityStoreUnavailableError as err:
         _raise_auth_security_store_unavailable(err)
 
     # Mobile clients with PKCE use secure token exchange flow
     # Web clients don't need PKCE - they have httpOnly cookies and same-origin protection
     if client_type == "mobile" and code_challenge and code_challenge_method:
         # Use PKCE exchange flow through the public IdP token exchange endpoint
-        return auth_utils.create_mobile_pkce_session_response(
+        return jafaal_utils.create_mobile_pkce_session_response(
             response,
             request,
             user,
@@ -255,38 +255,40 @@ async def login_for_access_token(
         )
 
     # Web clients and mobile without PKCE get tokens directly
-    return auth_utils.complete_login(response, request, user, client_type, password_hasher, token_manager, db)
+    return jafaal_utils.complete_login(response, request, user, client_type, password_hasher, token_manager, db)
 
 
 @router.post(
     "/mfa/verify",
-    response_model=(auth_schema.MobileSessionResponse | auth_schema.TokenResponseWeb | auth_schema.TokenResponseMobile),
+    response_model=(
+        jafaal_schema.MobileSessionResponse | jafaal_schema.TokenResponseWeb | jafaal_schema.TokenResponseMobile
+    ),
 )
 @core_rate_limit.limiter.limit(core_rate_limit.SENSITIVE)
 async def verify_mfa_and_login(
     response: Response,
     request: Request,
-    mfa_request: auth_schema.MFALoginRequest,
-    client_type: Annotated[str, Depends(auth_internal_dependencies.header_client_type_scheme)],
+    mfa_request: jafaal_schema.MFALoginRequest,
+    client_type: Annotated[str, Depends(jafaal_internal_dependencies.header_client_type_scheme)],
     failed_attempts: Annotated[
-        auth_security_stores.FailedLoginStore,
-        Depends(auth_security_stores.get_failed_login_attempts),
+        jafaal_security_stores.FailedLoginStore,
+        Depends(jafaal_security_stores.get_failed_login_attempts),
     ],
     pending_mfa_store: Annotated[
-        auth_security_stores.PendingMFAStore,
-        Depends(auth_security_stores.get_pending_mfa_store),
+        jafaal_security_stores.PendingMFAStore,
+        Depends(jafaal_security_stores.get_pending_mfa_store),
     ],
     identity_service: Annotated[
-        auth_identity_service.IdentityService,
-        Depends(auth_identity_service.get_identity_service),
+        jafaal_identity_service.IdentityService,
+        Depends(jafaal_identity_service.get_identity_service),
     ],
     password_hasher: Annotated[
-        auth_password_hasher.PasswordHasher,
-        Depends(auth_password_hasher.get_password_hasher),
+        jafaal_password_hasher.PasswordHasher,
+        Depends(jafaal_password_hasher.get_password_hasher),
     ],
     token_manager: Annotated[
-        auth_token_manager.TokenManager,
-        Depends(auth_token_manager.get_token_manager),
+        jafaal_token_manager.TokenManager,
+        Depends(jafaal_token_manager.get_token_manager),
     ],
     db: Annotated[
         Session,
@@ -322,7 +324,7 @@ async def verify_mfa_and_login(
         code_challenge_method: PKCE method (must be S256 if provided, optional for mobile)
 
     Returns:
-        Result from auth_utils.complete_login() or PKCE session response
+        Result from jafaal_utils.complete_login() or PKCE session response
 
     Raises:
         HTTPException: If no pending login found, MFA code is invalid, or user not found
@@ -333,7 +335,7 @@ async def verify_mfa_and_login(
         code_challenge_method,
     )
 
-    username_log_id = auth_security_stores.username_log_identifier(mfa_request.username)
+    username_log_id = jafaal_security_stores.username_log_identifier(mfa_request.username)
 
     # Check if user is locked out from too many failed attempts
     try:
@@ -345,13 +347,13 @@ async def verify_mfa_and_login(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                     detail=f"Too many failed MFA attempts. Account locked for {seconds_remaining} seconds.",
                 )
-    except auth_security_stores.AuthSecurityStoreUnavailableError as err:
+    except jafaal_security_stores.AuthSecurityStoreUnavailableError as err:
         _raise_auth_security_store_unavailable(err)
 
     # Check if there's a pending MFA login for this username
     try:
         user_id = pending_mfa_store.get_pending_login(mfa_request.username)
-    except auth_security_stores.AuthSecurityStoreUnavailableError as err:
+    except jafaal_security_stores.AuthSecurityStoreUnavailableError as err:
         _raise_auth_security_store_unavailable(err)
     if not user_id:
         # Run a dummy Argon2 verify so the wall-clock latency of the
@@ -371,7 +373,7 @@ async def verify_mfa_and_login(
         # Record failed attempt and apply lockout if threshold exceeded
         try:
             failed_count = pending_mfa_store.record_failed_attempt(mfa_request.username)
-        except auth_security_stores.AuthSecurityStoreUnavailableError as err:
+        except jafaal_security_stores.AuthSecurityStoreUnavailableError as err:
             _raise_auth_security_store_unavailable(err)
         logger.warning(f"Invalid MFA code for {username_log_id}. Failed attempts: {failed_count}")
         raise HTTPException(
@@ -381,7 +383,7 @@ async def verify_mfa_and_login(
 
     try:
         claimed_user_id = pending_mfa_store.claim_pending_login(mfa_request.username)
-    except auth_security_stores.AuthSecurityStoreUnavailableError as err:
+    except jafaal_security_stores.AuthSecurityStoreUnavailableError as err:
         _raise_auth_security_store_unavailable(err)
     if claimed_user_id != user_id:
         logger.warning(f"Pending MFA login for {username_log_id} was missing or already claimed")
@@ -407,14 +409,14 @@ async def verify_mfa_and_login(
     try:
         pending_mfa_store.reset_attempts(mfa_request.username)
         failed_attempts.reset_attempts(mfa_request.username)
-    except auth_security_stores.AuthSecurityStoreUnavailableError as err:
+    except jafaal_security_stores.AuthSecurityStoreUnavailableError as err:
         _raise_auth_security_store_unavailable(err)
 
     # Mobile clients with PKCE use secure token exchange flow
     # Web clients don't need PKCE - they have httpOnly cookies and same-origin protection
     if client_type == "mobile" and code_challenge and code_challenge_method:
         # Use PKCE exchange flow through the public IdP token exchange endpoint
-        return auth_utils.create_mobile_pkce_session_response(
+        return jafaal_utils.create_mobile_pkce_session_response(
             response,
             request,
             user,
@@ -425,44 +427,44 @@ async def verify_mfa_and_login(
         )
 
     # Web clients and mobile without PKCE get tokens directly
-    return auth_utils.complete_login(response, request, user, client_type, password_hasher, token_manager, db)
+    return jafaal_utils.complete_login(response, request, user, client_type, password_hasher, token_manager, db)
 
 
 @router.post(
     "/refresh",
-    response_model=(auth_schema.TokenResponseWeb | auth_schema.TokenResponseMobile),
+    response_model=(jafaal_schema.TokenResponseWeb | jafaal_schema.TokenResponseMobile),
 )
 @core_rate_limit.limiter.limit(core_rate_limit.WRITE)
 async def refresh_token(
     response: Response,
     request: Request,
-    _validate_refresh_token: Annotated[Callable, Depends(auth_internal_dependencies.validate_refresh_token)],
+    _validate_refresh_token: Annotated[Callable, Depends(jafaal_internal_dependencies.validate_refresh_token)],
     token_user_id: Annotated[
         int,
-        Depends(auth_internal_dependencies.get_sub_from_refresh_token),
+        Depends(jafaal_internal_dependencies.get_sub_from_refresh_token),
     ],
     token_session_id: Annotated[
         str,
-        Depends(auth_internal_dependencies.get_sid_from_refresh_token),
+        Depends(jafaal_internal_dependencies.get_sid_from_refresh_token),
     ],
     refresh_token_value: Annotated[
         str,
-        Depends(auth_internal_dependencies.get_and_return_refresh_token),
+        Depends(jafaal_internal_dependencies.get_and_return_refresh_token),
     ],
     password_hasher: Annotated[
-        auth_password_hasher.PasswordHasher,
-        Depends(auth_password_hasher.get_password_hasher),
+        jafaal_password_hasher.PasswordHasher,
+        Depends(jafaal_password_hasher.get_password_hasher),
     ],
     token_manager: Annotated[
-        auth_token_manager.TokenManager,
-        Depends(auth_token_manager.get_token_manager),
+        jafaal_token_manager.TokenManager,
+        Depends(jafaal_token_manager.get_token_manager),
     ],
     db: Annotated[
         Session,
         Depends(core_database.get_db),
     ],
-    client_type: Annotated[str, Depends(auth_internal_dependencies.header_client_type_scheme)],
-    x_csrf_token: Annotated[str | None, Depends(auth_internal_dependencies.header_csrf_token_scheme)] = None,
+    client_type: Annotated[str, Depends(jafaal_internal_dependencies.header_client_type_scheme)],
+    x_csrf_token: Annotated[str | None, Depends(jafaal_internal_dependencies.header_csrf_token_scheme)] = None,
 ):
     """
     Handles the refresh token process for user sessions.
@@ -498,7 +500,7 @@ async def refresh_token(
                        user is inactive, or CSRF token is invalid (when provided).
     """
     # Get the session from the database
-    session = auth_sessions_crud.get_session_by_id_not_expired(token_session_id, db)
+    session = jafaal_sessions_crud.get_session_by_id_not_expired(token_session_id, db)
 
     # Check if the session was found
     if session is None:
@@ -526,7 +528,7 @@ async def refresh_token(
         )
 
     # Validate session hasn't exceeded idle or absolute timeout
-    auth_sessions_utils.validate_session_timeout(session)
+    jafaal_sessions_utils.validate_session_timeout(session)
 
     # Verify CSRF token for web clients only
     # Mobile clients don't use CSRF tokens
@@ -546,7 +548,7 @@ async def refresh_token(
         client_type == "web"
         and x_csrf_token
         and session.csrf_token_hash is not None
-        and not auth_sessions_utils.verify_csrf_token(x_csrf_token, session.csrf_token_hash)
+        and not jafaal_sessions_utils.verify_csrf_token(x_csrf_token, session.csrf_token_hash)
     ):
         # CSRF token was provided: validate it
         raise HTTPException(
@@ -565,11 +567,11 @@ async def refresh_token(
 
     # Check for token reuse BEFORE validating token
     # Uses HMAC-SHA256 internally for deterministic, secure lookup
-    is_reused, in_grace = auth_sessions_rotated_tokens_utils.check_token_reuse(refresh_token_value, db)
+    is_reused, in_grace = jafaal_sessions_rotated_tokens_utils.check_token_reuse(refresh_token_value, db)
 
     if is_reused and not in_grace:
         # Token theft detected - invalidate entire family
-        auth_sessions_rotated_tokens_utils.invalidate_token_family(session.token_family_id, db)
+        jafaal_sessions_rotated_tokens_utils.invalidate_token_family(session.token_family_id, db)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token reuse detected. All sessions invalidated.",
@@ -585,7 +587,7 @@ async def refresh_token(
         # 401 we replay the exact replacement minted on the original rotation.
         # The session is NOT re-rotated (no new rotated record, no
         # rotation_count bump), so duplicate/concurrent refreshes converge.
-        replay = auth_sessions_rotated_tokens_utils.get_grace_replay_token(refresh_token_value, db)
+        replay = jafaal_sessions_rotated_tokens_utils.get_grace_replay_token(refresh_token_value, db)
 
         if replay is None:
             # Replacement was cleaned up (or never stored); fall back to the
@@ -612,7 +614,7 @@ async def refresh_token(
         users_utils.check_user_is_active(replay_user)
 
         # Mint a fresh, stateless access token (safe to re-issue every retry).
-        replay_access_token_exp, replay_access_token = auth_utils.mint_access_token(
+        replay_access_token_exp, replay_access_token = jafaal_utils.mint_access_token(
             replay_user, token_manager, session.id
         )
 
@@ -622,9 +624,9 @@ async def refresh_token(
         replay_csrf_token: str | None = None
         if client_type == "web":
             replay_csrf_token = token_manager.create_csrf_token()
-            auth_sessions_utils.update_session_csrf_token(session.id, replay_csrf_token, db)
+            jafaal_sessions_utils.update_session_csrf_token(session.id, replay_csrf_token, db)
 
-        return auth_utils.build_token_response(
+        return jafaal_utils.build_token_response(
             response,
             client_type,
             session.id,
@@ -667,13 +669,13 @@ async def refresh_token(
         new_refresh_token_exp,
         new_refresh_token,
         new_csrf_token,
-    ) = auth_utils.create_tokens(user, token_manager, session.id)
+    ) = jafaal_utils.create_tokens(user, token_manager, session.id)
 
     # Store the rotated (old) refresh token together with the encrypted
     # replacement so a retry within the grace window can replay it.
     # store_rotated_token hashes the old token with HMAC-SHA256 for lookup
     # and encrypts the replacement at rest.
-    auth_sessions_rotated_tokens_utils.store_rotated_token(
+    jafaal_sessions_rotated_tokens_utils.store_rotated_token(
         refresh_token_value,
         session.token_family_id,
         session.rotation_count,
@@ -685,7 +687,7 @@ async def refresh_token(
     # Edit session and store in database
     # Note: edit_session automatically increments rotation_count
     # and updates last_rotation_at
-    auth_sessions_utils.edit_session(
+    jafaal_sessions_utils.edit_session(
         session,
         request,
         new_refresh_token,
@@ -698,9 +700,9 @@ async def refresh_token(
     await idp_utils.refresh_idp_tokens_if_needed(user.id, db)
 
     # Token delivery based on client type (web cookie vs mobile body) is
-    # centralised in auth_utils.build_token_response so login, /refresh, and
+    # centralised in jafaal_utils.build_token_response so login, /refresh, and
     # SSO token exchange share one delivery contract.
-    return auth_utils.build_token_response(
+    return jafaal_utils.build_token_response(
         response,
         client_type,
         session_id,
@@ -712,28 +714,28 @@ async def refresh_token(
     )
 
 
-@router.post("/logout", response_model=auth_schema.LogoutResponse)
+@router.post("/logout", response_model=jafaal_schema.LogoutResponse)
 @core_rate_limit.limiter.limit(core_rate_limit.WRITE)
 async def logout(
     response: Response,
     request: Request,
-    _validate_refresh_token: Annotated[Callable, Depends(auth_internal_dependencies.validate_refresh_token)],
+    _validate_refresh_token: Annotated[Callable, Depends(jafaal_internal_dependencies.validate_refresh_token)],
     token_session_id: Annotated[
         str,
-        Depends(auth_internal_dependencies.get_sid_from_refresh_token),
+        Depends(jafaal_internal_dependencies.get_sid_from_refresh_token),
     ],
     refresh_token_value: Annotated[
         str,
-        Depends(auth_internal_dependencies.get_and_return_refresh_token),
+        Depends(jafaal_internal_dependencies.get_and_return_refresh_token),
     ],
-    client_type: Annotated[str, Depends(auth_internal_dependencies.header_client_type_scheme)],
+    client_type: Annotated[str, Depends(jafaal_internal_dependencies.header_client_type_scheme)],
     token_user_id: Annotated[
         int,
-        Depends(auth_internal_dependencies.get_sub_from_refresh_token),
+        Depends(jafaal_internal_dependencies.get_sub_from_refresh_token),
     ],
     password_hasher: Annotated[
-        auth_password_hasher.PasswordHasher,
-        Depends(auth_password_hasher.get_password_hasher),
+        jafaal_password_hasher.PasswordHasher,
+        Depends(jafaal_password_hasher.get_password_hasher),
     ],
     db: Annotated[
         Session,
@@ -762,7 +764,7 @@ async def logout(
         HTTPException: If client type is invalid (403 Forbidden).
     """
     # Get the session from the database
-    session = auth_sessions_crud.get_session_by_id_not_expired(token_session_id, db)
+    session = jafaal_sessions_crud.get_session_by_id_not_expired(token_session_id, db)
 
     # Check if the session was found
     if session is not None:
@@ -786,13 +788,13 @@ async def logout(
             )
 
         # Delete the session from the database
-        auth_sessions_crud.delete_session(session.id, token_user_id, db)
+        jafaal_sessions_crud.delete_session(session.id, token_user_id, db)
 
         # Clear all IdP refresh tokens for security
         await idp_utils.clear_all_idp_tokens(token_user_id, db)
 
     if client_type == "web":
-        auth_utils.clear_refresh_token_cookies(response)
+        jafaal_utils.clear_refresh_token_cookies(response)
         return {"message": "Logout successful"}
     if client_type == "mobile":
         return {"message": "Logout successful"}

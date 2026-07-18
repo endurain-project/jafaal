@@ -11,11 +11,11 @@ import modules.users.users.schema as users_schema
 import modules.users.users.utils as users_utils
 from sqlalchemy.orm import Session
 
-import jafaal._internal.security_stores as auth_security_stores
+import jafaal._internal.security_stores as jafaal_security_stores
 import jafaal._internal.services.step_up_service as step_up_service
-import jafaal.password_policy as auth_password_policy
-import jafaal.sessions.crud as auth_sessions_crud
-import jafaal.sessions.schema as auth_sessions_schema
+import jafaal.password_policy as jafaal_password_policy
+import jafaal.sessions.crud as jafaal_sessions_crud
+import jafaal.sessions.schema as jafaal_sessions_schema
 
 logger = logging.getLogger(__name__)
 
@@ -26,13 +26,13 @@ if TYPE_CHECKING:
 def get_user_sessions(
     token_user_id: int,
     db: Session,
-) -> list[auth_sessions_schema.UsersSessionsRead]:
+) -> list[jafaal_sessions_schema.UsersSessionsRead]:
     """Retrieve active sessions for the authenticated user."""
     if core_config.settings.ENVIRONMENT == "demo":
         logger.info("Session retrieval attempted in demo environment - returning empty list")
         return []
 
-    return auth_sessions_crud.get_user_sessions(token_user_id, db)
+    return jafaal_sessions_crud.get_user_sessions(token_user_id, db)
 
 
 def delete_user_session(
@@ -41,7 +41,7 @@ def delete_user_session(
     db: Session,
 ) -> None:
     """Delete one authenticated user's session."""
-    auth_sessions_crud.delete_session(session_id, token_user_id, db)
+    jafaal_sessions_crud.delete_session(session_id, token_user_id, db)
 
 
 def delete_other_user_sessions(
@@ -64,7 +64,7 @@ def delete_other_user_sessions(
     Returns:
         Number of sessions revoked.
     """
-    revoked = auth_sessions_crud.delete_sessions_by_user(
+    revoked = jafaal_sessions_crud.delete_sessions_by_user(
         token_user_id,
         db,
         exclude_session_id=current_session_id,
@@ -79,7 +79,7 @@ def change_own_password(
     new_password: str,
     mfa_code: str | None,
     identity_service: IdentityService,
-    step_up_store: auth_security_stores.StepUpStore,
+    step_up_store: jafaal_security_stores.StepUpStore,
     db: Session,
     revoke_other_sessions: bool = False,
     current_session_id: str | None = None,
@@ -120,17 +120,17 @@ def change_own_password(
     server_settings = server_settings_utils.get_server_settings_or_404(db)
     db_user = users_utils.get_user_by_id_or_404(user_id, db)
     access_type = users_schema.normalize_access_type(db_user.access_type)
-    hashed_password = auth_password_policy.validate_and_hash_for_user(
+    hashed_password = jafaal_password_policy.validate_and_hash_for_user(
         identity_service,
         server_settings,
         access_type,
         new_password,
     )
     identity_service.set_local_password_hash(user_id, hashed_password)
-    auth_security_stores.clear_pending_mfa_for_user(user_id)
+    jafaal_security_stores.clear_pending_mfa_for_user(user_id)
 
     if revoke_other_sessions:
-        revoked = auth_sessions_crud.delete_sessions_by_user(
+        revoked = jafaal_sessions_crud.delete_sessions_by_user(
             user_id,
             db,
             exclude_session_id=current_session_id,
@@ -164,12 +164,12 @@ def change_managed_user_password(
     server_settings = server_settings_utils.get_server_settings_or_404(db)
     db_user = users_utils.get_user_by_id_or_404(user_id, db)
     access_type = users_schema.normalize_access_type(db_user.access_type)
-    hashed_password = auth_password_policy.validate_and_hash_for_user(
+    hashed_password = jafaal_password_policy.validate_and_hash_for_user(
         identity_service,
         server_settings,
         access_type,
         new_password,
     )
     identity_service.set_local_password_hash(user_id, hashed_password)
-    auth_sessions_crud.delete_sessions_by_user(user_id, db)
-    auth_security_stores.clear_pending_mfa_for_user(user_id)
+    jafaal_sessions_crud.delete_sessions_by_user(user_id, db)
+    jafaal_security_stores.clear_pending_mfa_for_user(user_id)

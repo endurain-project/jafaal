@@ -20,7 +20,7 @@ from fastapi import (
 )
 from sqlalchemy.orm import Session
 
-import jafaal.identity_service as auth_identity_service
+import jafaal.identity_service as jafaal_identity_service
 import jafaal.sign_up_tokens.schema as sign_up_tokens_schema
 import jafaal.sign_up_tokens.utils as sign_up_tokens_utils
 
@@ -42,8 +42,8 @@ async def signup(
         Depends(core_apprise.get_email_service),
     ],
     identity_service: Annotated[
-        auth_identity_service.IdentityService,
-        Depends(auth_identity_service.get_identity_service),
+        jafaal_identity_service.IdentityService,
+        Depends(jafaal_identity_service.get_identity_service),
     ],
     db: Annotated[
         Session,

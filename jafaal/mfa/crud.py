@@ -3,12 +3,12 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-import jafaal.mfa.models as auth_mfa_models
+import jafaal.mfa.models as jafaal_mfa_models
 from jafaal._core import db_errors
 
 
 @db_errors.handle_db_errors
-def get_user_mfa_row(user_id: int, db: Session) -> auth_mfa_models.UsersMFA | None:
+def get_user_mfa_row(user_id: int, db: Session) -> jafaal_mfa_models.UsersMFA | None:
     """
     Retrieve the ``users_mfa`` row for a user.
 
@@ -22,7 +22,7 @@ def get_user_mfa_row(user_id: int, db: Session) -> auth_mfa_models.UsersMFA | No
     Raises:
         HTTPException: 500 if a database error occurs.
     """
-    stmt = select(auth_mfa_models.UsersMFA).where(auth_mfa_models.UsersMFA.user_id == user_id)
+    stmt = select(jafaal_mfa_models.UsersMFA).where(jafaal_mfa_models.UsersMFA.user_id == user_id)
     return db.execute(stmt).scalar_one_or_none()
 
 
@@ -46,13 +46,13 @@ def update_user_mfa(user_id: int, db: Session, encrypted_secret: str | None = No
     mfa_enabled = bool(encrypted_secret)
     mfa_secret_value = encrypted_secret if encrypted_secret else None
 
-    stmt = select(auth_mfa_models.UsersMFA).where(auth_mfa_models.UsersMFA.user_id == user_id)
+    stmt = select(jafaal_mfa_models.UsersMFA).where(jafaal_mfa_models.UsersMFA.user_id == user_id)
     mfa_row = db.execute(stmt).scalar_one_or_none()
     if mfa_row is None:
         # Row may be missing if the backfill migration has
         # not yet created one for this user; create it on
         # first write.
-        mfa_row = auth_mfa_models.UsersMFA(
+        mfa_row = jafaal_mfa_models.UsersMFA(
             user_id=user_id,
             mfa_enabled=mfa_enabled,
             mfa_secret=mfa_secret_value,
@@ -66,7 +66,7 @@ def update_user_mfa(user_id: int, db: Session, encrypted_secret: str | None = No
 
 
 @db_errors.handle_db_errors
-def create_users_mfa_row(user_id: int, db: Session) -> auth_mfa_models.UsersMFA:
+def create_users_mfa_row(user_id: int, db: Session) -> jafaal_mfa_models.UsersMFA:
     """
     Create the default ``users_mfa`` row for a newly created user.
 
@@ -85,7 +85,7 @@ def create_users_mfa_row(user_id: int, db: Session) -> auth_mfa_models.UsersMFA:
     Raises:
         HTTPException: 500 if the database operation fails.
     """
-    mfa_row = auth_mfa_models.UsersMFA(
+    mfa_row = jafaal_mfa_models.UsersMFA(
         user_id=user_id,
         mfa_enabled=False,
         mfa_secret=None,

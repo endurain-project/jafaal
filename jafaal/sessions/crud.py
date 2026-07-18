@@ -11,9 +11,9 @@ from sqlalchemy.orm import Session
 
 import jafaal.oauth_state.crud as oauth_state_crud
 import jafaal.oauth_state.models as oauth_state_models
-import jafaal.sessions.models as auth_sessions_models
-import jafaal.sessions.rotated_refresh_tokens.crud as auth_sessions_rotated_tokens_crud
-import jafaal.sessions.schema as auth_sessions_schema
+import jafaal.sessions.models as jafaal_sessions_models
+import jafaal.sessions.rotated_refresh_tokens.crud as jafaal_sessions_rotated_tokens_crud
+import jafaal.sessions.schema as jafaal_sessions_schema
 from jafaal._core import db_errors
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 def get_user_sessions(
     user_id: int,
     db: Session,
-) -> list[auth_sessions_models.UsersSessions]:
+) -> list[jafaal_sessions_models.UsersSessions]:
     """
     Retrieve all sessions for a user, ordered by creation date.
 
@@ -38,9 +38,9 @@ def get_user_sessions(
         HTTPException: If database error occurs.
     """
     stmt = (
-        select(auth_sessions_models.UsersSessions)
-        .where(auth_sessions_models.UsersSessions.user_id == user_id)
-        .order_by(auth_sessions_models.UsersSessions.created_at.desc())
+        select(jafaal_sessions_models.UsersSessions)
+        .where(jafaal_sessions_models.UsersSessions.user_id == user_id)
+        .order_by(jafaal_sessions_models.UsersSessions.created_at.desc())
     )
     return list(db.execute(stmt).scalars().all())
 
@@ -49,7 +49,7 @@ def get_user_sessions(
 def get_session_by_id(
     session_id: str,
     db: Session,
-) -> auth_sessions_models.UsersSessions | None:
+) -> jafaal_sessions_models.UsersSessions | None:
     """
     Retrieve a user session by ID.
 
@@ -63,7 +63,7 @@ def get_session_by_id(
     Raises:
         HTTPException: If database error occurs.
     """
-    stmt = select(auth_sessions_models.UsersSessions).where(auth_sessions_models.UsersSessions.id == session_id)
+    stmt = select(jafaal_sessions_models.UsersSessions).where(jafaal_sessions_models.UsersSessions.id == session_id)
     return db.execute(stmt).scalar_one_or_none()
 
 
@@ -71,7 +71,7 @@ def get_session_by_id(
 def get_session_by_id_not_expired(
     session_id: str,
     db: Session,
-) -> auth_sessions_models.UsersSessions | None:
+) -> jafaal_sessions_models.UsersSessions | None:
     """
     Retrieve a user session by ID if not expired.
 
@@ -86,9 +86,9 @@ def get_session_by_id_not_expired(
         HTTPException: If database error occurs.
     """
     stmt = (
-        select(auth_sessions_models.UsersSessions)
-        .where(auth_sessions_models.UsersSessions.id == session_id)
-        .where(auth_sessions_models.UsersSessions.expires_at > datetime.now(UTC))
+        select(jafaal_sessions_models.UsersSessions)
+        .where(jafaal_sessions_models.UsersSessions.id == session_id)
+        .where(jafaal_sessions_models.UsersSessions.expires_at > datetime.now(UTC))
     )
     return db.execute(stmt).scalar_one_or_none()
 
@@ -99,7 +99,7 @@ def get_session_with_oauth_state(
     db: Session,
 ) -> (
     tuple[
-        auth_sessions_models.UsersSessions,
+        jafaal_sessions_models.UsersSessions,
         oauth_state_models.OAuthState | None,
     ]
     | None
@@ -124,9 +124,9 @@ def get_session_with_oauth_state(
     """
     # Query session
     stmt = (
-        select(auth_sessions_models.UsersSessions)
-        .where(auth_sessions_models.UsersSessions.id == session_id)
-        .where(auth_sessions_models.UsersSessions.expires_at > datetime.now(UTC))
+        select(jafaal_sessions_models.UsersSessions)
+        .where(jafaal_sessions_models.UsersSessions.id == session_id)
+        .where(jafaal_sessions_models.UsersSessions.expires_at > datetime.now(UTC))
     )
     db_session = db.execute(stmt).scalar_one_or_none()
 
@@ -143,9 +143,9 @@ def get_session_with_oauth_state(
 
 @db_errors.handle_db_errors
 def create_session(
-    session: auth_sessions_schema.UsersSessionsInternal,
+    session: jafaal_sessions_schema.UsersSessionsInternal,
     db: Session,
-) -> auth_sessions_models.UsersSessions:
+) -> jafaal_sessions_models.UsersSessions:
     """
     Create a new user session in the database.
 
@@ -159,7 +159,7 @@ def create_session(
     Raises:
         HTTPException: If database error occurs.
     """
-    db_session = auth_sessions_models.UsersSessions(**session.model_dump())
+    db_session = jafaal_sessions_models.UsersSessions(**session.model_dump())
     db.add(db_session)
     db.commit()
     db.refresh(db_session)
@@ -169,7 +169,7 @@ def create_session(
 @db_errors.handle_db_errors
 def set_session_refresh_token_hash(
     session_id: str, hashed_refresh_token: str, db: Session
-) -> auth_sessions_models.UsersSessions:
+) -> jafaal_sessions_models.UsersSessions:
     """
     Persist a hashed refresh token on a session.
 
@@ -287,10 +287,10 @@ def claim_session_for_token_exchange(
         HTTPException: 500 if the database operation fails.
     """
     stmt = (
-        sa_update(auth_sessions_models.UsersSessions)
+        sa_update(jafaal_sessions_models.UsersSessions)
         .where(
-            auth_sessions_models.UsersSessions.id == session_id,
-            auth_sessions_models.UsersSessions.tokens_exchanged.is_(False),
+            jafaal_sessions_models.UsersSessions.id == session_id,
+            jafaal_sessions_models.UsersSessions.tokens_exchanged.is_(False),
         )
         .values(
             tokens_exchanged=True,
@@ -324,7 +324,7 @@ def claim_session_for_token_exchange(
 
 @db_errors.handle_db_errors
 def edit_session(
-    session: auth_sessions_schema.UsersSessionsInternal,
+    session: jafaal_sessions_schema.UsersSessionsInternal,
     db: Session,
 ) -> None:
     """
@@ -415,9 +415,9 @@ def delete_session(
             error occurs (500).
     """
     # Get the session to retrieve token_family_id before deletion
-    stmt = select(auth_sessions_models.UsersSessions).where(
-        auth_sessions_models.UsersSessions.id == session_id,
-        auth_sessions_models.UsersSessions.user_id == user_id,
+    stmt = select(jafaal_sessions_models.UsersSessions).where(
+        jafaal_sessions_models.UsersSessions.id == session_id,
+        jafaal_sessions_models.UsersSessions.user_id == user_id,
     )
     session = db.execute(stmt).scalar_one_or_none()
 
@@ -432,12 +432,12 @@ def delete_session(
     oauth_state_id_to_delete = session.oauth_state_id
 
     # Delete rotated tokens for this session's family
-    auth_sessions_rotated_tokens_crud.delete_by_family(session.token_family_id, db)
+    jafaal_sessions_rotated_tokens_crud.delete_by_family(session.token_family_id, db)
 
     # Delete the session
-    stmt = delete(auth_sessions_models.UsersSessions).where(
-        auth_sessions_models.UsersSessions.id == session_id,
-        auth_sessions_models.UsersSessions.user_id == user_id,
+    stmt = delete(jafaal_sessions_models.UsersSessions).where(
+        jafaal_sessions_models.UsersSessions.id == session_id,
+        jafaal_sessions_models.UsersSessions.user_id == user_id,
     )
     db.execute(stmt)
 
@@ -471,8 +471,8 @@ def delete_idle_sessions(
     Raises:
         HTTPException: If database error occurs.
     """
-    stmt = delete(auth_sessions_models.UsersSessions).where(
-        auth_sessions_models.UsersSessions.last_activity_at < cutoff_time
+    stmt = delete(jafaal_sessions_models.UsersSessions).where(
+        jafaal_sessions_models.UsersSessions.last_activity_at < cutoff_time
     )
     result: CursorResult[Any] = db.execute(stmt)
     db.commit()
@@ -500,8 +500,8 @@ def delete_sessions_by_family(
     Raises:
         HTTPException: If database error occurs.
     """
-    stmt = delete(auth_sessions_models.UsersSessions).where(
-        auth_sessions_models.UsersSessions.token_family_id == token_family_id
+    stmt = delete(jafaal_sessions_models.UsersSessions).where(
+        jafaal_sessions_models.UsersSessions.token_family_id == token_family_id
     )
     result: CursorResult[Any] = db.execute(stmt)
     db.commit()
@@ -533,9 +533,9 @@ def delete_sessions_by_user(
     Raises:
         HTTPException: If database error occurs.
     """
-    stmt = delete(auth_sessions_models.UsersSessions).where(auth_sessions_models.UsersSessions.user_id == user_id)
+    stmt = delete(jafaal_sessions_models.UsersSessions).where(jafaal_sessions_models.UsersSessions.user_id == user_id)
     if exclude_session_id is not None:
-        stmt = stmt.where(auth_sessions_models.UsersSessions.id != exclude_session_id)
+        stmt = stmt.where(jafaal_sessions_models.UsersSessions.id != exclude_session_id)
     result = db.execute(stmt)
     if commit:
         db.commit()

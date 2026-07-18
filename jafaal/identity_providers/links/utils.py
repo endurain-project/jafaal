@@ -5,9 +5,9 @@ import logging
 from sqlalchemy.orm import Session
 
 import jafaal.identity_providers.crud as idp_crud
-import jafaal.identity_providers.links.crud as auth_identity_links_crud
-import jafaal.identity_providers.links.models as auth_identity_links_models
-import jafaal.identity_providers.links.schema as auth_identity_links_schema
+import jafaal.identity_providers.links.crud as jafaal_identity_links_crud
+import jafaal.identity_providers.links.models as jafaal_identity_links_models
+import jafaal.identity_providers.links.schema as jafaal_identity_links_schema
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ def get_user_identity_provider_refresh_token_by_user_id_and_idp_id(
     Raises:
         HTTPException: 500 error if database query fails.
     """
-    db_link = auth_identity_links_crud.get_user_identity_provider_by_user_id_and_idp_id(
+    db_link = jafaal_identity_links_crud.get_user_identity_provider_by_user_id_and_idp_id(
         user_id,
         idp_id,
         db,
@@ -45,10 +45,10 @@ def get_user_identity_provider_refresh_token_by_user_id_and_idp_id(
 
 
 def enrich_user_identity_providers(
-    idp_links: list[auth_identity_links_models.IdentityLink],
+    idp_links: list[jafaal_identity_links_models.IdentityLink],
     user_id: int,
     db: Session,
-) -> list[auth_identity_links_schema.UsersIdentityProviderResponse]:
+) -> list[jafaal_identity_links_schema.UsersIdentityProviderResponse]:
     """
     Enrich identity provider links with IDP details.
 
@@ -71,7 +71,7 @@ def enrich_user_identity_providers(
     idps = idp_crud.get_identity_providers_by_ids(idp_ids, db)
     idp_map = {idp.id: idp for idp in idps}
 
-    enriched_links: list[auth_identity_links_schema.UsersIdentityProviderResponse] = []
+    enriched_links: list[jafaal_identity_links_schema.UsersIdentityProviderResponse] = []
 
     for link in idp_links:
         idp = idp_map.get(link.idp_id)
@@ -79,7 +79,7 @@ def enrich_user_identity_providers(
             logger.warning(f"IDP with id {link.idp_id} not found for user {user_id}, skipping enrichment")
             continue
 
-        link_data = auth_identity_links_schema.UsersIdentityProviderResponse(
+        link_data = jafaal_identity_links_schema.UsersIdentityProviderResponse(
             id=link.id,
             user_id=link.user_id,
             idp_id=link.idp_id,

@@ -21,8 +21,8 @@ from typing import Annotated
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import SecurityScopes
 
-import jafaal._internal.security_stores as auth_security_stores
-import jafaal.identity_service as auth_identity_service
+import jafaal._internal.security_stores as jafaal_security_stores
+import jafaal.identity_service as jafaal_identity_service
 from jafaal._internal.internal_dependencies import (
     AuthContext,
     _resolve_and_cache_principal,
@@ -38,8 +38,8 @@ def validate_access_token(
     request: Request,
     access_token: Annotated[str, Depends(get_access_token)],
     identity_service: Annotated[
-        auth_identity_service.IdentityService,
-        Depends(auth_identity_service.get_identity_service),
+        jafaal_identity_service.IdentityService,
+        Depends(jafaal_identity_service.get_identity_service),
     ],
 ) -> None:
     """Validate an access token through IdentityService.
@@ -59,8 +59,8 @@ def check_scopes(
     request: Request,
     access_token: Annotated[str, Depends(get_access_token)],
     identity_service: Annotated[
-        auth_identity_service.IdentityService,
-        Depends(auth_identity_service.get_identity_service),
+        jafaal_identity_service.IdentityService,
+        Depends(jafaal_identity_service.get_identity_service),
     ],
     security_scopes: SecurityScopes,
 ) -> None:
@@ -125,5 +125,5 @@ __all__ = [
 ]
 
 # Re-export step-up store type and dep getter for non-auth modules
-StepUpStore = auth_security_stores.StepUpStore
-get_step_up_attempts = auth_security_stores.get_step_up_attempts
+StepUpStore = jafaal_security_stores.StepUpStore
+get_step_up_attempts = jafaal_security_stores.get_step_up_attempts

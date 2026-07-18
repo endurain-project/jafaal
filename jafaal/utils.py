@@ -20,15 +20,15 @@ from fastapi import (
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-import jafaal._internal.password_hasher as auth_password_hasher
-import jafaal._internal.token_manager as auth_token_manager
-import jafaal.constants as auth_constants
-import jafaal.credentials.crud as auth_credentials_crud
+import jafaal._internal.password_hasher as jafaal_password_hasher
+import jafaal._internal.token_manager as jafaal_token_manager
+import jafaal.constants as jafaal_constants
+import jafaal.credentials.crud as jafaal_credentials_crud
 import jafaal.identity_providers.utils as idp_utils
 import jafaal.oauth_state.crud as oauth_state_crud
 import jafaal.oauth_state.utils as oauth_state_utils
-import jafaal.schema as auth_schema
-import jafaal.sessions.utils as auth_sessions_utils
+import jafaal.schema as jafaal_schema
+import jafaal.sessions.utils as jafaal_sessions_utils
 
 REFRESH_TOKEN_COOKIE_NAME = "endurain_refresh_token"
 REFRESH_TOKEN_COOKIE_PATH = "/api/v1/auth"
@@ -46,7 +46,7 @@ class ClearRefreshTokenCookieHTTPException(HTTPException):
 def authenticate_user(
     username: str,
     password: str,
-    password_hasher: auth_password_hasher.PasswordHasher,
+    password_hasher: jafaal_password_hasher.PasswordHasher,
     db: Session,
 ) -> users_schema.UsersRead:
     """
@@ -55,7 +55,7 @@ def authenticate_user(
     Args:
         username (str): The username of the user attempting to authenticate.
         password (str): The plaintext password provided by the user.
-        password_hasher (auth_password_hasher.PasswordHasher): An instance of the password hasher for verifying and updating password hashes.
+        password_hasher (jafaal_password_hasher.PasswordHasher): An instance of the password hasher for verifying and updating password hashes.
         db (Session): The database session used for querying and updating user data.
 
     Returns:
@@ -86,7 +86,7 @@ def authenticate_user(
 
     # Load the user's local password hash from the auth-owned credential
     # table. A missing row means the account has no local password.
-    credential = auth_credentials_crud.get_credential(user.id, db)
+    credential = jafaal_credentials_crud.get_credential(user.id, db)
     stored_hash = credential.password_hash if credential is not None else None
 
     # User has no local password (SSO-only account). Treat identically
@@ -112,7 +112,7 @@ def authenticate_user(
 
     # Update user hash if applicable
     if updated_hash:
-        auth_credentials_crud.upsert_password_hash(user.id, updated_hash, db)
+        jafaal_credentials_crud.upsert_password_hash(user.id, updated_hash, db)
 
     # Return the user if the password is correct
     return user
@@ -120,7 +120,7 @@ def authenticate_user(
 
 def create_tokens(
     user: users_schema.UsersRead,
-    token_manager: auth_token_manager.TokenManager,
+    token_manager: jafaal_token_manager.TokenManager,
     session_id: str | None = None,
 ) -> tuple[str, datetime, str, datetime, str, str]:
     """
@@ -128,7 +128,7 @@ def create_tokens(
 
     Args:
         user (users_schema.UsersRead): The user object for whom the tokens are being created.
-        token_manager (auth_token_manager.TokenManager): The token manager responsible for token creation.
+        token_manager (jafaal_token_manager.TokenManager): The token manager responsible for token creation.
         session_id (str | None, optional): An optional session ID. If not provided, a new unique session ID is generated.
 
     Returns:
@@ -146,10 +146,10 @@ def create_tokens(
         session_id = str(uuid4())
 
     # Create the access, refresh tokens and csrf token
-    access_token_exp, access_token = token_manager.create_token(session_id, user, auth_token_manager.TokenType.ACCESS)
+    access_token_exp, access_token = token_manager.create_token(session_id, user, jafaal_token_manager.TokenType.ACCESS)
 
     refresh_token_exp, refresh_token = token_manager.create_token(
-        session_id, user, auth_token_manager.TokenType.REFRESH
+        session_id, user, jafaal_token_manager.TokenType.REFRESH
     )
 
     csrf_token = token_manager.create_csrf_token()
@@ -166,7 +166,7 @@ def create_tokens(
 
 def mint_access_token(
     user: users_schema.UsersRead,
-    token_manager: auth_token_manager.TokenManager,
+    token_manager: jafaal_token_manager.TokenManager,
     session_id: str,
 ) -> tuple[datetime, str]:
     """
@@ -184,7 +184,7 @@ def mint_access_token(
     Returns:
         Tuple of (access_token_exp, access_token).
     """
-    return token_manager.create_token(session_id, user, auth_token_manager.TokenType.ACCESS)
+    return token_manager.create_token(session_id, user, jafaal_token_manager.TokenType.ACCESS)
 
 
 def _is_secure_cookie_environment() -> bool:
@@ -216,7 +216,7 @@ def set_refresh_token_cookie(
     response.set_cookie(
         key=REFRESH_TOKEN_COOKIE_NAME,
         value=refresh_token,
-        expires=datetime.now(UTC) + timedelta(days=auth_constants.JWT_REFRESH_TOKEN_EXPIRE_DAYS),
+        expires=datetime.now(UTC) + timedelta(days=jafaal_constants.JWT_REFRESH_TOKEN_EXPIRE_DAYS),
         httponly=True,
         path=REFRESH_TOKEN_COOKIE_PATH,
         secure=_is_secure_cookie_environment(),
@@ -339,8 +339,8 @@ def complete_login(
     request: Request,
     user: users_schema.UsersRead,
     client_type: str,
-    password_hasher: auth_password_hasher.PasswordHasher,
-    token_manager: auth_token_manager.TokenManager,
+    password_hasher: jafaal_password_hasher.PasswordHasher,
+    token_manager: jafaal_token_manager.TokenManager,
     db: Session,
 ) -> dict:
     """
@@ -358,8 +358,8 @@ def complete_login(
         request (Request): The HTTP request object containing client information.
         user (users_schema.UsersRead): The authenticated user object.
         client_type (str): The type of client ("web" or "mobile").
-        password_hasher (auth_password_hasher.PasswordHasher): Utility for password hashing.
-        token_manager (auth_token_manager.TokenManager): Utility for token generation and management.
+        password_hasher (jafaal_password_hasher.PasswordHasher): Utility for password hashing.
+        token_manager (jafaal_token_manager.TokenManager): Utility for token generation and management.
         db (Session): Database session for storing session information.
 
     Returns:
@@ -390,7 +390,7 @@ def complete_login(
     # This enables the OAuth 2.1 bootstrap pattern where the first /refresh call
     # after page reload establishes the CSRF binding. The httpOnly cookie is
     # sufficient authentication for the bootstrap refresh.
-    auth_sessions_utils.create_session(
+    jafaal_sessions_utils.create_session(
         session_id,
         user,
         request,
@@ -420,9 +420,9 @@ def create_mobile_pkce_session_response(
     user: users_schema.UsersRead,
     code_challenge: str,
     code_challenge_method: str,
-    password_hasher: auth_password_hasher.PasswordHasher,
+    password_hasher: jafaal_password_hasher.PasswordHasher,
     db: Session,
-) -> auth_schema.MobileSessionResponse:
+) -> jafaal_schema.MobileSessionResponse:
     """
     Create a session for mobile password login with PKCE exchange flow.
 
@@ -443,7 +443,7 @@ def create_mobile_pkce_session_response(
         db: Database session
 
     Returns:
-        auth_schema.MobileSessionResponse: Contains session_id and mfa_required flag
+        jafaal_schema.MobileSessionResponse: Contains session_id and mfa_required flag
 
     Raises:
         HTTPException: If PKCE parameters are invalid
@@ -483,7 +483,7 @@ def create_mobile_pkce_session_response(
     )
 
     # Create session linked to oauth_state (enables PKCE exchange)
-    auth_sessions_utils.create_session(
+    jafaal_sessions_utils.create_session(
         session_id,
         user,
         request,
@@ -494,7 +494,7 @@ def create_mobile_pkce_session_response(
     )
 
     # Return session_id for token exchange (no tokens yet)
-    return auth_schema.MobileSessionResponse(
+    return jafaal_schema.MobileSessionResponse(
         session_id=session_id,
         mfa_required=False,
         message=("Complete authentication by exchanging tokens at /public/idp/session/{session_id}/tokens"),

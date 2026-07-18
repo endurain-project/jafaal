@@ -11,7 +11,7 @@ import core.config as core_config
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-import jafaal.identity_providers.links.crud as auth_identity_links_crud
+import jafaal.identity_providers.links.crud as jafaal_identity_links_crud
 import jafaal.identity_providers.schema as idp_schema
 import jafaal.identity_providers.service as idp_service
 
@@ -334,7 +334,7 @@ async def refresh_idp_tokens_if_needed(user_id: int, db: Session) -> None:
     """
     try:
         # Get all IdP links for this user
-        idp_links = auth_identity_links_crud.get_user_identity_providers_by_user_id(user_id, db)
+        idp_links = jafaal_identity_links_crud.get_user_identity_providers_by_user_id(user_id, db)
 
         if not idp_links:
             # User has no IdP links - nothing to refresh
@@ -365,8 +365,10 @@ async def refresh_idp_tokens_if_needed(user_id: int, db: Session) -> None:
                     # Token has exceeded maximum age - clear it for security
                     logger.info(f"Clearing expired IdP token (max age exceeded) for user {user_id}, idp {link.idp_id}")
 
-                    success = auth_identity_links_crud.clear_user_identity_provider_refresh_token_by_user_id_and_idp_id(
-                        user_id, link.idp_id, db
+                    success = (
+                        jafaal_identity_links_crud.clear_user_identity_provider_refresh_token_by_user_id_and_idp_id(
+                            user_id, link.idp_id, db
+                        )
                     )
 
                     if success:
@@ -425,7 +427,7 @@ async def clear_all_idp_tokens(user_id: int, db: Session, revoke_at_idp: bool = 
     """
     try:
         # Get all IdP links for this user
-        idp_links = auth_identity_links_crud.get_user_identity_providers_by_user_id(user_id, db)
+        idp_links = jafaal_identity_links_crud.get_user_identity_providers_by_user_id(user_id, db)
 
         if not idp_links:
             # User has no IdP links - nothing to clear
@@ -454,7 +456,7 @@ async def clear_all_idp_tokens(user_id: int, db: Session, revoke_at_idp: bool = 
                         )
 
                 # Always clear locally regardless of revocation result
-                success = auth_identity_links_crud.clear_user_identity_provider_refresh_token_by_user_id_and_idp_id(
+                success = jafaal_identity_links_crud.clear_user_identity_provider_refresh_token_by_user_id_and_idp_id(
                     user_id, link.idp_id, db
                 )
 

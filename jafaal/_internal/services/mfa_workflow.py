@@ -23,7 +23,7 @@ import modules.users.users.schema as users_schema
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-import jafaal._internal.security_stores as auth_security_stores
+import jafaal._internal.security_stores as jafaal_security_stores
 import jafaal._internal.services.step_up_service as step_up_service
 import jafaal.mfa.backup_codes.crud as mfa_backup_codes_crud
 import jafaal.mfa.backup_codes.schema as mfa_backup_codes_schema
@@ -90,7 +90,7 @@ def enable_mfa(
     request: mfa_schema.MFASetupRequest,
     token_user_id: int,
     identity_service: IdentityService,
-    step_up_store: auth_security_stores.StepUpStore,
+    step_up_store: jafaal_security_stores.StepUpStore,
     db: Session,
     mfa_secret_store: MFASecretStoreBackend,
 ) -> dict:
@@ -135,7 +135,7 @@ def disable_mfa(
     request: mfa_schema.MFADisableRequest,
     token_user_id: int,
     identity_service: IdentityService,
-    step_up_store: auth_security_stores.StepUpStore,
+    step_up_store: jafaal_security_stores.StepUpStore,
     db: Session,
 ) -> dict:
     """Disable MFA after step-up verification."""
@@ -178,7 +178,7 @@ def generate_backup_codes(
     step_up: users_schema.StepUpVerification,
     token_user_id: int,
     identity_service: IdentityService,
-    step_up_store: auth_security_stores.StepUpStore,
+    step_up_store: jafaal_security_stores.StepUpStore,
     db: Session,
 ) -> mfa_backup_codes_schema.MFABackupCodesResponse:
     """Generate new backup codes for an MFA-enabled account."""

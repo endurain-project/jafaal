@@ -18,12 +18,12 @@ from fastapi import (
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-import jafaal._internal.security_stores as auth_security_stores
-import jafaal.credentials.crud as auth_credentials_crud
-import jafaal.password_policy as auth_password_policy
+import jafaal._internal.security_stores as jafaal_security_stores
+import jafaal.credentials.crud as jafaal_credentials_crud
+import jafaal.password_policy as jafaal_password_policy
 import jafaal.password_reset_tokens.crud as password_reset_tokens_crud
 import jafaal.password_reset_tokens.schema as password_reset_tokens_schema
-import jafaal.sessions.crud as auth_sessions_crud
+import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.token_hashing as token_hashing
 from jafaal.identity_service import IdentityService
 from jafaal.password_reset_tokens import (
@@ -157,7 +157,7 @@ def use_password_reset_token(
     db_user = users_utils.get_user_by_id_or_404(token_user_id, db)
     access_type = users_schema.normalize_access_type(db_user.access_type)
     try:
-        hashed_password = auth_password_policy.validate_and_hash_for_user(
+        hashed_password = jafaal_password_policy.validate_and_hash_for_user(
             identity_service,
             server_settings,
             access_type,
@@ -175,14 +175,14 @@ def use_password_reset_token(
         raise
 
     try:
-        auth_credentials_crud.upsert_password_hash(
+        jafaal_credentials_crud.upsert_password_hash(
             token_user_id,
             hashed_password,
             db,
             commit=False,
         )
         password_reset_tokens_crud.mark_user_password_reset_tokens_used(token_user_id, db)
-        auth_sessions_crud.delete_sessions_by_user(token_user_id, db, commit=False)
+        jafaal_sessions_crud.delete_sessions_by_user(token_user_id, db, commit=False)
         db.commit()
     except HTTPException:
         db.rollback()
@@ -196,7 +196,7 @@ def use_password_reset_token(
 
     # Drop any in-flight pending-MFA login that was started with the
     # now-rotated password.
-    auth_security_stores.clear_pending_mfa_for_user(token_user_id)
+    jafaal_security_stores.clear_pending_mfa_for_user(token_user_id)
 
 
 def delete_invalid_tokens_from_db() -> None:

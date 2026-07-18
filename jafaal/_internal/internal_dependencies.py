@@ -35,10 +35,10 @@ from fastapi.security import (
 )
 from joserfc.errors import MissingClaimError
 
-import jafaal._internal.token_manager as auth_token_manager
-import jafaal.constants as auth_constants
-import jafaal.identity_service as auth_identity_service
-import jafaal.utils as auth_utils
+import jafaal._internal.token_manager as jafaal_token_manager
+import jafaal.constants as jafaal_constants
+import jafaal.identity_service as jafaal_identity_service
+import jafaal.utils as jafaal_utils
 from jafaal.principal import AccessTokenCred, Principal
 
 logger = logging.getLogger(__name__)
@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 # Define the OAuth2 scheme for handling bearer tokens
 oauth2_scheme = OAuth2PasswordBearer(
     tokenUrl="/api/v1/auth/login",
-    scopes=auth_constants.SCOPE_DICT,
+    scopes=jafaal_constants.SCOPE_DICT,
     auto_error=False,
 )
 
@@ -91,7 +91,7 @@ cookie_refresh_token_scheme = APIKeyCookie(
 def _resolve_and_cache_principal(
     access_token: str,
     request: Request,
-    identity_service: auth_identity_service.IdentityService,
+    identity_service: jafaal_identity_service.IdentityService,
 ) -> Principal:
     """Resolve and cache a Principal from a JWT access token.
 
@@ -125,7 +125,7 @@ def get_token(
     non_cookie_token: Annotated[str | None, Depends(oauth2_scheme)],
     cookie_token: str | None,
     client_type: str,
-    token_type: auth_token_manager.TokenType,
+    token_type: jafaal_token_manager.TokenType,
 ) -> str | None:
     """
     Retrieves the authentication token based on client type and token type.
@@ -143,7 +143,7 @@ def get_token(
         HTTPException: If the required token is missing, or if the client type is invalid.
     """
     # OAuth 2.1: Access tokens always come from Authorization header (all clients)
-    if token_type == auth_token_manager.TokenType.ACCESS:
+    if token_type == jafaal_token_manager.TokenType.ACCESS:
         if non_cookie_token is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -153,7 +153,7 @@ def get_token(
         return non_cookie_token
 
     # Refresh tokens: cookie (web) or Authorization header (mobile)
-    if token_type == auth_token_manager.TokenType.REFRESH:
+    if token_type == jafaal_token_manager.TokenType.REFRESH:
         if client_type == "web":
             if cookie_token is None:
                 raise HTTPException(
@@ -207,7 +207,7 @@ def get_access_token(
 
 def _validate_access_token_impl(
     access_token: str,
-    token_manager: auth_token_manager.TokenManager,
+    token_manager: jafaal_token_manager.TokenManager,
 ) -> None:
     """Shared implementation for access-token validation.
 
@@ -239,8 +239,8 @@ def _validate_access_token_impl(
 def validate_access_token_expiration(
     access_token: Annotated[str, Depends(get_access_token)],
     token_manager: Annotated[
-        auth_token_manager.TokenManager,
-        Depends(auth_token_manager.get_token_manager),
+        jafaal_token_manager.TokenManager,
+        Depends(jafaal_token_manager.get_token_manager),
     ],
 ) -> None:
     """FastAPI dependency that validates only the *expiration* (and signature)
@@ -254,7 +254,7 @@ def validate_access_token_expiration(
 
     Args:
         access_token (str): The access token to be validated.
-        token_manager (auth_token_manager.TokenManager): The token manager instance used for validation.
+        token_manager (jafaal_token_manager.TokenManager): The token manager instance used for validation.
 
     Raises:
         HTTPException: If the token is expired or invalid.
@@ -266,8 +266,8 @@ def get_sub_from_access_token(
     request: Request,
     access_token: Annotated[str, Depends(get_access_token)],
     identity_service: Annotated[
-        auth_identity_service.IdentityService,
-        Depends(auth_identity_service.get_identity_service),
+        jafaal_identity_service.IdentityService,
+        Depends(jafaal_identity_service.get_identity_service),
     ],
 ) -> int:
     """Retrieve the user ID from the access token.
@@ -297,8 +297,8 @@ def get_sid_from_access_token(
     request: Request,
     access_token: Annotated[str, Depends(get_access_token)],
     identity_service: Annotated[
-        auth_identity_service.IdentityService,
-        Depends(auth_identity_service.get_identity_service),
+        jafaal_identity_service.IdentityService,
+        Depends(jafaal_identity_service.get_identity_service),
     ],
 ) -> str:
     """Retrieve the session ID from the access token.
@@ -349,14 +349,16 @@ def get_refresh_token(
     Raises:
         HTTPException: If no valid refresh token is found or the client type is invalid.
     """
-    return get_token(non_cookie_refresh_token, cookie_refresh_token, client_type, auth_token_manager.TokenType.REFRESH)
+    return get_token(
+        non_cookie_refresh_token, cookie_refresh_token, client_type, jafaal_token_manager.TokenType.REFRESH
+    )
 
 
 def validate_refresh_token(
     refresh_token: Annotated[str, Depends(get_refresh_token)],
     token_manager: Annotated[
-        auth_token_manager.TokenManager,
-        Depends(auth_token_manager.get_token_manager),
+        jafaal_token_manager.TokenManager,
+        Depends(jafaal_token_manager.get_token_manager),
     ],
 ) -> None:
     """
@@ -364,7 +366,7 @@ def validate_refresh_token(
 
     Args:
         refresh_token (str): The refresh token to be validated, extracted via dependency injection.
-        token_manager (auth_token_manager.TokenManager): The token manager instance used to validate the token, injected via dependency.
+        token_manager (jafaal_token_manager.TokenManager): The token manager instance used to validate the token, injected via dependency.
 
     Raises:
         HTTPException: If the refresh token is expired or invalid, or if an unexpected error occurs during validation.
@@ -376,7 +378,7 @@ def validate_refresh_token(
         # Validate the token expiration and type
         token_manager.validate_token_expiration(
             refresh_token,
-            auth_token_manager.TokenType.REFRESH,
+            jafaal_token_manager.TokenType.REFRESH,
         )
     except HTTPException as http_err:
         is_expired = "expired" in http_err.detail.lower()
@@ -395,7 +397,7 @@ def validate_refresh_token(
         # ``MissingClaimError``-style failures to avoid logging users out
         # on transient issues.
         if isinstance(http_err.__cause__, MissingClaimError):
-            raise auth_utils.ClearRefreshTokenCookieHTTPException(
+            raise jafaal_utils.ClearRefreshTokenCookieHTTPException(
                 status_code=http_err.status_code,
                 detail=http_err.detail,
                 headers=http_err.headers,
@@ -416,8 +418,8 @@ def validate_refresh_token(
 def get_sub_from_refresh_token(
     refresh_token: Annotated[str, Depends(get_refresh_token)],
     token_manager: Annotated[
-        auth_token_manager.TokenManager,
-        Depends(auth_token_manager.get_token_manager),
+        jafaal_token_manager.TokenManager,
+        Depends(jafaal_token_manager.get_token_manager),
     ],
 ) -> int:
     """
@@ -425,7 +427,7 @@ def get_sub_from_refresh_token(
 
     Args:
         refresh_token (str): The refresh token from which to extract the user ID.
-        token_manager (auth_token_manager.TokenManager): The token manager instance used to validate and parse the token.
+        token_manager (jafaal_token_manager.TokenManager): The token manager instance used to validate and parse the token.
 
     Returns:
         int: The user ID associated with the provided refresh token.
@@ -446,8 +448,8 @@ def get_sub_from_refresh_token(
 def get_sid_from_refresh_token(
     refresh_token: Annotated[str, Depends(get_refresh_token)],
     token_manager: Annotated[
-        auth_token_manager.TokenManager,
-        Depends(auth_token_manager.get_token_manager),
+        jafaal_token_manager.TokenManager,
+        Depends(jafaal_token_manager.get_token_manager),
     ],
 ) -> str:
     """
@@ -455,7 +457,7 @@ def get_sid_from_refresh_token(
 
     Args:
         refresh_token (str): The refresh token from which to extract the session ID.
-        token_manager (auth_token_manager.TokenManager): The token manager used to validate and extract claims from the token.
+        token_manager (jafaal_token_manager.TokenManager): The token manager used to validate and extract claims from the token.
 
     Returns:
         str: The session ID associated with the provided refresh token.
@@ -493,7 +495,7 @@ def get_and_return_refresh_token(
 async def validate_api_key(
     raw_key: str,
     request: Request,
-    identity_service: auth_identity_service.IdentityService,
+    identity_service: jafaal_identity_service.IdentityService,
 ) -> "AuthContext":
     """Validate a raw API key and return an AuthContext.
 
@@ -529,8 +531,8 @@ async def validate_api_key(
 async def validate_access_token_or_api_key(
     request: Request,
     identity_service: Annotated[
-        auth_identity_service.IdentityService,
-        Depends(auth_identity_service.get_identity_service),
+        jafaal_identity_service.IdentityService,
+        Depends(jafaal_identity_service.get_identity_service),
     ],
     access_token: str | None = Depends(oauth2_scheme),
     api_key_header: str | None = Depends(header_api_key_scheme),

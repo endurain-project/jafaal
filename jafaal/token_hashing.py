@@ -20,7 +20,7 @@ equality lookups.
 import hashlib
 import hmac
 
-import jafaal.constants as auth_constants
+import jafaal.constants as jafaal_constants
 from jafaal._core import hashing
 
 
@@ -52,7 +52,7 @@ def hmac_sha256(value: str) -> str:
     Raises:
         ValueError: If ``JWT_SECRET_KEY`` is not configured.
     """
-    secret_key = auth_constants.JWT_SECRET_KEY
+    secret_key = jafaal_constants.JWT_SECRET_KEY
     if not secret_key:
         raise ValueError("JWT_SECRET_KEY is not configured")
     return hmac.new(

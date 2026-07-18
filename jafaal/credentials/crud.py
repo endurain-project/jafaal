@@ -8,7 +8,7 @@ boundary (``IdentityService``) rather than directly by non-auth modules.
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-import jafaal.credentials.models as auth_credentials_models
+import jafaal.credentials.models as jafaal_credentials_models
 from jafaal._core import db_errors
 
 
@@ -16,7 +16,7 @@ from jafaal._core import db_errors
 def get_credential(
     user_id: int,
     db: Session,
-) -> auth_credentials_models.LocalCredential | None:
+) -> jafaal_credentials_models.LocalCredential | None:
     """
     Return a user's local credential row, or ``None`` when absent.
 
@@ -33,8 +33,8 @@ def get_credential(
     Raises:
         HTTPException: 500 if a database error occurs.
     """
-    stmt = select(auth_credentials_models.LocalCredential).where(
-        auth_credentials_models.LocalCredential.user_id == user_id,
+    stmt = select(jafaal_credentials_models.LocalCredential).where(
+        jafaal_credentials_models.LocalCredential.user_id == user_id,
     )
     return db.execute(stmt).scalar_one_or_none()
 
@@ -65,12 +65,12 @@ def upsert_password_hash(
     Raises:
         HTTPException: 500 if a database error occurs.
     """
-    stmt = select(auth_credentials_models.LocalCredential).where(
-        auth_credentials_models.LocalCredential.user_id == user_id,
+    stmt = select(jafaal_credentials_models.LocalCredential).where(
+        jafaal_credentials_models.LocalCredential.user_id == user_id,
     )
     credential = db.execute(stmt).scalar_one_or_none()
     if credential is None:
-        credential = auth_credentials_models.LocalCredential(
+        credential = jafaal_credentials_models.LocalCredential(
             user_id=user_id,
             password_hash=password_hash,
         )
@@ -104,8 +104,8 @@ def delete_credential(
         HTTPException: 500 if a database error occurs.
     """
     db.execute(
-        delete(auth_credentials_models.LocalCredential).where(
-            auth_credentials_models.LocalCredential.user_id == user_id,
+        delete(jafaal_credentials_models.LocalCredential).where(
+            jafaal_credentials_models.LocalCredential.user_id == user_id,
         )
     )
     db.commit()

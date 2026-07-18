@@ -11,7 +11,7 @@ are re-exported unchanged so their sync/async nature and arguments are
 preserved.
 """
 
-import jafaal._internal.security_stores as auth_security_stores
+import jafaal._internal.security_stores as jafaal_security_stores
 from jafaal.identity_providers.link_tokens.utils import delete_idp_link_expired_tokens_from_db
 from jafaal.oauth_state.utils import delete_expired_oauth_states_from_db
 from jafaal.password_reset_tokens.utils import (
@@ -36,4 +36,4 @@ __all__ = [
 
 def cleanup_expired_pending_mfa_logins() -> int:
     """Evict expired pending MFA login entries."""
-    return auth_security_stores.cleanup_expired_pending_mfa_logins()
+    return jafaal_security_stores.cleanup_expired_pending_mfa_logins()

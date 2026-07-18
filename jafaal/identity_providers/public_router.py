@@ -15,17 +15,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response,
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
-import jafaal._internal.password_hasher as auth_password_hasher
-import jafaal._internal.token_manager as auth_token_manager
+import jafaal._internal.password_hasher as jafaal_password_hasher
+import jafaal._internal.token_manager as jafaal_token_manager
 import jafaal.identity_providers.crud as idp_crud
 import jafaal.identity_providers.schema as idp_schema
 import jafaal.identity_providers.service as idp_service
 import jafaal.identity_providers.utils as idp_utils
 import jafaal.oauth_state.crud as oauth_state_crud
 import jafaal.oauth_state.utils as oauth_state_utils
-import jafaal.sessions.crud as auth_sessions_crud
-import jafaal.sessions.utils as auth_sessions_utils
-import jafaal.utils as auth_utils
+import jafaal.sessions.crud as jafaal_sessions_crud
+import jafaal.sessions.utils as jafaal_sessions_utils
+import jafaal.utils as jafaal_utils
 
 logger = logging.getLogger(__name__)
 
@@ -224,12 +224,12 @@ async def handle_callback(
     response: Response,
     idp_slug: str,
     password_hasher: Annotated[
-        auth_password_hasher.PasswordHasher,
-        Depends(auth_password_hasher.get_password_hasher),
+        jafaal_password_hasher.PasswordHasher,
+        Depends(jafaal_password_hasher.get_password_hasher),
     ],
     token_manager: Annotated[
-        auth_token_manager.TokenManager,
-        Depends(auth_token_manager.get_token_manager),
+        jafaal_token_manager.TokenManager,
+        Depends(jafaal_token_manager.get_token_manager),
     ],
     db: Annotated[Session, Depends(core_database.get_db)],
     code: str = Query(..., description="Authorization code from IdP"),
@@ -242,8 +242,8 @@ async def handle_callback(
     It supports two modes: login mode (default) and link mode (for linking IdP to existing account).
     Args:
         idp_slug (str): The slug identifier of the identity provider.
-        password_hasher (auth_password_hasher.PasswordHasher): Password hasher dependency for session management.
-        token_manager (auth_token_manager.TokenManager): Token manager dependency for creating session tokens.
+        password_hasher (jafaal_password_hasher.PasswordHasher): Password hasher dependency for session management.
+        token_manager (jafaal_token_manager.TokenManager): Token manager dependency for creating session tokens.
         db (Session): Database session dependency.
         code (str): Authorization code received from the identity provider.
         state (str): State parameter used for CSRF protection (database state ID).
@@ -356,7 +356,7 @@ async def handle_callback(
                 detail="OAuth state required for token exchange",
             )
 
-        auth_sessions_utils.create_session(
+        jafaal_sessions_utils.create_session(
             session_id,
             user_read,
             request,
@@ -415,12 +415,12 @@ async def exchange_tokens_for_session(
     response: Response,
     token_exchange: idp_schema.TokenExchangeRequest,
     password_hasher: Annotated[
-        auth_password_hasher.PasswordHasher,
-        Depends(auth_password_hasher.get_password_hasher),
+        jafaal_password_hasher.PasswordHasher,
+        Depends(jafaal_password_hasher.get_password_hasher),
     ],
     token_manager: Annotated[
-        auth_token_manager.TokenManager,
-        Depends(auth_token_manager.get_token_manager),
+        jafaal_token_manager.TokenManager,
+        Depends(jafaal_token_manager.get_token_manager),
     ],
     db: Annotated[Session, Depends(core_database.get_db)],
 ):
@@ -460,7 +460,7 @@ async def exchange_tokens_for_session(
     """
     try:
         # Retrieve session with OAuth state relationship
-        session_with_state = auth_sessions_crud.get_session_with_oauth_state(session_id, db)
+        session_with_state = jafaal_sessions_crud.get_session_with_oauth_state(session_id, db)
 
         if not session_with_state:
             logger.warning(f"Token exchange failed: session {session_id[:8]}... not found")
@@ -571,7 +571,7 @@ async def exchange_tokens_for_session(
             refresh_token_exp,
             refresh_token,
             csrf_token,
-        ) = auth_utils.create_tokens(user_read, token_manager, session_id)
+        ) = jafaal_utils.create_tokens(user_read, token_manager, session_id)
 
         # Calculate expires_in from access token expiration
         expires_in = int((access_token_exp - datetime.now(UTC)).total_seconds())
@@ -590,7 +590,7 @@ async def exchange_tokens_for_session(
         # Note: csrf_token_hash is NOT stored here (OAuth 2.1
         # bootstrap pattern). The first /refresh call after page
         # reload establishes the CSRF binding.
-        claimed = auth_sessions_crud.claim_session_for_token_exchange(
+        claimed = jafaal_sessions_crud.claim_session_for_token_exchange(
             session_id,
             password_hasher.hash_password(refresh_token),
             db,
@@ -604,13 +604,13 @@ async def exchange_tokens_for_session(
 
         # Set refresh token cookie for web clients (enables logout).
         # Cookie attributes (Secure, SameSite, Path, expiry) are
-        # centralised in auth_utils.set_refresh_token_cookie so this
+        # centralised in jafaal_utils.set_refresh_token_cookie so this
         # SSO flow stays in lockstep with password login and /refresh
         # — previously this site used FRONTEND_PROTOCOL and could
         # issue a non-Secure refresh cookie when that env var was
         # missing or mis-set in production.
         if client_type == "web":
-            auth_utils.set_refresh_token_cookie(response, refresh_token)
+            jafaal_utils.set_refresh_token_cookie(response, refresh_token)
 
         # Note: tokens_exchanged was flipped atomically together
         # with the refresh-token hash above, so no second write is

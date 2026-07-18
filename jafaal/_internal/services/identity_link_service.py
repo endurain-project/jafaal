@@ -9,16 +9,16 @@ import modules.users.users.schema as users_schema
 from fastapi import HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-import jafaal._internal.security_stores as auth_security_stores
+import jafaal._internal.security_stores as jafaal_security_stores
 import jafaal._internal.services.step_up_service as step_up_service
-import jafaal.credentials.crud as auth_credentials_crud
+import jafaal.credentials.crud as jafaal_credentials_crud
 import jafaal.identity_providers.crud as idp_crud
 import jafaal.identity_providers.link_tokens.crud as idp_link_token_crud
 import jafaal.identity_providers.link_tokens.schema as idp_link_token_schema
 import jafaal.identity_providers.link_tokens.utils as idp_link_token_utils
-import jafaal.identity_providers.links.crud as auth_identity_links_crud
-import jafaal.identity_providers.links.schema as auth_identity_links_schema
-import jafaal.identity_providers.links.utils as auth_identity_links_utils
+import jafaal.identity_providers.links.crud as jafaal_identity_links_crud
+import jafaal.identity_providers.links.schema as jafaal_identity_links_schema
+import jafaal.identity_providers.links.utils as jafaal_identity_links_utils
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ def generate_link_token(
     request: Request,
     token_user_id: int,
     identity_service: IdentityService,
-    step_up_store: auth_security_stores.StepUpStore,
+    step_up_store: jafaal_security_stores.StepUpStore,
     db: Session,
 ) -> idp_link_token_schema.IdpLinkTokenResponse:
     """Generate a one-time IdP link token after step-up verification."""
@@ -52,7 +52,7 @@ def generate_link_token(
             detail="Identity provider not found or disabled",
         )
 
-    existing_link = auth_identity_links_crud.get_user_identity_provider_by_user_id_and_idp_id(
+    existing_link = jafaal_identity_links_crud.get_user_identity_provider_by_user_id_and_idp_id(
         token_user_id,
         idp_id,
         db,
@@ -81,7 +81,7 @@ def delete_identity_provider_link(
     step_up: users_schema.StepUpVerification,
     token_user_id: int,
     identity_service: IdentityService,
-    step_up_store: auth_security_stores.StepUpStore,
+    step_up_store: jafaal_security_stores.StepUpStore,
     db: Session,
 ) -> None:
     """Unlink an IdP while enforcing anti-lockout checks."""
@@ -101,7 +101,7 @@ def delete_identity_provider_link(
             detail=f"Identity provider with id {idp_id} not found",
         )
 
-    link = auth_identity_links_crud.get_user_identity_provider_by_user_id_and_idp_id(
+    link = jafaal_identity_links_crud.get_user_identity_provider_by_user_id_and_idp_id(
         token_user_id,
         idp_id,
         db,
@@ -112,7 +112,7 @@ def delete_identity_provider_link(
             detail=f"Identity provider {idp.name} is not linked to your account",
         )
 
-    all_idp_links = auth_identity_links_crud.get_user_identity_providers_by_user_id(
+    all_idp_links = jafaal_identity_links_crud.get_user_identity_providers_by_user_id(
         token_user_id,
         db,
     )
@@ -124,7 +124,7 @@ def delete_identity_provider_link(
             detail="Cannot unlink last authentication method. Please set a password first.",
         )
 
-    success = auth_identity_links_crud.delete_user_identity_provider(
+    success = jafaal_identity_links_crud.delete_user_identity_provider(
         token_user_id,
         idp_id,
         db,
@@ -172,7 +172,7 @@ def admin_delete_identity_provider_link(
             detail=f"Identity provider with id {idp_id} not found",
         )
 
-    link = auth_identity_links_crud.get_user_identity_provider_by_user_id_and_idp_id(
+    link = jafaal_identity_links_crud.get_user_identity_provider_by_user_id_and_idp_id(
         user_id,
         idp_id,
         db,
@@ -183,20 +183,20 @@ def admin_delete_identity_provider_link(
             detail=f"Identity provider {idp.name} is not linked to this user",
         )
 
-    all_idp_links = auth_identity_links_crud.get_user_identity_providers_by_user_id(
+    all_idp_links = jafaal_identity_links_crud.get_user_identity_providers_by_user_id(
         user_id,
         db,
     )
     remaining_idp_count = len(all_idp_links) - 1
 
-    has_local_password = auth_credentials_crud.get_credential(user_id, db) is not None
+    has_local_password = jafaal_credentials_crud.get_credential(user_id, db) is not None
     if not has_local_password and remaining_idp_count == 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Cannot unlink last authentication method. User has no password set.",
         )
 
-    success = auth_identity_links_crud.delete_user_identity_provider(user_id, idp_id, db)
+    success = jafaal_identity_links_crud.delete_user_identity_provider(user_id, idp_id, db)
     if not success:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -209,10 +209,10 @@ def admin_delete_identity_provider_link(
 def get_user_identity_provider_links(
     user_id: int,
     db: Session,
-) -> list[auth_identity_links_schema.UsersIdentityProviderResponse]:
+) -> list[jafaal_identity_links_schema.UsersIdentityProviderResponse]:
     """Return enriched identity provider links for the authenticated user."""
-    idp_links = auth_identity_links_crud.get_user_identity_providers_by_user_id(user_id, db)
-    return auth_identity_links_utils.enrich_user_identity_providers(idp_links, user_id, db)
+    idp_links = jafaal_identity_links_crud.get_user_identity_providers_by_user_id(user_id, db)
+    return jafaal_identity_links_utils.enrich_user_identity_providers(idp_links, user_id, db)
 
 
 def validate_and_claim_browser_link_token(
@@ -224,7 +224,7 @@ def validate_and_claim_browser_link_token(
     """Validate, IP-check, and atomically claim a browser-redirect link token.
 
     Encapsulates all auth-owned CRUD operations (idp_link_token_crud and
-    auth_identity_links_crud) so that the browser redirect router does not import
+    jafaal_identity_links_crud) so that the browser redirect router does not import
     low-level auth persistence modules directly.
 
     Args:
@@ -261,7 +261,9 @@ def validate_and_claim_browser_link_token(
         # Soft check — log but don't fail (NAT, proxies, etc.)
 
     token_user_id = db_token.user_id
-    existing_link = auth_identity_links_crud.get_user_identity_provider_by_user_id_and_idp_id(token_user_id, idp_id, db)
+    existing_link = jafaal_identity_links_crud.get_user_identity_provider_by_user_id_and_idp_id(
+        token_user_id, idp_id, db
+    )
     if existing_link:
         idp = idp_crud.get_identity_provider(idp_id, db)
         idp_name = idp.name if idp else f"ID {idp_id}"
@@ -294,4 +296,4 @@ def get_identity_link_counts_for_users(
         Dict mapping user_id to link count.
         Users with no links are absent (callers should use .get(id, 0)).
     """
-    return auth_identity_links_crud.get_identity_link_counts_for_users(user_ids, db)
+    return jafaal_identity_links_crud.get_identity_link_counts_for_users(user_ids, db)

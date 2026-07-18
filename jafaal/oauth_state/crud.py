@@ -10,7 +10,7 @@ from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
 import jafaal.oauth_state.models as oauth_state_models
-import jafaal.sessions.models as auth_sessions_models
+import jafaal.sessions.models as jafaal_sessions_models
 from jafaal._core import db_errors
 
 logger = logging.getLogger(__name__)
@@ -106,7 +106,7 @@ def get_oauth_state_by_session_id(session_id: str, db: Session) -> oauth_state_m
     Raises:
         HTTPException: 500 error if database query fails.
     """
-    stmt = select(auth_sessions_models.UsersSessions).where(auth_sessions_models.UsersSessions.id == session_id)
+    stmt = select(jafaal_sessions_models.UsersSessions).where(jafaal_sessions_models.UsersSessions.id == session_id)
     session = db.execute(stmt).scalar_one_or_none()
 
     if not session or not session.oauth_state_id:

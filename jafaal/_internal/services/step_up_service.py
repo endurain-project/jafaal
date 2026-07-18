@@ -9,8 +9,8 @@ import modules.users.users.utils as users_utils
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-import jafaal._internal.security_stores as auth_security_stores
-import jafaal.credentials.crud as auth_credentials_crud
+import jafaal._internal.security_stores as jafaal_security_stores
+import jafaal.credentials.crud as jafaal_credentials_crud
 import jafaal.mfa.service as mfa_service
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,7 @@ def verify_step_up_credentials(
     current_password: str | None,
     mfa_code: str | None,
     identity_service: IdentityService,
-    step_up_store: auth_security_stores.StepUpStore,
+    step_up_store: jafaal_security_stores.StepUpStore,
     db: Session,
 ) -> None:
     """
@@ -108,7 +108,7 @@ def verify_step_up_credentials(
     # Guard: ensure the user exists (raises 404 otherwise).
     users_utils.get_user_by_id_or_404(user_id, db)
 
-    credential = auth_credentials_crud.get_credential(user_id, db)
+    credential = jafaal_credentials_crud.get_credential(user_id, db)
     if credential is not None:
         if not current_password:
             step_up_store.record_failed_attempt(key)

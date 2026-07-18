@@ -7,13 +7,13 @@ import modules.users.users.crud as users_crud
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-import jafaal._internal.internal_dependencies as auth_internal_dependencies
+import jafaal._internal.internal_dependencies as jafaal_internal_dependencies
 import jafaal._internal.services.step_up_service as step_up_service
-import jafaal.api_keys.crud as auth_api_keys_crud
+import jafaal.api_keys.crud as jafaal_api_keys_crud
 import jafaal.api_keys.schema as api_keys_schema
 import jafaal.api_keys.utils as api_keys_utils
-import jafaal.dependencies as auth_dependencies
-import jafaal.identity_service as auth_identity_service
+import jafaal.dependencies as jafaal_dependencies
+import jafaal.identity_service as jafaal_identity_service
 
 # Define the API router
 router = APIRouter()
@@ -27,7 +27,7 @@ router = APIRouter()
 async def get_user_api_keys(
     token_user_id: Annotated[
         int,
-        Depends(auth_internal_dependencies.get_sub_from_access_token),
+        Depends(jafaal_internal_dependencies.get_sub_from_access_token),
     ],
     db: Annotated[Session, Depends(core_database.get_db)],
 ) -> list[api_keys_schema.UsersApiKeyRead]:
@@ -42,7 +42,7 @@ async def get_user_api_keys(
         List of API key objects. Raw keys and hashes
         are never included.
     """
-    return auth_api_keys_crud.get_api_keys_by_user_id(token_user_id, db)  # type: ignore[return-value]
+    return jafaal_api_keys_crud.get_api_keys_by_user_id(token_user_id, db)  # type: ignore[return-value]
 
 
 @router.post(
@@ -54,15 +54,15 @@ async def create_user_api_key(
     data: api_keys_schema.UsersApiKeyCreate,
     token_user_id: Annotated[
         int,
-        Depends(auth_internal_dependencies.get_sub_from_access_token),
+        Depends(jafaal_internal_dependencies.get_sub_from_access_token),
     ],
     identity_service: Annotated[
-        auth_identity_service.IdentityService,
-        Depends(auth_identity_service.get_identity_service),
+        jafaal_identity_service.IdentityService,
+        Depends(jafaal_identity_service.get_identity_service),
     ],
     step_up_store: Annotated[
-        auth_dependencies.StepUpStore,
-        Depends(auth_dependencies.get_step_up_attempts),
+        jafaal_dependencies.StepUpStore,
+        Depends(jafaal_dependencies.get_step_up_attempts),
     ],
     db: Annotated[Session, Depends(core_database.get_db)],
 ) -> api_keys_schema.UsersApiKeyCreated:
@@ -117,7 +117,7 @@ async def create_user_api_key(
             detail=str(exc),
         ) from exc
 
-    db_api_key, raw_key = auth_api_keys_crud.create_api_key(token_user_id, data, db)
+    db_api_key, raw_key = jafaal_api_keys_crud.create_api_key(token_user_id, data, db)
 
     return api_keys_schema.UsersApiKeyCreated(
         id=db_api_key.id,
@@ -141,7 +141,7 @@ async def revoke_user_api_key(
     api_key_id: str,
     token_user_id: Annotated[
         int,
-        Depends(auth_internal_dependencies.get_sub_from_access_token),
+        Depends(jafaal_internal_dependencies.get_sub_from_access_token),
     ],
     db: Annotated[Session, Depends(core_database.get_db)],
 ) -> None:
@@ -163,7 +163,7 @@ async def revoke_user_api_key(
         HTTPException: 404 if the key is not found or
             does not belong to the authenticated user.
     """
-    auth_api_keys_crud.revoke_api_key(api_key_id, token_user_id, db)
+    jafaal_api_keys_crud.revoke_api_key(api_key_id, token_user_id, db)
 
 
 @router.delete(
@@ -174,7 +174,7 @@ async def delete_user_api_key(
     api_key_id: str,
     token_user_id: Annotated[
         int,
-        Depends(auth_internal_dependencies.get_sub_from_access_token),
+        Depends(jafaal_internal_dependencies.get_sub_from_access_token),
     ],
     db: Annotated[Session, Depends(core_database.get_db)],
 ) -> None:
@@ -196,4 +196,4 @@ async def delete_user_api_key(
         HTTPException: 404 if the key is not found or
             does not belong to the authenticated user.
     """
-    auth_api_keys_crud.delete_api_key(api_key_id, token_user_id, db)
+    jafaal_api_keys_crud.delete_api_key(api_key_id, token_user_id, db)

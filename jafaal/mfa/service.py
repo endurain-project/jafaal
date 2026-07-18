@@ -31,13 +31,13 @@ from sqlalchemy.orm import Session
 
 import jafaal.mfa.backup_codes.crud as mfa_backup_codes_crud
 import jafaal.mfa.backup_codes.utils as mfa_backup_codes_utils
-import jafaal.mfa.crud as auth_mfa_crud
+import jafaal.mfa.crud as jafaal_mfa_crud
 import jafaal.mfa.schema as mfa_schema
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    import jafaal.identity_service as auth_identity_service
+    import jafaal.identity_service as jafaal_identity_service
 
 # ---------------------------------------------------------------------------
 # TOTP / QR-code helpers (pure, no DB)
@@ -140,7 +140,7 @@ def enable_user_mfa(
     user_id: int,
     secret: str,
     mfa_code: str,
-    identity_service: auth_identity_service.IdentityService,
+    identity_service: jafaal_identity_service.IdentityService,
     db: Session,
 ) -> list[str]:
     """
@@ -179,7 +179,7 @@ def enable_user_mfa(
             detail="Failed to encrypt MFA secret",
         )
 
-    auth_mfa_crud.update_user_mfa(user_id, db, encrypted_secret=encrypted_secret)
+    jafaal_mfa_crud.update_user_mfa(user_id, db, encrypted_secret=encrypted_secret)
 
     backup_codes = mfa_backup_codes_crud.create_backup_codes(user_id, identity_service, db)
 
@@ -214,14 +214,14 @@ def disable_user_mfa(user_id: int, db: Session) -> None:
             detail="MFA is not enabled for this user",
         )
 
-    auth_mfa_crud.update_user_mfa(user_id, db)
+    jafaal_mfa_crud.update_user_mfa(user_id, db)
     mfa_backup_codes_crud.delete_user_backup_codes(user_id, db)
 
 
 def verify_user_mfa(
     user_id: int,
     mfa_code: str,
-    identity_service: auth_identity_service.IdentityService,
+    identity_service: jafaal_identity_service.IdentityService,
     db: Session,
 ) -> bool:
     """
@@ -246,7 +246,7 @@ def verify_user_mfa(
     """
     user = users_utils.get_user_by_id_or_404(user_id, db)
 
-    mfa_row = auth_mfa_crud.get_user_mfa_row(user.id, db)
+    mfa_row = jafaal_mfa_crud.get_user_mfa_row(user.id, db)
     if not mfa_row or not mfa_row.mfa_enabled or not mfa_row.mfa_secret:
         return False
 
@@ -310,5 +310,5 @@ def is_mfa_enabled_for_user(user_id: int, db: Session) -> bool:
 
     if not user:
         return False
-    mfa_row = auth_mfa_crud.get_user_mfa_row(user.id, db)
+    mfa_row = jafaal_mfa_crud.get_user_mfa_row(user.id, db)
     return bool(mfa_row and mfa_row.mfa_enabled and mfa_row.mfa_secret is not None)

@@ -7,7 +7,7 @@ import core.cryptography as core_cryptography
 from core.database import SessionLocal
 from sqlalchemy.orm import Session
 
-import jafaal.sessions.crud as auth_sessions_crud
+import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.rotated_refresh_tokens.crud as rotated_token_crud
 import jafaal.sessions.rotated_refresh_tokens.schema as rotated_token_schema
 import jafaal.token_hashing as token_hashing
@@ -206,7 +206,7 @@ def invalidate_token_family(token_family_id: str, db: Session) -> int:
         HTTPException: If invalidation fails.
     """
     # Delete all sessions in the family
-    num_sessions_deleted = auth_sessions_crud.delete_sessions_by_family(token_family_id, db)
+    num_sessions_deleted = jafaal_sessions_crud.delete_sessions_by_family(token_family_id, db)
 
     # Delete all rotated tokens for this family
     num_tokens_deleted = rotated_token_crud.delete_by_family(token_family_id, db)

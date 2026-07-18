@@ -30,14 +30,14 @@ from joserfc.errors import (
 from joserfc.jwk import ECKey, OctKey, RSAKey
 from sqlalchemy.orm import Session
 
-import jafaal._internal.password_hasher as auth_password_hasher
-import jafaal._internal.token_manager as auth_token_manager
+import jafaal._internal.password_hasher as jafaal_password_hasher
+import jafaal._internal.token_manager as jafaal_token_manager
 import jafaal.identity_providers.crud as idp_crud
-import jafaal.identity_providers.links.crud as auth_identity_links_crud
-import jafaal.identity_providers.links.models as auth_identity_links_models
-import jafaal.identity_providers.links.utils as auth_identity_links_utils
+import jafaal.identity_providers.links.crud as jafaal_identity_links_crud
+import jafaal.identity_providers.links.models as jafaal_identity_links_models
+import jafaal.identity_providers.links.utils as jafaal_identity_links_utils
 import jafaal.identity_providers.models as idp_models
-import jafaal.identity_service as auth_identity_service
+import jafaal.identity_service as jafaal_identity_service
 import jafaal.oauth_state.crud as oauth_state_crud
 import jafaal.oauth_state.models as oauth_state_models
 
@@ -895,7 +895,7 @@ class IdentityProviderService:
         code: str,
         state: str,
         request: Request,
-        password_hasher: auth_password_hasher.PasswordHasher,
+        password_hasher: jafaal_password_hasher.PasswordHasher,
         db: Session,
         oauth_state: oauth_state_models.OAuthState,
     ) -> dict[str, Any]:
@@ -910,7 +910,7 @@ class IdentityProviderService:
             code (str): The authorization code returned by the identity provider.
             state (str): The state parameter for CSRF protection (database state ID).
             request (Request): The FastAPI/Starlette request object.
-            password_hasher (auth_password_hasher.PasswordHasher): Password hasher instance
+            password_hasher (jafaal_password_hasher.PasswordHasher): Password hasher instance
                 for user authentication operations.
             db (Session): SQLAlchemy database session.
             oauth_state (oauth_state_models.OAuthState): Database OAuth state object.
@@ -1069,7 +1069,7 @@ class IdentityProviderService:
                     )
 
                 # Check if this IdP subject is already linked to ANY user
-                existing_link = auth_identity_links_crud.get_user_identity_provider_by_subject_and_idp_id(
+                existing_link = jafaal_identity_links_crud.get_user_identity_provider_by_subject_and_idp_id(
                     idp.id, subject, db
                 )
                 if existing_link:
@@ -1087,7 +1087,7 @@ class IdentityProviderService:
                         )
 
                 # Create the link
-                auth_identity_links_crud.create_user_identity_provider(
+                jafaal_identity_links_crud.create_user_identity_provider(
                     user_id=link_user_id, idp_id=idp.id, idp_subject=subject, db=db
                 )
 
@@ -1329,7 +1329,7 @@ class IdentityProviderService:
             access_token_expires_at = datetime.now(UTC) + timedelta(seconds=expires_in)
 
             # Store encrypted token and metadata in database
-            auth_identity_links_crud.store_user_identity_provider_tokens(
+            jafaal_identity_links_crud.store_user_identity_provider_tokens(
                 user_id=user_id,
                 idp_id=idp_id,
                 encrypted_refresh_token=encrypted_refresh,
@@ -1412,7 +1412,7 @@ class IdentityProviderService:
         idp: idp_models.IdentityProvider,
         subject: str,
         userinfo: dict[str, Any],
-        password_hasher: auth_password_hasher.PasswordHasher,
+        password_hasher: jafaal_password_hasher.PasswordHasher,
         db: Session,
     ) -> users_schema.UsersRead:
         """
@@ -1429,7 +1429,7 @@ class IdentityProviderService:
             idp (idp_models.IdentityProvider): The identity provider instance.
             subject (str): The unique subject identifier from the IdP.
             userinfo (Dict[str, Any]): User information/claims from the IdP.
-            password_hasher (auth_password_hasher.PasswordHasher): The password hasher instance.
+            password_hasher (jafaal_password_hasher.PasswordHasher): The password hasher instance.
             db (Session): Database session.
 
         Returns:
@@ -1441,7 +1441,7 @@ class IdentityProviderService:
                 disabled for the identity provider and no existing user is found.
         """
         # Try to find existing user by IdP link
-        link = auth_identity_links_crud.get_user_identity_provider_by_subject_and_idp_id(idp.id, subject, db)
+        link = jafaal_identity_links_crud.get_user_identity_provider_by_subject_and_idp_id(idp.id, subject, db)
 
         if link:
             # Fetch the linked user through the CRUD layer so we work with
@@ -1454,7 +1454,7 @@ class IdentityProviderService:
                     detail="User not found",
                 )
             # Update last login timestamp
-            auth_identity_links_crud.update_user_identity_provider_last_login(link.user_id, idp.id, db)
+            jafaal_identity_links_crud.update_user_identity_provider_last_login(link.user_id, idp.id, db)
 
             # Update user info if sync is enabled
             if idp.sync_user_info:
@@ -1492,7 +1492,7 @@ class IdentityProviderService:
                     )
 
                 # Link existing account to IdP
-                auth_identity_links_crud.create_user_identity_provider(user.id, idp.id, subject, db)
+                jafaal_identity_links_crud.create_user_identity_provider(user.id, idp.id, subject, db)
 
                 logger.info(f"Linked existing user {user.username} to IdP {idp.name}")
 
@@ -1517,7 +1517,7 @@ class IdentityProviderService:
         idp: idp_models.IdentityProvider,
         subject: str,
         mapped_data: dict[str, Any],
-        password_hasher: auth_password_hasher.PasswordHasher,
+        password_hasher: jafaal_password_hasher.PasswordHasher,
         db: Session,
     ) -> users_schema.UsersRead:
         """
@@ -1534,7 +1534,7 @@ class IdentityProviderService:
             idp (idp_models.IdentityProvider): The identity provider instance.
             subject (str): The unique subject identifier from the IdP.
             mapped_data (Dict[str, Any]): User data mapped from the IdP (e.g., username, email, name).
-            password_hasher (auth_password_hasher.PasswordHasher): The password hasher instance.
+            password_hasher (jafaal_password_hasher.PasswordHasher): The password hasher instance.
             db (Session): The database session.
 
         Returns:
@@ -1578,9 +1578,9 @@ class IdentityProviderService:
         # Build a real identity service to satisfy the create_signup_user
         # signature. SSO accounts opt out of local-credential persistence
         # (persist_credential=False) so no password hash is written.
-        identity_service = auth_identity_service.DefaultIdentityService(
+        identity_service = jafaal_identity_service.DefaultIdentityService(
             db=db,
-            token_manager=auth_token_manager.get_token_manager(),
+            token_manager=jafaal_token_manager.get_token_manager(),
             password_hasher=password_hasher,
         )
 
@@ -1596,7 +1596,7 @@ class IdentityProviderService:
         users_utils.create_user_default_data(created_user.id, identity_service, db)
 
         # Create the IdP link
-        auth_identity_links_crud.create_user_identity_provider(created_user.id, idp.id, subject, db)
+        jafaal_identity_links_crud.create_user_identity_provider(created_user.id, idp.id, subject, db)
 
         logger.info(f"Created new user {created_user.username} from IdP {idp.name}")
 
@@ -1712,7 +1712,7 @@ class IdentityProviderService:
 
         # Get the encrypted refresh token from database
         encrypted_refresh_token = (
-            auth_identity_links_utils.get_user_identity_provider_refresh_token_by_user_id_and_idp_id(
+            jafaal_identity_links_utils.get_user_identity_provider_refresh_token_by_user_id_and_idp_id(
                 user_id, idp_id, db
             )
         )
@@ -1729,7 +1729,7 @@ class IdentityProviderService:
         except Exception as err:
             logger.error(f"Failed to decrypt refresh token for user {user_id}, idp {idp_id}: {err}", exc_info=err)
             # Clear corrupted token
-            auth_identity_links_crud.clear_user_identity_provider_refresh_token_by_user_id_and_idp_id(
+            jafaal_identity_links_crud.clear_user_identity_provider_refresh_token_by_user_id_and_idp_id(
                 user_id, idp_id, db
             )
             return None
@@ -1775,7 +1775,7 @@ class IdentityProviderService:
                     exc_info=err,
                 )
                 # Clear invalid token from database
-                auth_identity_links_crud.clear_user_identity_provider_refresh_token_by_user_id_and_idp_id(
+                jafaal_identity_links_crud.clear_user_identity_provider_refresh_token_by_user_id_and_idp_id(
                     user_id, idp_id, db
                 )
                 return None
@@ -1855,7 +1855,7 @@ class IdentityProviderService:
 
             # Get the encrypted refresh token from database
             encrypted_refresh_token = (
-                auth_identity_links_utils.get_user_identity_provider_refresh_token_by_user_id_and_idp_id(
+                jafaal_identity_links_utils.get_user_identity_provider_refresh_token_by_user_id_and_idp_id(
                     user_id, idp_id, db
                 )
             )
@@ -1947,7 +1947,7 @@ class IdentityProviderService:
             logger.error(f"Error in revoke_idp_token for user {user_id}, idp {idp_id}: {err}", exc_info=err)
             return False
 
-    def _is_token_expired_by_age(self, link: auth_identity_links_models.IdentityLink) -> bool:
+    def _is_token_expired_by_age(self, link: jafaal_identity_links_models.IdentityLink) -> bool:
         """
         Check if an IdP refresh token has exceeded the maximum age policy.
 
@@ -1956,7 +1956,7 @@ class IdentityProviderService:
         configured maximum age.
 
         Args:
-            link (auth_identity_links_models.IdentityLink): The user-IdP link containing token metadata.
+            link (jafaal_identity_links_models.IdentityLink): The user-IdP link containing token metadata.
 
         Returns:
             bool: True if the token exceeds maximum age, False otherwise.
@@ -1996,7 +1996,7 @@ class IdentityProviderService:
         max_age = timedelta(days=MAX_IDP_TOKEN_AGE_DAYS)
         return token_age > max_age
 
-    def _should_refresh_idp_token(self, link: auth_identity_links_models.IdentityLink) -> TokenAction:
+    def _should_refresh_idp_token(self, link: jafaal_identity_links_models.IdentityLink) -> TokenAction:
         """
         Determine what action to take for an IdP token based on expiry and age policies.
 
@@ -2007,7 +2007,7 @@ class IdentityProviderService:
         4. Rate limiting - whether the token was refreshed very recently
 
         Args:
-            link (auth_identity_links_models.IdentityLink): The user-IdP link containing token metadata.
+            link (jafaal_identity_links_models.IdentityLink): The user-IdP link containing token metadata.
 
         Returns:
             TokenAction: The action to take (SKIP, REFRESH, or CLEAR).
@@ -2021,12 +2021,12 @@ class IdentityProviderService:
             - SKIP if token is still valid and not close to expiry
 
         Example usage:
-            link = auth_identity_links_crud.get_user_identity_provider_by_user_id_and_idp_id(user_id, idp_id, db)
+            link = jafaal_identity_links_crud.get_user_identity_provider_by_user_id_and_idp_id(user_id, idp_id, db)
             action = self._should_refresh_idp_token(link)
             if action == TokenAction.REFRESH:
                 await self.refresh_idp_session(user_id, idp_id, db)
             elif action == TokenAction.CLEAR:
-                auth_identity_links_crud.clear_user_identity_provider_refresh_token_by_user_id_and_idp_id(user_id, idp_id, db)
+                jafaal_identity_links_crud.clear_user_identity_provider_refresh_token_by_user_id_and_idp_id(user_id, idp_id, db)
         """
         # Check if refresh token exists
         if not link or not link.idp_refresh_token:

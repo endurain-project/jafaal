@@ -26,7 +26,7 @@ from joserfc.errors import (
 from joserfc.jwk import OctKey
 from joserfc.jwt import Token
 
-import jafaal.constants as auth_constants
+import jafaal.constants as jafaal_constants
 
 logger = logging.getLogger(__name__)
 
@@ -76,9 +76,9 @@ class TokenManager:
                 signing algorithm.
 
         """
-        if algorithm not in auth_constants.JWT_ALLOWED_ALGORITHMS:
+        if algorithm not in jafaal_constants.JWT_ALLOWED_ALGORITHMS:
             raise ValueError(
-                f"algorithm={algorithm!r} is not in the JWT allow-list {sorted(auth_constants.JWT_ALLOWED_ALGORITHMS)}."
+                f"algorithm={algorithm!r} is not in the JWT allow-list {sorted(jafaal_constants.JWT_ALLOWED_ALGORITHMS)}."
             )
         self.secret_key = secret_key
         self.algorithm = algorithm
@@ -333,13 +333,13 @@ class TokenManager:
         """
         # Check user access level and set scope accordingly
         if user.access_type == users_schema.UserAccessType.REGULAR.value:
-            scope = auth_constants.REGULAR_ACCESS_SCOPE
+            scope = jafaal_constants.REGULAR_ACCESS_SCOPE
         else:
-            scope = auth_constants.ADMIN_ACCESS_SCOPE
+            scope = jafaal_constants.ADMIN_ACCESS_SCOPE
 
-        exp = datetime.now(UTC) + timedelta(minutes=auth_constants.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
+        exp = datetime.now(UTC) + timedelta(minutes=jafaal_constants.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
         if token_type == TokenType.REFRESH:
-            exp = datetime.now(UTC) + timedelta(days=auth_constants.JWT_REFRESH_TOKEN_EXPIRE_DAYS)
+            exp = datetime.now(UTC) + timedelta(days=jafaal_constants.JWT_REFRESH_TOKEN_EXPIRE_DAYS)
 
         # Set now
         now = int(datetime.now(UTC).timestamp())
@@ -393,10 +393,10 @@ def get_token_manager() -> TokenManager:
 
 
 # Validate required configuration before creating token manager
-if auth_constants.JWT_SECRET_KEY is None:
+if jafaal_constants.JWT_SECRET_KEY is None:
     raise ValueError("JWT_SECRET_KEY must be set in environment variables")
 
-if auth_constants.JWT_ALGORITHM is None:
+if jafaal_constants.JWT_ALGORITHM is None:
     raise ValueError("JWT_ALGORITHM must be set in environment variables")
 
-token_manager = TokenManager(auth_constants.JWT_SECRET_KEY, auth_constants.JWT_ALGORITHM)
+token_manager = TokenManager(jafaal_constants.JWT_SECRET_KEY, jafaal_constants.JWT_ALGORITHM)

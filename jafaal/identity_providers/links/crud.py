@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
-import jafaal.identity_providers.links.models as auth_identity_links_models
+import jafaal.identity_providers.links.models as jafaal_identity_links_models
 from jafaal._core import db_errors
 
 
@@ -30,7 +30,7 @@ def check_user_identity_providers_by_idp_id(
     Raises:
         HTTPException: 500 error if database query fails.
     """
-    stmt = select(exists().where(auth_identity_links_models.IdentityLink.idp_id == idp_id))
+    stmt = select(exists().where(jafaal_identity_links_models.IdentityLink.idp_id == idp_id))
     return db.execute(stmt).scalar() or False
 
 
@@ -38,7 +38,7 @@ def check_user_identity_providers_by_idp_id(
 def get_user_identity_providers_by_user_id(
     user_id: int,
     db: Session,
-) -> list[auth_identity_links_models.IdentityLink]:
+) -> list[jafaal_identity_links_models.IdentityLink]:
     """
     Retrieve all identity provider links for a user.
 
@@ -52,8 +52,8 @@ def get_user_identity_providers_by_user_id(
     Raises:
         HTTPException: 500 error if database query fails.
     """
-    stmt = select(auth_identity_links_models.IdentityLink).where(
-        auth_identity_links_models.IdentityLink.user_id == user_id
+    stmt = select(jafaal_identity_links_models.IdentityLink).where(
+        jafaal_identity_links_models.IdentityLink.user_id == user_id
     )
     return list(db.execute(stmt).scalars().all())
 
@@ -63,7 +63,7 @@ def get_user_identity_provider_by_user_id_and_idp_id(
     user_id: int,
     idp_id: int,
     db: Session,
-) -> auth_identity_links_models.IdentityLink | None:
+) -> jafaal_identity_links_models.IdentityLink | None:
     """
     Retrieve identity provider link for a user.
 
@@ -79,9 +79,9 @@ def get_user_identity_provider_by_user_id_and_idp_id(
     Raises:
         HTTPException: 500 error if database query fails.
     """
-    stmt = select(auth_identity_links_models.IdentityLink).where(
-        auth_identity_links_models.IdentityLink.user_id == user_id,
-        auth_identity_links_models.IdentityLink.idp_id == idp_id,
+    stmt = select(jafaal_identity_links_models.IdentityLink).where(
+        jafaal_identity_links_models.IdentityLink.user_id == user_id,
+        jafaal_identity_links_models.IdentityLink.idp_id == idp_id,
     )
     return db.execute(stmt).scalar_one_or_none()
 
@@ -91,7 +91,7 @@ def get_user_identity_provider_by_subject_and_idp_id(
     idp_id: int,
     idp_subject: str,
     db: Session,
-) -> auth_identity_links_models.IdentityLink | None:
+) -> jafaal_identity_links_models.IdentityLink | None:
     """
     Retrieve identity provider link by IdP and subject.
 
@@ -107,9 +107,9 @@ def get_user_identity_provider_by_subject_and_idp_id(
     Raises:
         HTTPException: 500 error if database query fails.
     """
-    stmt = select(auth_identity_links_models.IdentityLink).where(
-        auth_identity_links_models.IdentityLink.idp_id == idp_id,
-        auth_identity_links_models.IdentityLink.idp_subject == idp_subject,
+    stmt = select(jafaal_identity_links_models.IdentityLink).where(
+        jafaal_identity_links_models.IdentityLink.idp_id == idp_id,
+        jafaal_identity_links_models.IdentityLink.idp_subject == idp_subject,
     )
     return db.execute(stmt).scalar_one_or_none()
 
@@ -120,7 +120,7 @@ def create_user_identity_provider(
     idp_id: int,
     idp_subject: str,
     db: Session,
-) -> auth_identity_links_models.IdentityLink:
+) -> jafaal_identity_links_models.IdentityLink:
     """
     Create a link between a user and an identity provider.
 
@@ -137,7 +137,7 @@ def create_user_identity_provider(
         HTTPException: 409 error if link already exists.
         HTTPException: 500 error if database operation fails.
     """
-    db_link = auth_identity_links_models.IdentityLink(
+    db_link = jafaal_identity_links_models.IdentityLink(
         user_id=user_id,
         idp_id=idp_id,
         idp_subject=idp_subject,
@@ -158,7 +158,7 @@ def update_user_identity_provider_last_login(
     user_id: int,
     idp_id: int,
     db: Session,
-) -> auth_identity_links_models.IdentityLink | None:
+) -> jafaal_identity_links_models.IdentityLink | None:
     """
     Update last login timestamp for a user-IdP link.
 
@@ -193,7 +193,7 @@ def store_user_identity_provider_tokens(
     encrypted_refresh_token: str,
     access_token_expires_at: datetime,
     db: Session,
-) -> auth_identity_links_models.IdentityLink | None:
+) -> jafaal_identity_links_models.IdentityLink | None:
     """
     Store encrypted IdP tokens for a user-IdP link.
 
@@ -329,11 +329,11 @@ def get_identity_link_counts_for_users(
         return {}
     stmt = (
         select(
-            auth_identity_links_models.IdentityLink.user_id,
-            func.count(auth_identity_links_models.IdentityLink.id).label("cnt"),
+            jafaal_identity_links_models.IdentityLink.user_id,
+            func.count(jafaal_identity_links_models.IdentityLink.id).label("cnt"),
         )
-        .where(auth_identity_links_models.IdentityLink.user_id.in_(user_ids))
-        .group_by(auth_identity_links_models.IdentityLink.user_id)
+        .where(jafaal_identity_links_models.IdentityLink.user_id.in_(user_ids))
+        .group_by(jafaal_identity_links_models.IdentityLink.user_id)
     )
     rows = db.execute(stmt).all()
     return {row.user_id: row.cnt for row in rows}

@@ -14,7 +14,7 @@ from fastapi import (
 )
 from sqlalchemy.orm import Session
 
-import jafaal.identity_service as auth_identity_service
+import jafaal.identity_service as jafaal_identity_service
 import jafaal.password_reset_tokens.schema as password_reset_tokens_schema
 import jafaal.password_reset_tokens.utils as password_reset_tokens_utils
 
@@ -81,8 +81,8 @@ async def confirm_password_reset(
     request: Request,
     confirm_data: password_reset_tokens_schema.PasswordResetConfirm,
     identity_service: Annotated[
-        auth_identity_service.IdentityService,
-        Depends(auth_identity_service.get_identity_service),
+        jafaal_identity_service.IdentityService,
+        Depends(jafaal_identity_service.get_identity_service),
     ],
     db: Annotated[
         Session,

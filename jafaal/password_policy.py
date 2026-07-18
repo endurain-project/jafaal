@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     import modules.server_settings.models as server_settings_models
     import modules.server_settings.schema as server_settings_schema
 
-    import jafaal.identity_service as auth_identity_service
+    import jafaal.identity_service as jafaal_identity_service
 
 
 def resolve_password_min_length(
@@ -36,7 +36,7 @@ def resolve_password_min_length(
 
 
 def validate_and_hash_for_user(
-    identity_service: auth_identity_service.IdentityService,
+    identity_service: jafaal_identity_service.IdentityService,
     server_settings: server_settings_models.ServerSettings | server_settings_schema.ServerSettingsRead,
     access_type: str,
     password: str,
