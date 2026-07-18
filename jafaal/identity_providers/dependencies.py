@@ -1,6 +1,6 @@
 """Identity provider-specific request validation dependencies."""
 
-import jafaal._core.validation as core_dependencies
+from jafaal._core import validation
 
 
 def validate_idp_id(idp_id: int) -> None:
@@ -16,4 +16,4 @@ def validate_idp_id(idp_id: int) -> None:
     Raises:
         HTTPException: 400 if identity provider ID is invalid (≤ 0).
     """
-    core_dependencies.validate_id(identifier=idp_id, min_value=0, message="Invalid identity provider ID")
+    validation.validate_id(identifier=idp_id, min_value=0, message="Invalid identity provider ID")

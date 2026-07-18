@@ -8,11 +8,11 @@ boundary (``IdentityService``) rather than directly by non-auth modules.
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-import jafaal._core.db_errors as core_decorators
 import jafaal.credentials.models as auth_credentials_models
+from jafaal._core import db_errors
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def get_credential(
     user_id: int,
     db: Session,
@@ -39,7 +39,7 @@ def get_credential(
     return db.execute(stmt).scalar_one_or_none()
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def upsert_password_hash(
     user_id: int,
     password_hash: str,
@@ -82,7 +82,7 @@ def upsert_password_hash(
         db.commit()
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def delete_credential(
     user_id: int,
     db: Session,

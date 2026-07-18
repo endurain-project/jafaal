@@ -8,15 +8,15 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-import jafaal._core.db_errors as core_decorators
 import jafaal.api_keys.models as api_keys_models
 import jafaal.api_keys.schema as api_keys_schema
 import jafaal.api_keys.utils as api_keys_utils
+from jafaal._core import db_errors
 
 logger = logging.getLogger(__name__)
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def get_api_keys_by_user_id(
     user_id: int,
     db: Session,
@@ -43,7 +43,7 @@ def get_api_keys_by_user_id(
     return list(db.execute(stmt).scalars().all())
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def get_api_key_by_id(
     api_key_id: str,
     user_id: int,
@@ -70,7 +70,7 @@ def get_api_key_by_id(
     return db.execute(stmt).scalar_one_or_none()
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def get_api_key_by_hash(
     key_hash: str,
     db: Session,
@@ -95,7 +95,7 @@ def get_api_key_by_hash(
     return db.execute(stmt).scalar_one_or_none()
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def create_api_key(
     user_id: int,
     data: api_keys_schema.UsersApiKeyCreate,
@@ -158,7 +158,7 @@ def create_api_key(
     return db_api_key, raw_key
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def update_last_used(
     api_key_id: str,
     db: Session,
@@ -187,7 +187,7 @@ def update_last_used(
     db.commit()
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def revoke_api_key(
     api_key_id: str,
     user_id: int,
@@ -229,7 +229,7 @@ def revoke_api_key(
     )
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def delete_api_key(
     api_key_id: str,
     user_id: int,

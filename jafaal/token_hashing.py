@@ -20,8 +20,8 @@ equality lookups.
 import hashlib
 import hmac
 
-import jafaal._core.hashing as core_hashing
 import jafaal.constants as auth_constants
+from jafaal._core import hashing
 
 
 def sha256_hex(value: str) -> str:
@@ -33,7 +33,7 @@ def sha256_hex(value: str) -> str:
     Returns:
         Lowercase hex-encoded SHA-256 digest (64 chars).
     """
-    return core_hashing.sha256_hex(value)
+    return hashing.sha256_hex(value)
 
 
 def hmac_sha256(value: str) -> str:

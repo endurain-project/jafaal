@@ -9,14 +9,14 @@ from sqlalchemy import delete as sa_delete
 from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
-import jafaal._core.db_errors as core_decorators
 import jafaal.identity_providers.link_tokens.models as idp_link_token_models
 import jafaal.identity_providers.link_tokens.schema as idp_link_token_schema
+from jafaal._core import db_errors
 
 logger = logging.getLogger(__name__)
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def get_idp_link_token_by_hash(token_hash: str, db: Session) -> idp_link_token_models.IdpLinkToken | None:
     """Retrieve a valid IdP link token by token hash.
 
@@ -39,7 +39,7 @@ def get_idp_link_token_by_hash(token_hash: str, db: Session) -> idp_link_token_m
     return db.execute(stmt).scalar_one_or_none()
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def create_idp_link_token(
     token_data: idp_link_token_schema.IdpLinkTokenCreate, db: Session
 ) -> idp_link_token_models.IdpLinkToken:
@@ -62,7 +62,7 @@ def create_idp_link_token(
     return db_token
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def mark_token_as_used(token_hash: str, db: Session) -> bool:
     """Atomically mark an unused, unexpired IdP link token as used.
 
@@ -98,7 +98,7 @@ def mark_token_as_used(token_hash: str, db: Session) -> bool:
     return claimed
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def delete_expired_tokens(db: Session) -> int:
     """Delete all expired IdP link tokens from the database.
 

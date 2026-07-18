@@ -9,17 +9,17 @@ from sqlalchemy import CursorResult, delete, select
 from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
-import jafaal._core.db_errors as core_decorators
 import jafaal.oauth_state.crud as oauth_state_crud
 import jafaal.oauth_state.models as oauth_state_models
 import jafaal.sessions.models as auth_sessions_models
 import jafaal.sessions.rotated_refresh_tokens.crud as auth_sessions_rotated_tokens_crud
 import jafaal.sessions.schema as auth_sessions_schema
+from jafaal._core import db_errors
 
 logger = logging.getLogger(__name__)
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def get_user_sessions(
     user_id: int,
     db: Session,
@@ -45,7 +45,7 @@ def get_user_sessions(
     return list(db.execute(stmt).scalars().all())
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def get_session_by_id(
     session_id: str,
     db: Session,
@@ -67,7 +67,7 @@ def get_session_by_id(
     return db.execute(stmt).scalar_one_or_none()
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def get_session_by_id_not_expired(
     session_id: str,
     db: Session,
@@ -93,7 +93,7 @@ def get_session_by_id_not_expired(
     return db.execute(stmt).scalar_one_or_none()
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def get_session_with_oauth_state(
     session_id: str,
     db: Session,
@@ -141,7 +141,7 @@ def get_session_with_oauth_state(
     return (db_session, oauth_state)
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def create_session(
     session: auth_sessions_schema.UsersSessionsInternal,
     db: Session,
@@ -166,7 +166,7 @@ def create_session(
     return db_session
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def set_session_refresh_token_hash(
     session_id: str, hashed_refresh_token: str, db: Session
 ) -> auth_sessions_models.UsersSessions:
@@ -203,7 +203,7 @@ def set_session_refresh_token_hash(
     return db_session
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def mark_tokens_exchanged(session_id: str, db: Session) -> None:
     """
     Mark tokens as exchanged and clear OAuth state.
@@ -252,7 +252,7 @@ def mark_tokens_exchanged(session_id: str, db: Session) -> None:
             )
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def claim_session_for_token_exchange(
     session_id: str,
     hashed_refresh_token: str,
@@ -322,7 +322,7 @@ def claim_session_for_token_exchange(
     return True
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def edit_session(
     session: auth_sessions_schema.UsersSessionsInternal,
     db: Session,
@@ -357,7 +357,7 @@ def edit_session(
     db.refresh(db_session)
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def update_session_csrf_hash(
     session_id: str,
     csrf_token_hash: str,
@@ -392,7 +392,7 @@ def update_session_csrf_hash(
     db.refresh(db_session)
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def delete_session(
     session_id: str,
     user_id: int,
@@ -448,7 +448,7 @@ def delete_session(
     db.commit()
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def delete_idle_sessions(
     cutoff_time: datetime,
     db: Session,
@@ -479,7 +479,7 @@ def delete_idle_sessions(
     return result.rowcount
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def delete_sessions_by_family(
     token_family_id: str,
     db: Session,
@@ -508,7 +508,7 @@ def delete_sessions_by_family(
     return result.rowcount
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def delete_sessions_by_user(
     user_id: int,
     db: Session,

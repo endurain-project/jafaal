@@ -7,15 +7,15 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-import jafaal._core.db_errors as core_decorators
 import jafaal.identity_providers.links.crud as auth_identity_links_crud
 import jafaal.identity_providers.models as idp_models
 import jafaal.identity_providers.schema as idp_schema
+from jafaal._core import db_errors
 
 logger = logging.getLogger(__name__)
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def get_identity_provider(idp_id: int, db: Session) -> idp_models.IdentityProvider | None:
     """
     Retrieve an identity provider by its ID.
@@ -34,7 +34,7 @@ def get_identity_provider(idp_id: int, db: Session) -> idp_models.IdentityProvid
     return db.execute(stmt).scalar_one_or_none()
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def get_identity_provider_by_slug(slug: str, db: Session) -> idp_models.IdentityProvider | None:
     """
     Retrieve an identity provider by its slug.
@@ -53,7 +53,7 @@ def get_identity_provider_by_slug(slug: str, db: Session) -> idp_models.Identity
     return db.execute(stmt).scalar_one_or_none()
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def get_all_identity_providers(db: Session) -> list[idp_models.IdentityProvider]:
     """
     Retrieve all identity providers ordered by name.
@@ -71,7 +71,7 @@ def get_all_identity_providers(db: Session) -> list[idp_models.IdentityProvider]
     return list(db.execute(stmt).scalars().all())
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def get_identity_providers_by_ids(
     idp_ids: list[int],
     db: Session,
@@ -99,7 +99,7 @@ def get_identity_providers_by_ids(
     return list(db.execute(stmt).scalars().all())
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def get_enabled_identity_providers(db: Session) -> list[idp_models.IdentityProvider]:
     """
     Retrieve all enabled identity providers ordered by name.
@@ -121,7 +121,7 @@ def get_enabled_identity_providers(db: Session) -> list[idp_models.IdentityProvi
     return list(db.execute(stmt).scalars().all())
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def create_identity_provider(idp_data: idp_schema.IdentityProviderCreate, db: Session) -> idp_models.IdentityProvider:
     """
     Create a new identity provider.
@@ -182,7 +182,7 @@ def create_identity_provider(idp_data: idp_schema.IdentityProviderCreate, db: Se
     return db_idp
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def update_identity_provider(
     idp_id: int, idp_data: idp_schema.IdentityProviderUpdate, db: Session
 ) -> idp_models.IdentityProvider:
@@ -243,7 +243,7 @@ def update_identity_provider(
     return db_idp
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def delete_identity_provider(idp_id: int, db: Session) -> None:
     """
     Delete an identity provider by ID.

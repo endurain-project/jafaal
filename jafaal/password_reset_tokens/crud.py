@@ -8,12 +8,12 @@ from sqlalchemy import delete as sa_delete
 from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
-import jafaal._core.db_errors as core_decorators
 import jafaal.password_reset_tokens.models as password_reset_tokens_models
 import jafaal.password_reset_tokens.schema as password_reset_tokens_schema
+from jafaal._core import db_errors
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def create_password_reset_token(
     token: password_reset_tokens_schema.PasswordResetToken,
     db: Session,
@@ -48,7 +48,7 @@ def create_password_reset_token(
     return db_token
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def get_password_reset_token_by_hash(
     token_hash: str, db: Session
 ) -> password_reset_tokens_models.PasswordResetToken | None:
@@ -72,7 +72,7 @@ def get_password_reset_token_by_hash(
     return db.execute(stmt).scalar_one_or_none()
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def claim_password_reset_token(token_hash: str, db: Session) -> int | None:
     """Atomically claim a valid password reset token.
 
@@ -100,7 +100,7 @@ def claim_password_reset_token(token_hash: str, db: Session) -> int | None:
     return db.execute(stmt).scalar_one_or_none()
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def mark_user_password_reset_tokens_used(user_id: int, db: Session) -> int:
     """Mark all unused password reset tokens for a user as used.
 
@@ -126,7 +126,7 @@ def mark_user_password_reset_tokens_used(user_id: int, db: Session) -> int:
     return result.rowcount or 0
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def mark_password_reset_token_used(
     token_id: str, db: Session
 ) -> password_reset_tokens_models.PasswordResetToken | None:
@@ -156,7 +156,7 @@ def mark_password_reset_token_used(
     return db_token
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def delete_expired_password_reset_tokens(db: Session) -> int:
     """Delete all expired password reset tokens.
 

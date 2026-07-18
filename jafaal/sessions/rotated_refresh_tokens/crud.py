@@ -6,12 +6,12 @@ from typing import Any
 from sqlalchemy import CursorResult, delete, select
 from sqlalchemy.orm import Session
 
-import jafaal._core.db_errors as core_decorators
 import jafaal.sessions.rotated_refresh_tokens.models as rotated_token_models
 import jafaal.sessions.rotated_refresh_tokens.schema as rotated_token_schema
+from jafaal._core import db_errors
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def get_rotated_token_by_hash(
     hashed_token: str,
     db: Session,
@@ -35,7 +35,7 @@ def get_rotated_token_by_hash(
     return db.execute(stmt).scalar_one_or_none()
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def create_rotated_token(
     rotated_token: rotated_token_schema.RotatedRefreshTokenCreate,
     db: Session,
@@ -70,7 +70,7 @@ def create_rotated_token(
     return db_rotated_token
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def delete_expired_tokens(cutoff_time: datetime, db: Session) -> int:
     """
     Delete rotated tokens older than the cutoff time.
@@ -93,7 +93,7 @@ def delete_expired_tokens(cutoff_time: datetime, db: Session) -> int:
     return result.rowcount
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def delete_by_family(token_family_id: str, db: Session) -> int:
     """
     Delete all rotated tokens for a specific token family.

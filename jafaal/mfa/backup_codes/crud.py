@@ -10,15 +10,15 @@ from fastapi import HTTPException, status
 from sqlalchemy import CursorResult, delete, or_, select
 from sqlalchemy.orm import Session
 
-import jafaal._core.db_errors as core_decorators
 import jafaal.mfa.backup_codes.models as mfa_backup_codes_models
 import jafaal.mfa.backup_codes.utils as mfa_backup_codes_utils
+from jafaal._core import db_errors
 from jafaal._internal.password_hasher import SupportsHashPassword
 
 logger = logging.getLogger(__name__)
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def get_user_backup_codes(user_id: int, db: Session) -> list[mfa_backup_codes_models.MFABackupCode]:
     """Retrieve all MFA backup codes for a user.
 
@@ -38,7 +38,7 @@ def get_user_backup_codes(user_id: int, db: Session) -> list[mfa_backup_codes_mo
     return list(db.execute(stmt).scalars().all())
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def get_user_unused_backup_codes(user_id: int, db: Session) -> list[mfa_backup_codes_models.MFABackupCode]:
     """Retrieve all unused MFA backup codes for a user.
 
@@ -64,7 +64,7 @@ def get_user_unused_backup_codes(user_id: int, db: Session) -> list[mfa_backup_c
     return list(db.execute(stmt).scalars().all())
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def create_backup_codes(
     user_id: int,
     password_hasher: SupportsHashPassword,
@@ -117,7 +117,7 @@ def create_backup_codes(
     return plaintext_codes
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def mark_backup_code_as_used(code_id: int, user_id: int, db: Session) -> None:
     """Mark a single backup code as used by primary key.
 
@@ -148,7 +148,7 @@ def mark_backup_code_as_used(code_id: int, user_id: int, db: Session) -> None:
     logger.info(f"Marked backup code as used for user ID {user_id}")
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def delete_user_backup_codes(user_id: int, db: Session) -> int:
     """Delete all MFA backup codes for a user.
 

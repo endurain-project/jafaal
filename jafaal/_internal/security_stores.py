@@ -17,7 +17,7 @@ from urllib.parse import unquote
 import infra.runtime as platform_runtime
 from infra.providers import StateBackendUnavailableError, StateProvider
 
-import jafaal._core.hashing as core_hashing
+from jafaal._core import hashing
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +80,7 @@ def _username_digest(username: str) -> str:
     Raises:
         None.
     """
-    return core_hashing.sha256_hex(normalize_username_key(username))
+    return hashing.sha256_hex(normalize_username_key(username))
 
 
 def username_log_identifier(username: str) -> str:
@@ -248,7 +248,7 @@ class _ProgressiveLockout:
         self._normalize = normalize_key or (lambda key: key)
 
     def _digest(self, key: str) -> str:
-        return core_hashing.sha256_hex(self._normalize(key))
+        return hashing.sha256_hex(self._normalize(key))
 
     def _counter_key(self, key: str) -> str:
         return f"{_AUTH_KEY_PREFIX}:{self._name}:attempts:{self._digest(key)}"

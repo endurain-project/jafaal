@@ -7,12 +7,12 @@ from sqlalchemy import CursorResult, select
 from sqlalchemy import delete as sa_delete
 from sqlalchemy.orm import Session
 
-import jafaal._core.db_errors as core_decorators
 import jafaal.sign_up_tokens.models as sign_up_tokens_models
 import jafaal.sign_up_tokens.schema as sign_up_tokens_schema
+from jafaal._core import db_errors
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def get_sign_up_token_by_hash(token_hash: str, db: Session) -> sign_up_tokens_models.SignUpToken | None:
     """Retrieve an unused, unexpired token matching the hash.
 
@@ -35,7 +35,7 @@ def get_sign_up_token_by_hash(token_hash: str, db: Session) -> sign_up_tokens_mo
     return db.execute(stmt).scalar_one_or_none()
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def create_sign_up_token(
     token: sign_up_tokens_schema.SignUpToken,
     db: Session,
@@ -66,7 +66,7 @@ def create_sign_up_token(
     return db_token
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def mark_sign_up_token_used(token_id: str, db: Session) -> sign_up_tokens_models.SignUpToken | None:
     """Mark a sign-up token as used.
 
@@ -94,7 +94,7 @@ def mark_sign_up_token_used(token_id: str, db: Session) -> sign_up_tokens_models
     return db_token
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def delete_expired_sign_up_tokens(db: Session) -> int:
     """Delete all expired sign-up tokens.
 

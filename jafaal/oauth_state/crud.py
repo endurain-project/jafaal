@@ -9,14 +9,14 @@ from sqlalchemy import delete as sa_delete
 from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
-import jafaal._core.db_errors as core_decorators
 import jafaal.oauth_state.models as oauth_state_models
 import jafaal.sessions.models as auth_sessions_models
+from jafaal._core import db_errors
 
 logger = logging.getLogger(__name__)
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def get_oauth_state_by_id_and_not_used(state_id: str, db: Session) -> oauth_state_models.OAuthState | None:
     """Retrieve an OAuth state by ID, validating it is not expired or used.
 
@@ -44,7 +44,7 @@ def get_oauth_state_by_id_and_not_used(state_id: str, db: Session) -> oauth_stat
     return oauth_state
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def get_oauth_state_by_id(state_id: str, db: Session) -> oauth_state_models.OAuthState | None:
     """Retrieve an OAuth state by ID without validity checks.
 
@@ -62,7 +62,7 @@ def get_oauth_state_by_id(state_id: str, db: Session) -> oauth_state_models.OAut
     return db.execute(stmt).scalar_one_or_none()
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def get_oauth_state_by_id_not_expired(state_id: str, db: Session) -> oauth_state_models.OAuthState | None:
     """Retrieve an OAuth state by ID if it is still unexpired.
 
@@ -89,7 +89,7 @@ def get_oauth_state_by_id_not_expired(state_id: str, db: Session) -> oauth_state
     return oauth_state
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def get_oauth_state_by_session_id(session_id: str, db: Session) -> oauth_state_models.OAuthState | None:
     """Retrieve an OAuth state via the session relationship.
 
@@ -115,7 +115,7 @@ def get_oauth_state_by_session_id(session_id: str, db: Session) -> oauth_state_m
     return get_oauth_state_by_id(session.oauth_state_id, db)
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def create_oauth_state(
     db: Session,
     state_id: str,
@@ -173,7 +173,7 @@ def create_oauth_state(
     return oauth_state
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def mark_oauth_state_used(state_id: str, db: Session) -> bool:
     """Atomically mark an unused, unexpired OAuth state as used.
 
@@ -211,7 +211,7 @@ def mark_oauth_state_used(state_id: str, db: Session) -> bool:
     return claimed
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def delete_oauth_state(oauth_state_id: str, db: Session) -> int:
     """Delete a single OAuth state by ID.
 
@@ -231,7 +231,7 @@ def delete_oauth_state(oauth_state_id: str, db: Session) -> int:
     return result.rowcount
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def delete_expired_oauth_states(db: Session) -> int:
     """Delete OAuth states past their expiry timestamp.
 

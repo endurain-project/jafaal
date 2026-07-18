@@ -13,7 +13,7 @@ import core.cryptography as core_cryptography
 import infra.runtime as platform_runtime
 from infra.providers import StateBackendUnavailableError, StateProvider
 
-import jafaal._core.hashing as core_hashing
+from jafaal._core import hashing
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ def _user_id_digest(user_id: int) -> str:
     Raises:
         None.
     """
-    return core_hashing.sha256_hex(str(user_id))
+    return hashing.sha256_hex(str(user_id))
 
 
 def _encrypt_secret(secret: str) -> str:

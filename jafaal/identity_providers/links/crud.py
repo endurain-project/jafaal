@@ -8,11 +8,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
-import jafaal._core.db_errors as core_decorators
 import jafaal.identity_providers.links.models as auth_identity_links_models
+from jafaal._core import db_errors
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def check_user_identity_providers_by_idp_id(
     idp_id: int,
     db: Session,
@@ -34,7 +34,7 @@ def check_user_identity_providers_by_idp_id(
     return db.execute(stmt).scalar() or False
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def get_user_identity_providers_by_user_id(
     user_id: int,
     db: Session,
@@ -58,7 +58,7 @@ def get_user_identity_providers_by_user_id(
     return list(db.execute(stmt).scalars().all())
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def get_user_identity_provider_by_user_id_and_idp_id(
     user_id: int,
     idp_id: int,
@@ -86,7 +86,7 @@ def get_user_identity_provider_by_user_id_and_idp_id(
     return db.execute(stmt).scalar_one_or_none()
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def get_user_identity_provider_by_subject_and_idp_id(
     idp_id: int,
     idp_subject: str,
@@ -114,7 +114,7 @@ def get_user_identity_provider_by_subject_and_idp_id(
     return db.execute(stmt).scalar_one_or_none()
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def create_user_identity_provider(
     user_id: int,
     idp_id: int,
@@ -153,7 +153,7 @@ def create_user_identity_provider(
     return db_link
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def update_user_identity_provider_last_login(
     user_id: int,
     idp_id: int,
@@ -186,7 +186,7 @@ def update_user_identity_provider_last_login(
     return db_link
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def store_user_identity_provider_tokens(
     user_id: int,
     idp_id: int,
@@ -227,7 +227,7 @@ def store_user_identity_provider_tokens(
     return db_link
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def clear_user_identity_provider_refresh_token_by_user_id_and_idp_id(
     user_id: int,
     idp_id: int,
@@ -264,7 +264,7 @@ def clear_user_identity_provider_refresh_token_by_user_id_and_idp_id(
     return False
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def delete_user_identity_provider(
     user_id: int,
     idp_id: int,
@@ -306,7 +306,7 @@ def delete_user_identity_provider(
     return False
 
 
-@core_decorators.handle_db_errors
+@db_errors.handle_db_errors
 def get_identity_link_counts_for_users(
     user_ids: list[int],
     db: Session,
