@@ -1,10 +1,13 @@
 """OAuth state utility functions for cleanup and maintenance."""
 
+import logging
 import secrets
 
-import jafaal._core.logger as core_logger
-import jafaal.oauth_state.crud as oauth_state_crud
 from core.database import SessionLocal
+
+import jafaal.oauth_state.crud as oauth_state_crud
+
+logger = logging.getLogger(__name__)
 
 
 def create_state_id_and_nonce() -> tuple[str, str]:
@@ -34,7 +37,4 @@ def delete_expired_oauth_states_from_db() -> None:
         num_deleted = oauth_state_crud.delete_expired_oauth_states(db)
 
         if num_deleted > 0:
-            core_logger.print_to_log(
-                f"Deleted {num_deleted} expired OAuth states from database",
-                "info",
-            )
+            logger.info(f"Deleted {num_deleted} expired OAuth states from database")

@@ -1,16 +1,18 @@
 """Utility functions for refresh token reuse detection."""
 
+import logging
 from datetime import UTC, datetime, timedelta
 
+import core.cryptography as core_cryptography
+from core.database import SessionLocal
 from sqlalchemy.orm import Session
 
-import core.cryptography as core_cryptography
-import jafaal._core.logger as core_logger
 import jafaal.sessions.crud as auth_sessions_crud
 import jafaal.sessions.rotated_refresh_tokens.crud as rotated_token_crud
 import jafaal.sessions.rotated_refresh_tokens.schema as rotated_token_schema
 import jafaal.token_hashing as token_hashing
-from core.database import SessionLocal
+
+logger = logging.getLogger(__name__)
 
 # Grace period for token reuse (60 seconds)
 # Allows for network retries/delays without false positives
@@ -126,10 +128,9 @@ def check_token_reuse(raw_token: str, db: Session) -> tuple[bool, bool]:
 
     if now <= rotated_token.expires_at:
         # Within grace period - might be legitimate retry
-        core_logger.print_to_log(
+        logger.warning(
             f"Token reuse within grace period for family {rotated_token.token_family_id}",
-            "warning",
-            context={
+            extra={
                 "token_family_id": rotated_token.token_family_id,
                 "rotation_count": rotated_token.rotation_count,
             },
@@ -137,10 +138,9 @@ def check_token_reuse(raw_token: str, db: Session) -> tuple[bool, bool]:
         return (True, True)
 
     # Past grace period - likely theft!
-    core_logger.print_to_log(
+    logger.error(
         f"Token reuse detected after grace period for family {rotated_token.token_family_id}",
-        "error",
-        context={
+        extra={
             "token_family_id": rotated_token.token_family_id,
             "rotation_count": rotated_token.rotation_count,
             "rotated_at": rotated_token.rotated_at.isoformat(),
@@ -211,11 +211,10 @@ def invalidate_token_family(token_family_id: str, db: Session) -> int:
     # Delete all rotated tokens for this family
     num_tokens_deleted = rotated_token_crud.delete_by_family(token_family_id, db)
 
-    core_logger.print_to_log(
+    logger.error(
         f"Invalidated token family {token_family_id} due to reuse: "
         f"{num_sessions_deleted} sessions, {num_tokens_deleted} tokens",
-        "error",
-        context={
+        extra={
             "token_family_id": token_family_id,
             "sessions_deleted": num_sessions_deleted,
             "tokens_deleted": num_tokens_deleted,
@@ -246,13 +245,6 @@ def cleanup_expired_rotated_tokens() -> None:
             deleted_count = rotated_token_crud.delete_expired_tokens(cutoff_time, db)
 
             if deleted_count > 0:
-                core_logger.print_to_log(
-                    f"Cleaned up {deleted_count} expired rotated tokens",
-                    "info",
-                )
+                logger.info(f"Cleaned up {deleted_count} expired rotated tokens")
         except Exception as err:
-            core_logger.print_to_log(
-                f"Error in cleanup_expired_rotated_tokens: {err}",
-                "error",
-                exc=err,
-            )
+            logger.error(f"Error in cleanup_expired_rotated_tokens: {err}", exc_info=err)

@@ -1,10 +1,14 @@
 """Session utility functions and classes."""
 
 import hmac
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 
+import core.network as core_network
+import modules.users.users.schema as users_schema
+from core.database import SessionLocal
 from fastapi import (
     HTTPException,
     Request,
@@ -13,16 +17,14 @@ from fastapi import (
 from sqlalchemy.orm import Session
 from user_agents import parse
 
-import jafaal._core.logger as core_logger
-import core.network as core_network
 import jafaal._internal.password_hasher as auth_password_hasher
 import jafaal.constants as auth_constants
 import jafaal.sessions.crud as auth_sessions_crud
 import jafaal.sessions.models as auth_sessions_models
 import jafaal.sessions.schema as auth_sessions_schema
 import jafaal.token_hashing as token_hashing
-import modules.users.users.schema as users_schema
-from core.database import SessionLocal
+
+logger = logging.getLogger(__name__)
 
 
 class DeviceType(Enum):
@@ -405,10 +407,6 @@ def cleanup_idle_sessions() -> None:
             deleted_count = auth_sessions_crud.delete_idle_sessions(cutoff_time, db)
 
             if deleted_count > 0:
-                core_logger.print_to_log(f"Cleaned up {deleted_count} idle sessions", "info")
+                logger.info(f"Cleaned up {deleted_count} idle sessions")
         except Exception as err:
-            core_logger.print_to_log(
-                f"Error in cleanup_idle_sessions: {err}",
-                "error",
-                exc=err,
-            )
+            logger.error(f"Error in cleanup_idle_sessions: {err}", exc_info=err)

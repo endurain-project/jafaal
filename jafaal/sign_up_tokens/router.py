@@ -2,6 +2,15 @@
 
 from typing import Annotated
 
+import core.apprise as core_apprise
+import core.database as core_database
+import core.rate_limit as core_rate_limit
+import modules.notifications.utils as notifications_utils
+import modules.server_settings.utils as server_settings_utils
+import modules.users.users.crud as users_crud
+import modules.users.users.schema as users_schema
+import modules.users.users.utils as users_utils
+import modules.websocket.manager as websocket_manager
 from fastapi import (
     APIRouter,
     Depends,
@@ -11,18 +20,9 @@ from fastapi import (
 )
 from sqlalchemy.orm import Session
 
-import core.apprise as core_apprise
-import core.database as core_database
-import core.rate_limit as core_rate_limit
 import jafaal.identity_service as auth_identity_service
 import jafaal.sign_up_tokens.schema as sign_up_tokens_schema
 import jafaal.sign_up_tokens.utils as sign_up_tokens_utils
-import modules.notifications.utils as notifications_utils
-import modules.server_settings.utils as server_settings_utils
-import modules.users.users.crud as users_crud
-import modules.users.users.schema as users_schema
-import modules.users.users.utils as users_utils
-import modules.websocket.manager as websocket_manager
 
 # Define the API router
 router = APIRouter()

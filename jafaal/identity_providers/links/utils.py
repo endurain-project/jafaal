@@ -1,12 +1,15 @@
 """Utility functions for user identity provider links."""
 
+import logging
+
 from sqlalchemy.orm import Session
 
-import jafaal._core.logger as core_logger
 import jafaal.identity_providers.crud as idp_crud
 import jafaal.identity_providers.links.crud as auth_identity_links_crud
 import jafaal.identity_providers.links.models as auth_identity_links_models
 import jafaal.identity_providers.links.schema as auth_identity_links_schema
+
+logger = logging.getLogger(__name__)
 
 
 def get_user_identity_provider_refresh_token_by_user_id_and_idp_id(
@@ -73,10 +76,7 @@ def enrich_user_identity_providers(
     for link in idp_links:
         idp = idp_map.get(link.idp_id)
         if idp is None:
-            core_logger.print_to_log(
-                f"IDP with id {link.idp_id} not found for user {user_id}, skipping enrichment",
-                "warning",
-            )
+            logger.warning(f"IDP with id {link.idp_id} not found for user {user_id}, skipping enrichment")
             continue
 
         link_data = auth_identity_links_schema.UsersIdentityProviderResponse(

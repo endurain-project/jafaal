@@ -1,5 +1,6 @@
 """CRUD operations for OAuth state (PKCE, nonce, replay prevention)."""
 
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -9,9 +10,10 @@ from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
 import jafaal._core.db_errors as core_decorators
-import jafaal._core.logger as core_logger
 import jafaal.oauth_state.models as oauth_state_models
 import jafaal.sessions.models as auth_sessions_models
+
+logger = logging.getLogger(__name__)
 
 
 @core_decorators.handle_db_errors
@@ -37,7 +39,7 @@ def get_oauth_state_by_id_and_not_used(state_id: str, db: Session) -> oauth_stat
     oauth_state = db.execute(stmt).scalar_one_or_none()
 
     if not oauth_state:
-        core_logger.print_to_log(f"OAuth state invalid or expired: {state_id[:8]}...", "warning")
+        logger.warning(f"OAuth state invalid or expired: {state_id[:8]}...")
 
     return oauth_state
 
@@ -82,10 +84,7 @@ def get_oauth_state_by_id_not_expired(state_id: str, db: Session) -> oauth_state
     oauth_state = db.execute(stmt).scalar_one_or_none()
 
     if not oauth_state:
-        core_logger.print_to_log(
-            f"OAuth state invalid or expired: {state_id[:8]}...",
-            "warning",
-        )
+        logger.warning(f"OAuth state invalid or expired: {state_id[:8]}...")
 
     return oauth_state
 
@@ -169,10 +168,7 @@ def create_oauth_state(
     db.commit()
     db.refresh(oauth_state)
 
-    core_logger.print_to_log(
-        f"OAuth state created: {state_id[:8]}... for IdP {idp_id}, client_type={client_type}",
-        "debug",
-    )
+    logger.debug(f"OAuth state created: {state_id[:8]}... for IdP {idp_id}, client_type={client_type}")
 
     return oauth_state
 
@@ -209,12 +205,9 @@ def mark_oauth_state_used(state_id: str, db: Session) -> bool:
 
     claimed = result.rowcount == 1
     if claimed:
-        core_logger.print_to_log(f"OAuth state marked as used: {state_id[:8]}...", "debug")
+        logger.debug(f"OAuth state marked as used: {state_id[:8]}...")
     else:
-        core_logger.print_to_log(
-            f"Cannot mark OAuth state used (missing/expired/replay): {state_id[:8]}...",
-            "warning",
-        )
+        logger.warning(f"Cannot mark OAuth state used (missing/expired/replay): {state_id[:8]}...")
     return claimed
 
 
@@ -259,5 +252,5 @@ def delete_expired_oauth_states(db: Session) -> int:
 
     deleted_count = result.rowcount
     if deleted_count > 0:
-        core_logger.print_to_log(f"Deleted {deleted_count} expired OAuth state(s)", "debug")
+        logger.debug(f"Deleted {deleted_count} expired OAuth state(s)")
     return deleted_count

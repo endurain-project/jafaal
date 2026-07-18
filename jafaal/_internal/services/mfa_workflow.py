@@ -14,22 +14,24 @@ Profile routes depend on this module, never on ``jafaal.mfa.*`` directly.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+import modules.users.users.crud as users_crud
+import modules.users.users.schema as users_schema
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-import jafaal._core.logger as core_logger
 import jafaal._internal.security_stores as auth_security_stores
 import jafaal._internal.services.step_up_service as step_up_service
 import jafaal.mfa.backup_codes.crud as mfa_backup_codes_crud
 import jafaal.mfa.backup_codes.schema as mfa_backup_codes_schema
 import jafaal.mfa.schema as mfa_schema
 import jafaal.mfa.service as mfa_service
-import modules.users.users.crud as users_crud
-import modules.users.users.schema as users_schema
 from jafaal.mfa.setup_store import MFASecretStoreBackend
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from jafaal.identity_service import IdentityService
@@ -118,10 +120,7 @@ def enable_mfa(
             db,
         )
         mfa_secret_store.delete_secret(token_user_id)
-        core_logger.print_to_log(
-            f"User {token_user_id} enabled MFA (step-up verified)",
-            "info",
-        )
+        logger.info(f"User {token_user_id} enabled MFA (step-up verified)")
         return {
             "message": "MFA enabled successfully",
             "backup_codes": backup_codes,
@@ -149,10 +148,7 @@ def disable_mfa(
         db,
     )
     mfa_service.disable_user_mfa(token_user_id, db)
-    core_logger.print_to_log(
-        f"User {token_user_id} disabled MFA (step-up verified)",
-        "info",
-    )
+    logger.info(f"User {token_user_id} disabled MFA (step-up verified)")
     return {"message": "MFA disabled successfully"}
 
 
@@ -215,10 +211,7 @@ def generate_backup_codes(
         db,
     )
 
-    core_logger.print_to_log(
-        f"User {user.id} generated MFA backup codes (step-up verified)",
-        "info",
-    )
+    logger.info(f"User {user.id} generated MFA backup codes (step-up verified)")
 
     return mfa_backup_codes_schema.MFABackupCodesResponse(
         codes=codes,

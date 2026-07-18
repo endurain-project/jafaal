@@ -2,10 +2,11 @@
 
 from typing import Annotated
 
+import core.database as core_database
+import modules.users.users.crud as users_crud
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-import core.database as core_database
 import jafaal._internal.internal_dependencies as auth_internal_dependencies
 import jafaal._internal.services.step_up_service as step_up_service
 import jafaal.api_keys.crud as auth_api_keys_crud
@@ -13,7 +14,6 @@ import jafaal.api_keys.schema as api_keys_schema
 import jafaal.api_keys.utils as api_keys_utils
 import jafaal.dependencies as auth_dependencies
 import jafaal.identity_service as auth_identity_service
-import modules.users.users.crud as users_crud
 
 # Define the API router
 router = APIRouter()

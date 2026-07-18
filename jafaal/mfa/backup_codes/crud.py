@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -10,10 +11,11 @@ from sqlalchemy import CursorResult, delete, or_, select
 from sqlalchemy.orm import Session
 
 import jafaal._core.db_errors as core_decorators
-import jafaal._core.logger as core_logger
 import jafaal.mfa.backup_codes.models as mfa_backup_codes_models
 import jafaal.mfa.backup_codes.utils as mfa_backup_codes_utils
 from jafaal._internal.password_hasher import SupportsHashPassword
+
+logger = logging.getLogger(__name__)
 
 
 @core_decorators.handle_db_errors
@@ -110,7 +112,7 @@ def create_backup_codes(
 
     db.commit()
 
-    core_logger.print_to_log(f"Created backup codes for user ID {user_id}", "info")
+    logger.info(f"Created backup codes for user ID {user_id}")
 
     return plaintext_codes
 
@@ -132,10 +134,7 @@ def mark_backup_code_as_used(code_id: int, user_id: int, db: Session) -> None:
     db_code = db.get(mfa_backup_codes_models.MFABackupCode, code_id)
 
     if db_code is None or db_code.user_id != user_id or db_code.used:
-        core_logger.print_to_log(
-            f"No unused backup code found to mark as used for user ID {user_id}",
-            "warning",
-        )
+        logger.warning(f"No unused backup code found to mark as used for user ID {user_id}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Backup code not found or already used",
@@ -146,7 +145,7 @@ def mark_backup_code_as_used(code_id: int, user_id: int, db: Session) -> None:
     db.commit()
     db.refresh(db_code)
 
-    core_logger.print_to_log(f"Marked backup code as used for user ID {user_id}", "info")
+    logger.info(f"Marked backup code as used for user ID {user_id}")
 
 
 @core_decorators.handle_db_errors
@@ -168,6 +167,6 @@ def delete_user_backup_codes(user_id: int, db: Session) -> int:
     db.commit()
 
     num_deleted = result.rowcount or 0
-    core_logger.print_to_log(f"Deleted {num_deleted} backup codes for user ID: {user_id}", "info")
+    logger.info(f"Deleted {num_deleted} backup codes for user ID: {user_id}")
 
     return num_deleted

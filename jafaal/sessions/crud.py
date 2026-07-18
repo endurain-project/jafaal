@@ -1,5 +1,6 @@
 """CRUD operations for user sessions."""
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -9,12 +10,13 @@ from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
 import jafaal._core.db_errors as core_decorators
-import jafaal._core.logger as core_logger
 import jafaal.oauth_state.crud as oauth_state_crud
 import jafaal.oauth_state.models as oauth_state_models
 import jafaal.sessions.models as auth_sessions_models
 import jafaal.sessions.rotated_refresh_tokens.crud as auth_sessions_rotated_tokens_crud
 import jafaal.sessions.schema as auth_sessions_schema
+
+logger = logging.getLogger(__name__)
 
 
 @core_decorators.handle_db_errors
@@ -240,17 +242,13 @@ def mark_tokens_exchanged(session_id: str, db: Session) -> None:
     if oauth_state_id_to_delete:
         try:
             oauth_state_crud.delete_oauth_state(oauth_state_id_to_delete, db)
-            core_logger.print_to_log(
-                f"Deleted OAuth state {oauth_state_id_to_delete[:8]}... after token exchange",
-                "debug",
-            )
+            logger.debug(f"Deleted OAuth state {oauth_state_id_to_delete[:8]}... after token exchange")
         except Exception as err:
             # Log but don't fail - cleanup job handles orphaned
             # states
-            core_logger.print_to_log(
+            logger.warning(
                 f"Failed to delete OAuth state {oauth_state_id_to_delete[:8]}... after token exchange: {err}",
-                "warning",
-                exc=err,
+                exc_info=err,
             )
 
 
@@ -304,10 +302,7 @@ def claim_session_for_token_exchange(
 
     claimed = result.rowcount == 1
     if not claimed:
-        core_logger.print_to_log(
-            f"Token exchange claim lost race for session {session_id[:8]}... (missing or already exchanged)",
-            "warning",
-        )
+        logger.warning(f"Token exchange claim lost race for session {session_id[:8]}... (missing or already exchanged)")
         return False
 
     # Best-effort OAuth state cleanup mirrors mark_tokens_exchanged.
@@ -319,10 +314,9 @@ def claim_session_for_token_exchange(
         try:
             oauth_state_crud.delete_oauth_state(oauth_state_id_to_delete, db)
         except Exception as err:
-            core_logger.print_to_log(
+            logger.warning(
                 f"Failed to delete OAuth state {oauth_state_id_to_delete[:8]}... after token exchange: {err}",
-                "warning",
-                exc=err,
+                exc_info=err,
             )
 
     return True

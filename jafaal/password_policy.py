@@ -10,9 +10,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    import jafaal.identity_service as auth_identity_service
     import modules.server_settings.models as server_settings_models
     import modules.server_settings.schema as server_settings_schema
+
+    import jafaal.identity_service as auth_identity_service
 
 
 def resolve_password_min_length(

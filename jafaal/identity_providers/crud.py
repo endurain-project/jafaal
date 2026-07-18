@@ -1,15 +1,18 @@
 """CRUD operations for identity providers."""
 
+import logging
+
+import core.cryptography as core_cryptography
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-import core.cryptography as core_cryptography
 import jafaal._core.db_errors as core_decorators
-import jafaal._core.logger as core_logger
 import jafaal.identity_providers.links.crud as auth_identity_links_crud
 import jafaal.identity_providers.models as idp_models
 import jafaal.identity_providers.schema as idp_schema
+
+logger = logging.getLogger(__name__)
 
 
 @core_decorators.handle_db_errors
@@ -174,7 +177,7 @@ def create_identity_provider(idp_data: idp_schema.IdentityProviderCreate, db: Se
     db.commit()
     db.refresh(db_idp)
 
-    core_logger.print_to_log(f"Created identity provider: {db_idp.name} (ID: {db_idp.id})", "info")
+    logger.info(f"Created identity provider: {db_idp.name} (ID: {db_idp.id})")
 
     return db_idp
 
@@ -235,7 +238,7 @@ def update_identity_provider(
     db.commit()
     db.refresh(db_idp)
 
-    core_logger.print_to_log(f"Updated identity provider: {db_idp.name} (ID: {db_idp.id})", "info")
+    logger.info(f"Updated identity provider: {db_idp.name} (ID: {db_idp.id})")
 
     return db_idp
 
@@ -274,4 +277,4 @@ def delete_identity_provider(idp_id: int, db: Session) -> None:
     db.delete(db_idp)
     db.commit()
 
-    core_logger.print_to_log(f"Deleted identity provider: {db_idp.name} (ID: {idp_id})", "info")
+    logger.info(f"Deleted identity provider: {db_idp.name} (ID: {idp_id})")

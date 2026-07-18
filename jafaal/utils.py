@@ -8,6 +8,9 @@ both password and PKCE login flows.
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+import core.config as core_config
+import modules.users.users.crud as users_crud
+import modules.users.users.schema as users_schema
 from fastapi import (
     HTTPException,
     Request,
@@ -17,7 +20,6 @@ from fastapi import (
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-import core.config as core_config
 import jafaal._internal.password_hasher as auth_password_hasher
 import jafaal._internal.token_manager as auth_token_manager
 import jafaal.constants as auth_constants
@@ -27,8 +29,6 @@ import jafaal.oauth_state.crud as oauth_state_crud
 import jafaal.oauth_state.utils as oauth_state_utils
 import jafaal.schema as auth_schema
 import jafaal.sessions.utils as auth_sessions_utils
-import modules.users.users.crud as users_crud
-import modules.users.users.schema as users_schema
 
 REFRESH_TOKEN_COOKIE_NAME = "endurain_refresh_token"
 REFRESH_TOKEN_COOKIE_PATH = "/api/v1/auth"

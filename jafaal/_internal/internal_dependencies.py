@@ -16,9 +16,11 @@ through :class:`~auth.identity_service.IdentityService`, which also asserts the
 user exists and is active). Use that instead.
 """
 
+import logging
 from dataclasses import dataclass
 from typing import Annotated
 
+import core.config as core_config
 from fastapi import (
     Depends,
     HTTPException,
@@ -33,13 +35,13 @@ from fastapi.security import (
 )
 from joserfc.errors import MissingClaimError
 
-import core.config as core_config
-import jafaal._core.logger as core_logger
 import jafaal._internal.token_manager as auth_token_manager
 import jafaal.constants as auth_constants
 import jafaal.identity_service as auth_identity_service
 import jafaal.utils as auth_utils
 from jafaal.principal import AccessTokenCred, Principal
+
+logger = logging.getLogger(__name__)
 
 # Define the OAuth2 scheme for handling bearer tokens
 oauth2_scheme = OAuth2PasswordBearer(
@@ -223,11 +225,10 @@ def _validate_access_token_impl(
     except HTTPException:
         raise
     except Exception as err:
-        core_logger.print_to_log(
+        logger.error(
             f"Unexpected error during access token validation: {type(err).__name__}",
-            "error",
-            exc=err,
-            context={"access_token": "[REDACTED]"},
+            exc_info=err,
+            extra={"access_token": "[REDACTED]"},
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -378,12 +379,12 @@ def validate_refresh_token(
             auth_token_manager.TokenType.REFRESH,
         )
     except HTTPException as http_err:
-        log_level = "debug" if "expired" in http_err.detail.lower() else "error"
-        core_logger.print_to_log(
+        is_expired = "expired" in http_err.detail.lower()
+        logger.log(
+            logging.DEBUG if is_expired else logging.ERROR,
             f"Refresh token validation failed: {http_err.detail}",
-            log_level,
-            exc=http_err,
-            context={"refresh_token": "[REDACTED]"},
+            exc_info=None if is_expired else http_err,
+            extra={"refresh_token": "[REDACTED]"},
         )
         # If a pre-upgrade token (e.g. missing the ``typ`` claim) reaches
         # this point the SPA would otherwise loop forever: every page load
@@ -401,11 +402,10 @@ def validate_refresh_token(
             ) from http_err
         raise
     except Exception as err:
-        core_logger.print_to_log(
+        logger.error(
             f"Unexpected error during refresh token validation: {type(err).__name__}",
-            "error",
-            exc=err,
-            context={"refresh_token": "[REDACTED]"},
+            exc_info=err,
+            extra={"refresh_token": "[REDACTED]"},
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -601,11 +601,10 @@ async def validate_access_token_or_api_key(
     settings = core_config.settings
     raw_key = api_key_header
     if raw_key is None and api_key_query is not None and settings.ALLOW_API_KEY_QUERY_PARAM:
-        core_logger.print_to_log(
+        logger.warning(
             "API key supplied via query string (?api_key=). "
             "This is a security risk: credentials appear in access logs "
-            "and browser history. Set X-API-Key header instead.",
-            "warning",
+            "and browser history. Set X-API-Key header instead."
         )
         raw_key = api_key_query
     if raw_key is not None:

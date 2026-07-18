@@ -81,7 +81,7 @@ from .schema import (
     TokenResponseMobile,
     TokenResponseWeb,
 )
-from .user_model import IntPKUserMixin, UUIDPKUserMixin, UserMixin
+from .user_model import IntPKUserMixin, UserMixin, UUIDPKUserMixin
 from .utils import (
     authenticate_user,
     complete_login,

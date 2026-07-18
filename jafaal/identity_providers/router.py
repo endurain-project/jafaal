@@ -3,16 +3,16 @@
 from collections.abc import Callable
 from typing import Annotated
 
+import core.database as core_database
+import modules.users.users.schema as users_schema
 from fastapi import APIRouter, Depends, Security, status
 from sqlalchemy.orm import Session
 
-import core.database as core_database
 import jafaal.dependencies as auth_dependencies
 import jafaal.identity_providers.crud as idp_crud
 import jafaal.identity_providers.dependencies as idp_dependencies
 import jafaal.identity_providers.schema as idp_schema
 import jafaal.identity_providers.utils as idp_utils
-import modules.users.users.schema as users_schema
 
 # Define the API router
 router = APIRouter()

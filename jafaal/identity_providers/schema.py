@@ -4,6 +4,7 @@ import re
 from datetime import datetime
 from typing import Any
 
+import core.cryptography as core_cryptography
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -14,8 +15,6 @@ from pydantic import (
     field_serializer,
     field_validator,
 )
-
-import core.cryptography as core_cryptography
 
 
 class IdentityProviderBase(BaseModel):

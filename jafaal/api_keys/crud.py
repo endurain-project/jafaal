@@ -1,5 +1,6 @@
 """CRUD operations for user API keys."""
 
+import logging
 import uuid
 from datetime import UTC, datetime
 
@@ -8,10 +9,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 import jafaal._core.db_errors as core_decorators
-import jafaal._core.logger as core_logger
 import jafaal.api_keys.models as api_keys_models
 import jafaal.api_keys.schema as api_keys_schema
 import jafaal.api_keys.utils as api_keys_utils
+
+logger = logging.getLogger(__name__)
 
 
 @core_decorators.handle_db_errors
@@ -144,10 +146,9 @@ def create_api_key(
     db.commit()
     db.refresh(db_api_key)
 
-    core_logger.print_to_log(
+    logger.info(
         "API key created",
-        "info",
-        context={
+        extra={
             "user_id": user_id,
             "key_prefix": key_prefix,
             "name": data.name,
@@ -219,10 +220,9 @@ def revoke_api_key(
     db_api_key.is_active = False
     db.commit()
 
-    core_logger.print_to_log(
+    logger.info(
         "API key revoked",
-        "info",
-        context={
+        extra={
             "api_key_id": api_key_id,
             "user_id": user_id,
         },
@@ -262,10 +262,9 @@ def delete_api_key(
     db.delete(db_api_key)
     db.commit()
 
-    core_logger.print_to_log(
+    logger.info(
         "API key deleted",
-        "info",
-        context={
+        extra={
             "api_key_id": api_key_id,
             "user_id": user_id,
         },

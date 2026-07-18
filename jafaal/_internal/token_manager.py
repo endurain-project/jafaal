@@ -4,11 +4,14 @@ Defines :class:`TokenType`, :class:`TokenManager` (issue/decode/validate JWTs
 and mint CSRF tokens) and a singleton accessor used as a FastAPI dependency.
 """
 
+import logging
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 
+import core.config as core_config
+import modules.users.users.schema as users_schema
 from fastapi import HTTPException, status
 from joserfc import jwt
 from joserfc.errors import (
@@ -23,10 +26,9 @@ from joserfc.errors import (
 from joserfc.jwk import OctKey
 from joserfc.jwt import Token
 
-import core.config as core_config
-import jafaal._core.logger as core_logger
 import jafaal.constants as auth_constants
-import modules.users.users.schema as users_schema
+
+logger = logging.getLogger(__name__)
 
 
 class TokenType(Enum):
@@ -105,12 +107,7 @@ class TokenManager:
             # Get the claim from the payload and return it
             return payload.claims[claim]
         except KeyError as err:
-            core_logger.print_to_log(
-                f"Claim '{claim}' not found in token: {err}",
-                "error",
-                exc=err,
-                context={"token": "[REDACTED]"},
-            )
+            logger.error(f"Claim '{claim}' not found in token: {err}", exc_info=err, extra={"token": "[REDACTED]"})
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail=f"Claim '{claim}' is missing in the token.",
@@ -120,11 +117,8 @@ class TokenManager:
             # decode_token already raised a properly-formed 401; re-raise as-is.
             raise
         except Exception as err:
-            core_logger.print_to_log(
-                f"Unexpected error retrieving claim: {type(err).__name__}",
-                "error",
-                exc=err,
-                context={"token": "[REDACTED]"},
+            logger.error(
+                f"Unexpected error retrieving claim: {type(err).__name__}", exc_info=err, extra={"token": "[REDACTED]"}
             )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -155,35 +149,22 @@ class TokenManager:
             # the unauthenticated token bypass the HMAC signature check.
             return jwt.decode(token, self._key, algorithms=[self.algorithm])
         except InvalidPayloadError as payload_err:
-            core_logger.print_to_log(
-                f"Invalid token payload: {payload_err}",
-                "error",
-                exc=payload_err,
-                context={"token": "[REDACTED]"},
-            )
+            logger.error(f"Invalid token payload: {payload_err}", exc_info=payload_err, extra={"token": "[REDACTED]"})
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid token payload",
                 headers={"WWW-Authenticate": "Bearer"},
             ) from payload_err
         except DecodeError as decode_err:
-            core_logger.print_to_log(
-                f"Error decoding token: {decode_err}",
-                "error",
-                exc=decode_err,
-                context={"token": "[REDACTED]"},
-            )
+            logger.error(f"Error decoding token: {decode_err}", exc_info=decode_err, extra={"token": "[REDACTED]"})
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Unable to decode token",
                 headers={"WWW-Authenticate": "Bearer"},
             ) from decode_err
         except Exception as err:
-            core_logger.print_to_log(
-                f"Unexpected error decoding token: {type(err).__name__}",
-                "error",
-                exc=err,
-                context={"token": "[REDACTED]"},
+            logger.error(
+                f"Unexpected error decoding token: {type(err).__name__}", exc_info=err, extra={"token": "[REDACTED]"}
             )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -244,12 +225,7 @@ class TokenManager:
             # Validate token claims (incl. expiration and typ)
             claims_requests.validate(payload.claims)
         except MissingClaimError as missing_err:
-            core_logger.print_to_log(
-                f"JWT missing claim error: {missing_err}",
-                "error",
-                exc=missing_err,
-                context={"token": "[REDACTED]"},
-            )
+            logger.error(f"JWT missing claim error: {missing_err}", exc_info=missing_err, extra={"token": "[REDACTED]"})
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Token is missing required claims.",
@@ -262,11 +238,8 @@ class TokenManager:
                 headers={"WWW-Authenticate": "Bearer"},
             ) from expired_err
         except InvalidTokenError as invalid_err:
-            core_logger.print_to_log(
-                f"JWT is not valid yet error: {invalid_err}",
-                "error",
-                exc=invalid_err,
-                context={"token": "[REDACTED]"},
+            logger.error(
+                f"JWT is not valid yet error: {invalid_err}", exc_info=invalid_err, extra={"token": "[REDACTED]"}
             )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -274,11 +247,8 @@ class TokenManager:
                 headers={"WWW-Authenticate": "Bearer"},
             ) from invalid_err
         except InsecureClaimError as insecure_err:
-            core_logger.print_to_log(
-                f"JWT insecure claim error: {insecure_err}",
-                "error",
-                exc=insecure_err,
-                context={"token": "[REDACTED]"},
+            logger.error(
+                f"JWT insecure claim error: {insecure_err}", exc_info=insecure_err, extra={"token": "[REDACTED]"}
             )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -286,11 +256,8 @@ class TokenManager:
                 headers={"WWW-Authenticate": "Bearer"},
             ) from insecure_err
         except InvalidClaimError as claims_err:
-            core_logger.print_to_log(
-                f"JWT claims validation error: {claims_err}",
-                "error",
-                exc=claims_err,
-                context={"token": "[REDACTED]"},
+            logger.error(
+                f"JWT claims validation error: {claims_err}", exc_info=claims_err, extra={"token": "[REDACTED]"}
             )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -301,11 +268,8 @@ class TokenManager:
             # decode_token already raised a properly-formed 401; re-raise as-is.
             raise
         except Exception as err:
-            core_logger.print_to_log(
-                f"Unexpected error validating token: {type(err).__name__}",
-                "error",
-                exc=err,
-                context={"token": "[REDACTED]"},
+            logger.error(
+                f"Unexpected error validating token: {type(err).__name__}", exc_info=err, extra={"token": "[REDACTED]"}
             )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -334,12 +298,12 @@ class TokenManager:
         try:
             self.validate_token_expiration(access_token, TokenType.ACCESS)
         except HTTPException as http_err:
-            log_level = "debug" if "expired" in http_err.detail.lower() else "error"
-            core_logger.print_to_log(
+            is_expired = "expired" in http_err.detail.lower()
+            logger.log(
+                logging.DEBUG if is_expired else logging.ERROR,
                 f"Access token validation failed: {http_err.detail}",
-                log_level,
-                exc=http_err,
-                context={"access_token": "[REDACTED]"},
+                exc_info=None if is_expired else http_err,
+                extra={"access_token": "[REDACTED]"},
             )
             raise
 

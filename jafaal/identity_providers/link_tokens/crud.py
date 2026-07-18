@@ -1,5 +1,6 @@
 """CRUD operations for IdP link tokens."""
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -9,9 +10,10 @@ from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
 import jafaal._core.db_errors as core_decorators
-import jafaal._core.logger as core_logger
 import jafaal.identity_providers.link_tokens.models as idp_link_token_models
 import jafaal.identity_providers.link_tokens.schema as idp_link_token_schema
+
+logger = logging.getLogger(__name__)
 
 
 @core_decorators.handle_db_errors
@@ -92,7 +94,7 @@ def mark_token_as_used(token_hash: str, db: Session) -> bool:
 
     claimed = result.rowcount == 1
     if claimed:
-        core_logger.print_to_log("IdP link token marked as used", "debug")
+        logger.debug("IdP link token marked as used")
     return claimed
 
 
@@ -117,5 +119,5 @@ def delete_expired_tokens(db: Session) -> int:
 
     deleted_count = result.rowcount
     if deleted_count > 0:
-        core_logger.print_to_log(f"Deleted {deleted_count} expired IdP link token(s)", "debug")
+        logger.debug(f"Deleted {deleted_count} expired IdP link token(s)")
     return deleted_count

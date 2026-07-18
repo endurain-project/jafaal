@@ -30,15 +30,17 @@ never use a module-level singleton.
 from __future__ import annotations
 
 import hmac
+import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Annotated, Protocol, runtime_checkable
 
+import core.database as core_database
+import modules.users.users.schema as users_schema
+import modules.users.users.utils as users_utils
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-import core.database as core_database
-import jafaal._core.logger as core_logger
 import jafaal._internal.password_hasher as auth_password_hasher
 import jafaal._internal.services.account_security_service as auth_account_security_service
 import jafaal._internal.services.identity_link_service as auth_identity_link_service
@@ -50,8 +52,6 @@ import jafaal.credentials.crud as auth_credentials_crud
 import jafaal.mfa.crud as auth_mfa_crud
 import jafaal.sessions.crud as auth_sessions_crud
 import jafaal.utils as auth_utils
-import modules.users.users.schema as users_schema
-import modules.users.users.utils as users_utils
 from jafaal.principal import (
     AccessTokenCred,
     ApiKeyCred,
@@ -60,6 +60,8 @@ from jafaal.principal import (
     Principal,
     SessionCookieCred,
 )
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     import jafaal._internal.security_stores as auth_security_stores
@@ -888,16 +890,11 @@ class DefaultIdentityService:
         try:
             auth_api_keys_crud.update_last_used(db_key.id, self._db)
         except SQLAlchemyError as err:
-            core_logger.print_to_log(
-                f"Failed to update last_used_at for API key {db_key.id}: {err}",
-                "warning",
-                exc=err,
-            )
+            logger.warning(f"Failed to update last_used_at for API key {db_key.id}: {err}", exc_info=err)
 
-        core_logger.print_to_log(
+        logger.info(
             "API key authenticated",
-            "info",
-            context={
+            extra={
                 "key_prefix": db_key.key_prefix,
                 "user_id": db_key.user_id,
                 "endpoint": request.url.path,

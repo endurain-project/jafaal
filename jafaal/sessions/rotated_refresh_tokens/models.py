@@ -3,10 +3,9 @@
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from core.database import Base
 from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-
-from core.database import Base
 
 if TYPE_CHECKING:
     from jafaal.sessions.models import UsersSessions

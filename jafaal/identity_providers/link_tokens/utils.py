@@ -1,16 +1,18 @@
 """Utility helpers for IdP link token generation and cleanup."""
 
+import logging
 import secrets
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+import core.database as core_database
 from sqlalchemy.orm import Session
 
-import core.database as core_database
-import jafaal._core.logger as core_logger
 import jafaal.identity_providers.link_tokens.crud as idp_link_token_crud
 import jafaal.identity_providers.link_tokens.schema as idp_link_token_schema
 import jafaal.token_hashing as token_hashing
+
+logger = logging.getLogger(__name__)
 
 # Token expiry duration in seconds
 TOKEN_EXPIRY_SECONDS = 60
@@ -67,10 +69,7 @@ def generate_idp_link_token(
     # Store in database
     db_token = idp_link_token_crud.create_idp_link_token(token_data, db)
 
-    core_logger.print_to_log(
-        f"Generated IdP link token for user {user_id}, idp {idp_id} (expires in {TOKEN_EXPIRY_SECONDS}s)",
-        "debug",
-    )
+    logger.debug(f"Generated IdP link token for user {user_id}, idp {idp_id} (expires in {TOKEN_EXPIRY_SECONDS}s)")
 
     return idp_link_token_schema.IdpLinkTokenResponse(token=token, expires_at=db_token.expires_at)
 
@@ -98,7 +97,4 @@ def delete_idp_link_expired_tokens_from_db() -> None:
         num_deleted = idp_link_token_crud.delete_expired_tokens(db)
 
         if num_deleted > 0:
-            core_logger.print_to_log(
-                f"Deleted {num_deleted} expired IdP link token(s) from database",
-                "info",
-            )
+            logger.info(f"Deleted {num_deleted} expired IdP link token(s) from database")

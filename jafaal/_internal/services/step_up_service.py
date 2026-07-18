@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
+import modules.users.users.utils as users_utils
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-import jafaal._core.logger as core_logger
 import jafaal._internal.security_stores as auth_security_stores
 import jafaal.credentials.crud as auth_credentials_crud
 import jafaal.mfa.service as mfa_service
-import modules.users.users.utils as users_utils
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from jafaal.identity_service import IdentityService
@@ -96,10 +98,7 @@ def verify_step_up_credentials(
 
             remaining = lockout_until - datetime.now(UTC)
             retry_after = max(0, int(remaining.total_seconds()))
-        core_logger.print_to_log(
-            f"Step-up blocked for user {user_id}: locked out",
-            "warning",
-        )
+        logger.warning(f"Step-up blocked for user {user_id}: locked out")
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Too many failed step-up attempts. Try again later.",

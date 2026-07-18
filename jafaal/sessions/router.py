@@ -1,7 +1,10 @@
 """User session API endpoints."""
 
+import logging
 from typing import Annotated
 
+import core.config as core_config
+import core.database as core_database
 from fastapi import (
     APIRouter,
     Depends,
@@ -11,12 +14,11 @@ from fastapi import (
 )
 from sqlalchemy.orm import Session
 
-import core.config as core_config
-import core.database as core_database
-import jafaal._core.logger as core_logger
 import jafaal.dependencies as auth_dependencies
 import jafaal.sessions.crud as auth_sessions_crud
 import jafaal.sessions.schema as auth_sessions_schema
+
+logger = logging.getLogger(__name__)
 
 # Define the API router
 router = APIRouter()
@@ -49,10 +51,7 @@ async def read_sessions_user(
     if core_config.settings.ENVIRONMENT != "demo":
         return auth_sessions_crud.get_user_sessions(user_id, db)
     else:
-        core_logger.print_to_log(
-            "Session retrieval in demo environment - returning empty",
-            "info",
-        )
+        logger.info("Session retrieval in demo environment - returning empty")
         return []
 
 

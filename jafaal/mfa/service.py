@@ -18,21 +18,23 @@ Module layering (where MFA logic lives):
 from __future__ import annotations
 
 import base64
+import logging
 from io import BytesIO
 from typing import TYPE_CHECKING
 
+import core.cryptography as core_cryptography
+import modules.users.users.utils as users_utils
 import pyotp
 import qrcode
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-import core.cryptography as core_cryptography
-import jafaal._core.logger as core_logger
 import jafaal.mfa.backup_codes.crud as mfa_backup_codes_crud
 import jafaal.mfa.backup_codes.utils as mfa_backup_codes_utils
 import jafaal.mfa.crud as auth_mfa_crud
 import jafaal.mfa.schema as mfa_schema
-import modules.users.users.utils as users_utils
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     import jafaal.identity_service as auth_identity_service
@@ -256,16 +258,16 @@ def verify_user_mfa(
         try:
             secret = core_cryptography.decrypt_token_fernet(mfa_row.mfa_secret)
             if not secret:
-                core_logger.print_to_log("Failed to decrypt MFA secret", "error")
+                logger.error("Failed to decrypt MFA secret")
                 return False
 
             if verify_totp(secret, normalized_code):
-                core_logger.print_to_log(f"User {user_id} verified MFA with TOTP", "debug")
+                logger.debug(f"User {user_id} verified MFA with TOTP")
                 return True
         except ValueError as err:
             # Covers binascii.Error (non-base32 secret) and any other value
             # error from the pyotp stack; treat as verification failure.
-            core_logger.print_to_log(f"Error in TOTP verification: {err}", "error", exc=err)
+            logger.error(f"Error in TOTP verification: {err}", exc_info=err)
             return False
         # Unexpected errors (I/O, crypto infrastructure failures, etc.) are
         # intentionally left unhandled so they surface to the global handler

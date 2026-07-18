@@ -1,8 +1,16 @@
 """Utility functions for password reset token operations."""
 
+import logging
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+import core.apprise as core_apprise
+import core.i18n as core_i18n
+import modules.server_settings.utils as server_settings_utils
+import modules.users.users.crud as users_crud
+import modules.users.users.schema as users_schema
+import modules.users.users.utils as users_utils
+from core.database import SessionLocal
 from fastapi import (
     HTTPException,
     status,
@@ -10,9 +18,6 @@ from fastapi import (
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-import core.apprise as core_apprise
-import core.i18n as core_i18n
-import jafaal._core.logger as core_logger
 import jafaal._internal.security_stores as auth_security_stores
 import jafaal.credentials.crud as auth_credentials_crud
 import jafaal.password_policy as auth_password_policy
@@ -20,15 +25,12 @@ import jafaal.password_reset_tokens.crud as password_reset_tokens_crud
 import jafaal.password_reset_tokens.schema as password_reset_tokens_schema
 import jafaal.sessions.crud as auth_sessions_crud
 import jafaal.token_hashing as token_hashing
-import modules.server_settings.utils as server_settings_utils
-import modules.users.users.crud as users_crud
-import modules.users.users.schema as users_schema
-import modules.users.users.utils as users_utils
-from core.database import SessionLocal
 from jafaal.identity_service import IdentityService
 from jafaal.password_reset_tokens import (
     email_messages as password_reset_tokens_email_messages,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def create_password_reset_token(user_id: int, db: Session) -> str:
@@ -214,4 +216,4 @@ def delete_invalid_tokens_from_db() -> None:
 
         # Log the number of deleted tokens
         if num_deleted > 0:
-            core_logger.print_to_log_and_console(f"Deleted {num_deleted} expired password reset tokens", "info")
+            logger.info(f"Deleted {num_deleted} expired password reset tokens")

@@ -2,6 +2,9 @@
 
 from typing import Annotated
 
+import core.apprise as core_apprise
+import core.database as core_database
+import core.rate_limit as core_rate_limit
 from fastapi import (
     APIRouter,
     Depends,
@@ -11,9 +14,6 @@ from fastapi import (
 )
 from sqlalchemy.orm import Session
 
-import core.apprise as core_apprise
-import core.database as core_database
-import core.rate_limit as core_rate_limit
 import jafaal.identity_service as auth_identity_service
 import jafaal.password_reset_tokens.schema as password_reset_tokens_schema
 import jafaal.password_reset_tokens.utils as password_reset_tokens_utils
