@@ -7,8 +7,8 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-import core.decorators as core_decorators
-import core.logger as core_logger
+import jafaal._core.db_errors as core_decorators
+import jafaal._core.logger as core_logger
 import jafaal.api_keys.models as api_keys_models
 import jafaal.api_keys.schema as api_keys_schema
 import jafaal.api_keys.utils as api_keys_utils

@@ -1,6 +1,6 @@
 """Identity provider-specific request validation dependencies."""
 
-import core.dependencies as core_dependencies
+import jafaal._core.validation as core_dependencies
 
 
 def validate_idp_id(idp_id: int) -> None:

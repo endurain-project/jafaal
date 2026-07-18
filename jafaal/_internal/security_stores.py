@@ -13,8 +13,8 @@ from datetime import UTC, datetime
 from typing import NoReturn, Protocol, runtime_checkable
 from urllib.parse import unquote
 
-import core.hashing as core_hashing
-import core.logger as core_logger
+import jafaal._core.hashing as core_hashing
+import jafaal._core.logger as core_logger
 import infra.runtime as platform_runtime
 from infra.providers import StateBackendUnavailableError, StateProvider
 

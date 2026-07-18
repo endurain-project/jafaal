@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
-import core.decorators as core_decorators
+import jafaal._core.db_errors as core_decorators
 import jafaal.identity_providers.links.models as auth_identity_links_models
 
 

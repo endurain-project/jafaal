@@ -27,7 +27,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 import core.cryptography as core_cryptography
-import core.logger as core_logger
+import jafaal._core.logger as core_logger
 import jafaal.mfa.backup_codes.crud as mfa_backup_codes_crud
 import jafaal.mfa.backup_codes.utils as mfa_backup_codes_utils
 import jafaal.mfa.crud as auth_mfa_crud

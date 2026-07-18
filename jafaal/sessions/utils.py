@@ -13,7 +13,7 @@ from fastapi import (
 from sqlalchemy.orm import Session
 from user_agents import parse
 
-import core.logger as core_logger
+import jafaal._core.logger as core_logger
 import core.network as core_network
 import jafaal._internal.password_hasher as auth_password_hasher
 import jafaal.constants as auth_constants

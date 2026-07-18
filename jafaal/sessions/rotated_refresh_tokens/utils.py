@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy.orm import Session
 
 import core.cryptography as core_cryptography
-import core.logger as core_logger
+import jafaal._core.logger as core_logger
 import jafaal.sessions.crud as auth_sessions_crud
 import jafaal.sessions.rotated_refresh_tokens.crud as rotated_token_crud
 import jafaal.sessions.rotated_refresh_tokens.schema as rotated_token_schema

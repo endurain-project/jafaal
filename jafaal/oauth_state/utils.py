@@ -2,7 +2,7 @@
 
 import secrets
 
-import core.logger as core_logger
+import jafaal._core.logger as core_logger
 import jafaal.oauth_state.crud as oauth_state_crud
 from core.database import SessionLocal
 

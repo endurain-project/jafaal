@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 import core.config as core_config
 import core.database as core_database
-import core.logger as core_logger
+import jafaal._core.logger as core_logger
 import jafaal.dependencies as auth_dependencies
 import jafaal.sessions.crud as auth_sessions_crud
 import jafaal.sessions.schema as auth_sessions_schema

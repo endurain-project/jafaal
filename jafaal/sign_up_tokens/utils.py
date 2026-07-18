@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 import core.apprise as core_apprise
 import core.i18n as core_i18n
-import core.logger as core_logger
+import jafaal._core.logger as core_logger
 import jafaal.sign_up_tokens.crud as sign_up_tokens_crud
 import jafaal.sign_up_tokens.email_messages as sign_up_tokens_email_messages
 import jafaal.sign_up_tokens.schema as sign_up_tokens_schema

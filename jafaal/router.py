@@ -15,7 +15,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 import core.database as core_database
-import core.logger as core_logger
+import jafaal._core.logger as core_logger
 import core.rate_limit as core_rate_limit
 import jafaal._internal.internal_dependencies as auth_internal_dependencies
 import jafaal._internal.password_hasher as auth_password_hasher

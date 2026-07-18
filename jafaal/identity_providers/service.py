@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 import core.config as core_config
 import core.cryptography as core_cryptography
-import core.logger as core_logger
+import jafaal._core.logger as core_logger
 import core.network as core_network
 import jafaal._internal.password_hasher as auth_password_hasher
 import jafaal._internal.token_manager as auth_token_manager

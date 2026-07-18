@@ -2,7 +2,7 @@
 
 from sqlalchemy.orm import Session
 
-import core.logger as core_logger
+import jafaal._core.logger as core_logger
 import jafaal.identity_providers.crud as idp_crud
 import jafaal.identity_providers.links.crud as auth_identity_links_crud
 import jafaal.identity_providers.links.models as auth_identity_links_models

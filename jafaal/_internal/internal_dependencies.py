@@ -34,7 +34,7 @@ from fastapi.security import (
 from joserfc.errors import MissingClaimError
 
 import core.config as core_config
-import core.logger as core_logger
+import jafaal._core.logger as core_logger
 import jafaal._internal.token_manager as auth_token_manager
 import jafaal.constants as auth_constants
 import jafaal.identity_service as auth_identity_service

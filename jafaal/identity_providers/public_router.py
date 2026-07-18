@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 import core.config as core_config
 import core.database as core_database
-import core.logger as core_logger
+import jafaal._core.logger as core_logger
 import core.rate_limit as core_rate_limit
 import jafaal._internal.password_hasher as auth_password_hasher
 import jafaal._internal.token_manager as auth_token_manager

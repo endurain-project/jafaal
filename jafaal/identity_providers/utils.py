@@ -10,7 +10,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 import core.config as core_config
-import core.logger as core_logger
+import jafaal._core.logger as core_logger
 import jafaal.identity_providers.links.crud as auth_identity_links_crud
 import jafaal.identity_providers.schema as idp_schema
 import jafaal.identity_providers.service as idp_service

@@ -6,7 +6,7 @@ from typing import Any
 from sqlalchemy import CursorResult, delete, select
 from sqlalchemy.orm import Session
 
-import core.decorators as core_decorators
+import jafaal._core.db_errors as core_decorators
 import jafaal.sessions.rotated_refresh_tokens.models as rotated_token_models
 import jafaal.sessions.rotated_refresh_tokens.schema as rotated_token_schema
 

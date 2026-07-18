@@ -8,7 +8,7 @@ boundary (``IdentityService``) rather than directly by non-auth modules.
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-import core.decorators as core_decorators
+import jafaal._core.db_errors as core_decorators
 import jafaal.credentials.models as auth_credentials_models
 
 

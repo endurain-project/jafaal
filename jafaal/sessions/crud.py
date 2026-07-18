@@ -8,8 +8,8 @@ from sqlalchemy import CursorResult, delete, select
 from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
-import core.decorators as core_decorators
-import core.logger as core_logger
+import jafaal._core.db_errors as core_decorators
+import jafaal._core.logger as core_logger
 import jafaal.oauth_state.crud as oauth_state_crud
 import jafaal.oauth_state.models as oauth_state_models
 import jafaal.sessions.models as auth_sessions_models

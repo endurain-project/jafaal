@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-import core.logger as core_logger
+import jafaal._core.logger as core_logger
 import jafaal._internal.security_stores as auth_security_stores
 import jafaal._internal.services.step_up_service as step_up_service
 import jafaal.mfa.backup_codes.crud as mfa_backup_codes_crud

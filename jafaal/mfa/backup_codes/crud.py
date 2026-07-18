@@ -9,8 +9,8 @@ from fastapi import HTTPException, status
 from sqlalchemy import CursorResult, delete, or_, select
 from sqlalchemy.orm import Session
 
-import core.decorators as core_decorators
-import core.logger as core_logger
+import jafaal._core.db_errors as core_decorators
+import jafaal._core.logger as core_logger
 import jafaal.mfa.backup_codes.models as mfa_backup_codes_models
 import jafaal.mfa.backup_codes.utils as mfa_backup_codes_utils
 from jafaal._internal.password_hasher import SupportsHashPassword

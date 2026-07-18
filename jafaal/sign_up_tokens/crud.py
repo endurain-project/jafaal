@@ -7,7 +7,7 @@ from sqlalchemy import CursorResult, select
 from sqlalchemy import delete as sa_delete
 from sqlalchemy.orm import Session
 
-import core.decorators as core_decorators
+import jafaal._core.db_errors as core_decorators
 import jafaal.sign_up_tokens.models as sign_up_tokens_models
 import jafaal.sign_up_tokens.schema as sign_up_tokens_schema
 

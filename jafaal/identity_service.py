@@ -38,7 +38,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 import core.database as core_database
-import core.logger as core_logger
+import jafaal._core.logger as core_logger
 import jafaal._internal.password_hasher as auth_password_hasher
 import jafaal._internal.services.account_security_service as auth_account_security_service
 import jafaal._internal.services.identity_link_service as auth_identity_link_service

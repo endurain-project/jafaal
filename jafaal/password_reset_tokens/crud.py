@@ -8,7 +8,7 @@ from sqlalchemy import delete as sa_delete
 from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
-import core.decorators as core_decorators
+import jafaal._core.db_errors as core_decorators
 import jafaal.password_reset_tokens.models as password_reset_tokens_models
 import jafaal.password_reset_tokens.schema as password_reset_tokens_schema
 

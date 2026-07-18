@@ -7,7 +7,7 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 import core.database as core_database
-import core.logger as core_logger
+import jafaal._core.logger as core_logger
 import jafaal.identity_providers.link_tokens.crud as idp_link_token_crud
 import jafaal.identity_providers.link_tokens.schema as idp_link_token_schema
 import jafaal.token_hashing as token_hashing

@@ -3,7 +3,7 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-import core.decorators as core_decorators
+import jafaal._core.db_errors as core_decorators
 import jafaal.mfa.models as auth_mfa_models
 
 

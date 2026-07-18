@@ -20,7 +20,7 @@ equality lookups.
 import hashlib
 import hmac
 
-import core.hashing as core_hashing
+import jafaal._core.hashing as core_hashing
 import jafaal.constants as auth_constants
 
 

@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 import core.apprise as core_apprise
 import core.i18n as core_i18n
-import core.logger as core_logger
+import jafaal._core.logger as core_logger
 import jafaal._internal.security_stores as auth_security_stores
 import jafaal.credentials.crud as auth_credentials_crud
 import jafaal.password_policy as auth_password_policy

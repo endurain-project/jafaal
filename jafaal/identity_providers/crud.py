@@ -5,8 +5,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 import core.cryptography as core_cryptography
-import core.decorators as core_decorators
-import core.logger as core_logger
+import jafaal._core.db_errors as core_decorators
+import jafaal._core.logger as core_logger
 import jafaal.identity_providers.links.crud as auth_identity_links_crud
 import jafaal.identity_providers.models as idp_models
 import jafaal.identity_providers.schema as idp_schema

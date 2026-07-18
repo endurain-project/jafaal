@@ -24,7 +24,7 @@ from joserfc.jwk import OctKey
 from joserfc.jwt import Token
 
 import core.config as core_config
-import core.logger as core_logger
+import jafaal._core.logger as core_logger
 import jafaal.constants as auth_constants
 import modules.users.users.schema as users_schema
 

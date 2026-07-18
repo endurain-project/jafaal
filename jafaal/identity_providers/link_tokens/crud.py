@@ -8,8 +8,8 @@ from sqlalchemy import delete as sa_delete
 from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
-import core.decorators as core_decorators
-import core.logger as core_logger
+import jafaal._core.db_errors as core_decorators
+import jafaal._core.logger as core_logger
 import jafaal.identity_providers.link_tokens.models as idp_link_token_models
 import jafaal.identity_providers.link_tokens.schema as idp_link_token_schema
 
