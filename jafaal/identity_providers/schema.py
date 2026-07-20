@@ -4,7 +4,6 @@ import re
 from datetime import datetime
 from typing import Any
 
-import core.cryptography as core_cryptography
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -15,6 +14,8 @@ from pydantic import (
     field_serializer,
     field_validator,
 )
+
+from jafaal._core import crypto
 
 
 class IdentityProviderBase(BaseModel):
@@ -166,7 +167,7 @@ class IdentityProvider(IdentityProviderBase):
     def serialize_client_id(self, value: str | None) -> str | None:
         """Decrypt client_id for serialization."""
         if value and value.startswith("gAAAAAB"):
-            return core_cryptography.decrypt_token_fernet(value)
+            return crypto.decrypt_token_fernet(value)
         return value
 
 

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 import jafaal.api_keys.models as api_keys_models
 import jafaal.api_keys.schema as api_keys_schema
 import jafaal.api_keys.utils as api_keys_utils
+import jafaal.settings as jafaal_settings
 from jafaal._core import db_errors
 
 logger = logging.getLogger(__name__)
@@ -124,9 +125,10 @@ def create_api_key(
         HTTPException: If a database error occurs.
     """
     raw_key = api_keys_utils.generate_api_key()
-    # Prefix is "endurain_" (9 chars) + first 8 chars of
-    # the random part
-    key_prefix = raw_key[9:17]
+    # Key format is "<prefix>_<random>"; the stored key_prefix is the first 8
+    # chars of the random part (after the configured prefix + underscore).
+    prefix_len = len(jafaal_settings.get_settings().api_key_prefix) + 1
+    key_prefix = raw_key[prefix_len : prefix_len + 8]
     key_hash = api_keys_utils.hash_api_key(raw_key)
     scopes_json = api_keys_utils.scopes_to_json(data.scopes)
 

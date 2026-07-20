@@ -8,7 +8,6 @@ both password and PKCE login flows.
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-import core.config as core_config
 import modules.users.users.crud as users_crud
 import modules.users.users.schema as users_schema
 from fastapi import (
@@ -22,21 +21,18 @@ from sqlalchemy.orm import Session
 
 import jafaal._internal.password_hasher as jafaal_password_hasher
 import jafaal._internal.token_manager as jafaal_token_manager
-import jafaal.constants as jafaal_constants
 import jafaal.credentials.crud as jafaal_credentials_crud
 import jafaal.identity_providers.utils as idp_utils
 import jafaal.oauth_state.crud as oauth_state_crud
 import jafaal.oauth_state.utils as oauth_state_utils
 import jafaal.schema as jafaal_schema
 import jafaal.sessions.utils as jafaal_sessions_utils
+import jafaal.settings as jafaal_settings
 
-REFRESH_TOKEN_COOKIE_NAME = "endurain_refresh_token"
-REFRESH_TOKEN_COOKIE_PATH = "/api/v1/auth"
+# Legacy root-path ("/") refresh cookie, kept only so that old, root-scoped
+# cookies are cleared during migration; the canonical cookie name and path come
+# from AuthSettings.
 LEGACY_REFRESH_TOKEN_COOKIE_PATHS = ("/",)
-REFRESH_TOKEN_COOKIE_CLEAR_PATHS = (
-    *LEGACY_REFRESH_TOKEN_COOKIE_PATHS,
-    REFRESH_TOKEN_COOKIE_PATH,
-)
 
 
 class ClearRefreshTokenCookieHTTPException(HTTPException):
@@ -198,7 +194,7 @@ def _is_secure_cookie_environment() -> bool:
     a non-Secure refresh cookie when that env var was missing or
     mis-set in production.
     """
-    return core_config.settings.ENVIRONMENT in {"production", "demo"}
+    return jafaal_settings.get_settings().environment in {"production", "demo"}
 
 
 def set_refresh_token_cookie(
@@ -212,13 +208,14 @@ def set_refresh_token_cookie(
     ``HttpOnly``, ``SameSite=Strict``, ``Path``, expiry, and the
     ``Secure`` flag stay in lockstep.
     """
+    settings = jafaal_settings.get_settings()
     clear_refresh_token_cookies(response)
     response.set_cookie(
-        key=REFRESH_TOKEN_COOKIE_NAME,
+        key=settings.refresh_cookie_name,
         value=refresh_token,
-        expires=datetime.now(UTC) + timedelta(days=jafaal_constants.JWT_REFRESH_TOKEN_EXPIRE_DAYS),
+        expires=datetime.now(UTC) + timedelta(days=settings.refresh_token_expire_days),
         httponly=True,
-        path=REFRESH_TOKEN_COOKIE_PATH,
+        path=settings.refresh_cookie_path,
         secure=_is_secure_cookie_environment(),
         samesite="strict",
     )
@@ -236,9 +233,11 @@ def clear_refresh_token_cookies(response: Response) -> None:
     Raises:
         None.
     """
-    for path in REFRESH_TOKEN_COOKIE_CLEAR_PATHS:
+    settings = jafaal_settings.get_settings()
+    clear_paths = (*LEGACY_REFRESH_TOKEN_COOKIE_PATHS, settings.refresh_cookie_path)
+    for path in clear_paths:
         response.delete_cookie(
-            key=REFRESH_TOKEN_COOKIE_NAME,
+            key=settings.refresh_cookie_name,
             path=path,
             secure=_is_secure_cookie_environment(),
             httponly=True,

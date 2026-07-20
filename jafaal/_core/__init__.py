@@ -11,6 +11,8 @@ configure handlers on the ``jafaal`` logger tree to capture output.
 
 Modules:
     hashing: SHA-256 hex digest helper.
+    crypto: Fernet token encryption (key from ``AuthSettings``).
+    network: proxy-aware client IP + SSRF guard (config from ``AuthSettings``).
     validation: FastAPI id validation helper.
     db_errors: ``handle_db_errors`` decorator for CRUD functions.
 """

@@ -3,7 +3,6 @@
 import logging
 from typing import Annotated
 
-import core.config as core_config
 import core.database as core_database
 from fastapi import (
     APIRouter,
@@ -17,6 +16,7 @@ from sqlalchemy.orm import Session
 import jafaal.dependencies as jafaal_dependencies
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.schema as jafaal_sessions_schema
+import jafaal.settings as jafaal_settings
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ async def read_sessions_user(
     Returns:
         List of session objects for the specified user.
     """
-    if core_config.settings.ENVIRONMENT != "demo":
+    if jafaal_settings.get_settings().environment != "demo":
         return jafaal_sessions_crud.get_user_sessions(user_id, db)
     else:
         logger.info("Session retrieval in demo environment - returning empty")

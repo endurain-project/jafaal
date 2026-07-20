@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 
-import core.network as core_network
 import modules.users.users.schema as users_schema
 from core.database import SessionLocal
 from fastapi import (
@@ -18,11 +17,12 @@ from sqlalchemy.orm import Session
 from user_agents import parse
 
 import jafaal._internal.password_hasher as jafaal_password_hasher
-import jafaal.constants as jafaal_constants
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.models as jafaal_sessions_models
 import jafaal.sessions.schema as jafaal_sessions_schema
+import jafaal.settings as jafaal_settings
 import jafaal.token_hashing as token_hashing
+from jafaal._core import network
 
 logger = logging.getLogger(__name__)
 
@@ -115,13 +115,14 @@ def validate_session_timeout(
         HTTPException: 401 if session has timed out.
     """
     # Skip validation if timeouts are disabled
-    if not jafaal_constants.SESSION_IDLE_TIMEOUT_ENABLED:
+    settings = jafaal_settings.get_settings()
+    if not settings.session_idle_timeout_enabled:
         return
 
     now = datetime.now(UTC)
 
     # Check idle timeout
-    idle_limit = session.last_activity_at + timedelta(hours=jafaal_constants.SESSION_IDLE_TIMEOUT_HOURS)
+    idle_limit = session.last_activity_at + timedelta(hours=settings.session_idle_timeout_hours)
     if now > idle_limit:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -130,7 +131,7 @@ def validate_session_timeout(
         )
 
     # Check absolute timeout
-    absolute_limit = session.created_at + timedelta(hours=jafaal_constants.SESSION_ABSOLUTE_TIMEOUT_HOURS)
+    absolute_limit = session.created_at + timedelta(hours=settings.session_absolute_timeout_hours)
     if now > absolute_limit:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -172,7 +173,7 @@ def create_session_object(
         id=session_id,
         user_id=user.id,
         refresh_token=hashed_refresh_token,
-        ip_address=core_network.get_ip_address(request),
+        ip_address=network.get_ip_address(request),
         device_type=device_info.device_type.value,
         operating_system=device_info.operating_system,
         operating_system_version=device_info.operating_system_version,
@@ -220,7 +221,7 @@ def edit_session_object(
         id=session.id,
         user_id=session.user_id,
         refresh_token=hashed_refresh_token,
-        ip_address=core_network.get_ip_address(request),
+        ip_address=network.get_ip_address(request),
         device_type=device_info.device_type.value,
         operating_system=device_info.operating_system,
         operating_system_version=device_info.operating_system_version,
@@ -265,7 +266,7 @@ def create_session(
         HTTPException: If database error occurs.
     """
     # Calculate the refresh token expiration date
-    exp = datetime.now(UTC) + timedelta(days=jafaal_constants.JWT_REFRESH_TOKEN_EXPIRE_DAYS)
+    exp = datetime.now(UTC) + timedelta(days=jafaal_settings.get_settings().refresh_token_expire_days)
 
     # Compute HMAC-SHA256 of the CSRF token if provided
     csrf_hash = _hash_csrf_token(csrf_token) if csrf_token else None
@@ -308,7 +309,7 @@ def edit_session(
         HTTPException: If database error occurs.
     """
     # Calculate the refresh token expiration date
-    exp = datetime.now(UTC) + timedelta(days=jafaal_constants.JWT_REFRESH_TOKEN_EXPIRE_DAYS)
+    exp = datetime.now(UTC) + timedelta(days=jafaal_settings.get_settings().refresh_token_expire_days)
 
     # Compute HMAC-SHA256 of the new CSRF token if provided
     csrf_hash = _hash_csrf_token(new_csrf_token) if new_csrf_token else None
@@ -396,12 +397,13 @@ def cleanup_idle_sessions() -> None:
     Raises:
         HTTPException: If database error occurs.
     """
-    if not jafaal_constants.SESSION_IDLE_TIMEOUT_ENABLED:
+    settings = jafaal_settings.get_settings()
+    if not settings.session_idle_timeout_enabled:
         return
 
     with SessionLocal() as db:
         try:
-            cutoff_time = datetime.now(UTC) - timedelta(hours=jafaal_constants.SESSION_IDLE_TIMEOUT_HOURS)
+            cutoff_time = datetime.now(UTC) - timedelta(hours=settings.session_idle_timeout_hours)
 
             # Delete sessions with last_activity_at older than cutoff
             deleted_count = jafaal_sessions_crud.delete_idle_sessions(cutoff_time, db)

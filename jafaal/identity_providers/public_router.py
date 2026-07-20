@@ -6,7 +6,6 @@ from typing import Annotated
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
-import core.config as core_config
 import core.database as core_database
 import core.rate_limit as core_rate_limit
 import modules.users.users.schema as users_schema
@@ -25,6 +24,7 @@ import jafaal.oauth_state.crud as oauth_state_crud
 import jafaal.oauth_state.utils as oauth_state_utils
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.utils as jafaal_sessions_utils
+import jafaal.settings as jafaal_settings
 import jafaal.utils as jafaal_utils
 
 logger = logging.getLogger(__name__)
@@ -65,7 +65,7 @@ def _build_link_result_url(redirect_path: str | None, idp_name: str | None, *, s
     if redirect_path and idp_utils.is_custom_scheme_redirect(redirect_path):
         return _append_query_params(redirect_path, params)
     base = redirect_path or "/settings/security"
-    return f"{core_config.settings.ENDURAIN_HOST}{_append_query_params(base, params)}"
+    return f"{jafaal_settings.get_settings().base_url}{_append_query_params(base, params)}"
 
 
 @router.get(
@@ -367,7 +367,7 @@ async def handle_callback(
         )
 
         # Redirect to frontend with session_id for token exchange
-        frontend_url = core_config.settings.ENDURAIN_HOST
+        frontend_url = jafaal_settings.get_settings().base_url
         redirect_url = f"{frontend_url}/login?sso=success&session_id={session_id}"
 
         redirect_path = result.get("redirect_path")
@@ -398,7 +398,7 @@ async def handle_callback(
         if oauth_state is not None and oauth_state.user_id is not None:
             error_url = _build_link_result_url(oauth_state.redirect_path, None, success=False)
         else:
-            error_url = f"{core_config.settings.ENDURAIN_HOST}/login?error=sso_failed"
+            error_url = f"{jafaal_settings.get_settings().base_url}/login?error=sso_failed"
 
         return RedirectResponse(url=error_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
 

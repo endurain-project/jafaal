@@ -17,11 +17,15 @@ from urllib.parse import unquote
 import infra.runtime as platform_runtime
 from infra.providers import StateBackendUnavailableError, StateProvider
 
+import jafaal.settings as jafaal_settings
 from jafaal._core import hashing
 
 logger = logging.getLogger(__name__)
 
-_AUTH_KEY_PREFIX = "endurain:auth"
+
+def _key_prefix() -> str:
+    """Return the security-store key namespace prefix."""
+    return jafaal_settings.get_settings().store_key_prefix
 
 
 class AuthSecurityStoreUnavailableError(RuntimeError):
@@ -251,10 +255,10 @@ class _ProgressiveLockout:
         return hashing.sha256_hex(self._normalize(key))
 
     def _counter_key(self, key: str) -> str:
-        return f"{_AUTH_KEY_PREFIX}:{self._name}:attempts:{self._digest(key)}"
+        return f"{_key_prefix()}:{self._name}:attempts:{self._digest(key)}"
 
     def _gate_key(self, key: str) -> str:
-        return f"{_AUTH_KEY_PREFIX}:{self._name}:lockout:{self._digest(key)}"
+        return f"{_key_prefix()}:{self._name}:lockout:{self._digest(key)}"
 
     def _duration_label(self, failed_count: int) -> str:
         for threshold, _lockout_seconds, label in reversed(self._thresholds):
@@ -308,7 +312,7 @@ class _ProgressiveLockout:
 
     def clear_all(self) -> None:
         try:
-            self._get_state().delete_prefix(f"{_AUTH_KEY_PREFIX}:{self._name}:")
+            self._get_state().delete_prefix(f"{_key_prefix()}:{self._name}:")
         except StateBackendUnavailableError as err:
             _raise_store_unavailable("clear lockout store", err)
 
@@ -391,7 +395,7 @@ class PendingMFALogin:
         return self._state_override if self._state_override is not None else platform_runtime.get_state()
 
     def _pending_key(self, username: str) -> str:
-        return f"{_AUTH_KEY_PREFIX}:mfa:pending:{_username_digest(username)}"
+        return f"{_key_prefix()}:mfa:pending:{_username_digest(username)}"
 
     def add_pending_login(self, username: str, user_id: int) -> None:
         """Add a pending MFA login entry for a user."""
@@ -448,7 +452,7 @@ class PendingMFALogin:
         removed = 0
         state = self._get_state()
         try:
-            for pending_key in list(state.iter_keys(f"{_AUTH_KEY_PREFIX}:mfa:pending:")):
+            for pending_key in list(state.iter_keys(f"{_key_prefix()}:mfa:pending:")):
                 if state.get(pending_key) == target_value:
                     state.delete(pending_key)
                     removed += 1
@@ -483,7 +487,7 @@ class PendingMFALogin:
     def clear_all(self) -> None:
         """Clear all pending logins and MFA failure records."""
         try:
-            self._get_state().delete_prefix(f"{_AUTH_KEY_PREFIX}:mfa:pending:")
+            self._get_state().delete_prefix(f"{_key_prefix()}:mfa:pending:")
         except StateBackendUnavailableError as err:
             _raise_store_unavailable("clear pending MFA logins", err)
         self._lockout.clear_all()

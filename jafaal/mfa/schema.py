@@ -155,7 +155,7 @@ class MFASetupResponse(BaseModel):
         description="Base64-encoded QR code image",
     )
     app_name: StrictStr = Field(
-        default="Endurain",
+        default="Jafaal",
         description="Application name for MFA",
     )
 

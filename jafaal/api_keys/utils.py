@@ -3,6 +3,7 @@
 import json
 import secrets
 
+import jafaal.settings as jafaal_settings
 import jafaal.token_hashing as token_hashing
 
 SUPPORTED_API_KEY_SCOPES = frozenset({"activities:upload"})
@@ -12,15 +13,15 @@ def generate_api_key() -> str:
     """
     Generate a new raw API key.
 
-    Keys have the format ``endurain_<token>`` where
-    ``<token>`` is 32 cryptographically random bytes
-    encoded as base64url (43 characters). Total entropy
-    is 256 bits.
+    Keys have the format ``<prefix>_<token>`` where ``<prefix>`` is
+    ``AuthSettings.api_key_prefix`` and ``<token>`` is 32 cryptographically
+    random bytes encoded as base64url (43 characters). Total entropy is
+    256 bits.
 
     Returns:
         A new raw API key string.
     """
-    return f"endurain_{secrets.token_urlsafe(32)}"
+    return f"{jafaal_settings.get_settings().api_key_prefix}_{secrets.token_urlsafe(32)}"
 
 
 def hash_api_key(raw_key: str) -> str:

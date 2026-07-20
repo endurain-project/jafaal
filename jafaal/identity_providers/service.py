@@ -8,9 +8,6 @@ from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
 
-import core.config as core_config
-import core.cryptography as core_cryptography
-import core.network as core_network
 import httpx
 import modules.server_settings.schema as server_settings_schema
 import modules.server_settings.utils as server_settings_utils
@@ -40,6 +37,8 @@ import jafaal.identity_providers.models as idp_models
 import jafaal.identity_service as jafaal_identity_service
 import jafaal.oauth_state.crud as oauth_state_crud
 import jafaal.oauth_state.models as oauth_state_models
+import jafaal.settings as jafaal_settings
+from jafaal._core import crypto, network
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +143,7 @@ class IdentityProviderService:
                 limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
                 follow_redirects=True,
                 headers={
-                    "User-Agent": f"Endurain/{core_config.API_VERSION} (OIDC Client)",
+                    "User-Agent": jafaal_settings.get_settings().user_agent,
                     "Accept": "application/json",
                 },
             )
@@ -203,7 +202,7 @@ class IdentityProviderService:
             # attacker pivot via signed token replay.
             # Self-hosted IdPs on private networks can
             # be opted in via SSRF_ALLOWED_HOSTS.
-            core_network.reject_private_url(jwks_uri, purpose="oidc_jwks")
+            network.reject_private_url(jwks_uri, purpose="oidc_jwks")
             client = await self._get_http_client()
             logger.debug(f"Fetching JWKS from {jwks_uri}")
 
@@ -495,7 +494,7 @@ class IdentityProviderService:
         try:
             # SSRF guard for the admin-supplied issuer
             # URL: see jwks_uri rationale above.
-            core_network.reject_private_url(discovery_url, purpose="oidc_discovery")
+            network.reject_private_url(discovery_url, purpose="oidc_discovery")
             # Fetch the configuration
             client = await self._get_http_client()
             response = await client.get(discovery_url)
@@ -550,7 +549,7 @@ class IdentityProviderService:
         Returns:
             str: The complete redirect URI for the specified identity provider.
         """
-        base_url = core_config.settings.ENDURAIN_HOST
+        base_url = jafaal_settings.get_settings().base_url
         return f"{base_url}/api/v1/public/idp/callback/{idp_slug}"
 
     def _decrypt_client_id(self, idp: idp_models.IdentityProvider) -> str:
@@ -571,7 +570,7 @@ class IdentityProviderService:
             HTTPException: If decryption fails or returns an empty value, an HTTP 500 error is raised.
         """
         try:
-            client_id = core_cryptography.decrypt_token_fernet(idp.client_id)
+            client_id = crypto.decrypt_token_fernet(idp.client_id)
             if not client_id:
                 raise ValueError("Decryption returned empty value")
             return client_id
@@ -603,7 +602,7 @@ class IdentityProviderService:
             - Raises HTTPException to prevent OAuth flows with invalid credentials
         """
         try:
-            client_secret = core_cryptography.decrypt_token_fernet(idp.client_secret)
+            client_secret = crypto.decrypt_token_fernet(idp.client_secret)
             if not client_secret:
                 raise ValueError("Decryption returned empty value")
             return client_secret
@@ -663,7 +662,7 @@ class IdentityProviderService:
         # re-validated), so a trusted issuer could still advertise an
         # internal target. Refuse private/internal addresses unless
         # explicitly opted in via SSRF_ALLOWED_HOSTS.
-        core_network.reject_private_url(token_endpoint, purpose="oidc_token")
+        network.reject_private_url(token_endpoint, purpose="oidc_token")
 
         return token_endpoint
 
@@ -1185,7 +1184,7 @@ class IdentityProviderService:
             # explicitly opted in via SSRF_ALLOWED_HOSTS. Raised outside the
             # try/except below so the guard's 4xx is not swallowed as a
             # userinfo fetch failure.
-            core_network.reject_private_url(userinfo_endpoint, purpose="oidc_userinfo")
+            network.reject_private_url(userinfo_endpoint, purpose="oidc_userinfo")
             try:
                 # Use the access token to fetch userinfo
                 access_token = token_response.get("access_token")
@@ -1316,7 +1315,7 @@ class IdentityProviderService:
 
         try:
             # Encrypt the refresh token using Fernet
-            encrypted_refresh = core_cryptography.encrypt_token_fernet(refresh_token)
+            encrypted_refresh = crypto.encrypt_token_fernet(refresh_token)
 
             if not encrypted_refresh:
                 logger.warning(
@@ -1723,7 +1722,7 @@ class IdentityProviderService:
 
         # Decrypt the refresh token
         try:
-            refresh_token = core_cryptography.decrypt_token_fernet(encrypted_refresh_token)
+            refresh_token = crypto.decrypt_token_fernet(encrypted_refresh_token)
             if not refresh_token:
                 raise ValueError("Decryption returned empty value")
         except Exception as err:
@@ -1867,7 +1866,7 @@ class IdentityProviderService:
 
             # Decrypt the refresh token
             try:
-                refresh_token = core_cryptography.decrypt_token_fernet(encrypted_refresh_token)
+                refresh_token = crypto.decrypt_token_fernet(encrypted_refresh_token)
                 if not refresh_token:
                     logger.warning(f"Failed to decrypt refresh token for revocation (user {user_id}, idp {idp_id})")
                     return False

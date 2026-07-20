@@ -2,7 +2,6 @@
 
 import logging
 
-import core.cryptography as core_cryptography
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -10,7 +9,7 @@ from sqlalchemy.orm import Session
 import jafaal.identity_providers.links.crud as jafaal_identity_links_crud
 import jafaal.identity_providers.models as idp_models
 import jafaal.identity_providers.schema as idp_schema
-from jafaal._core import db_errors
+from jafaal._core import crypto, db_errors
 
 logger = logging.getLogger(__name__)
 
@@ -151,8 +150,8 @@ def create_identity_provider(idp_data: idp_schema.IdentityProviderCreate, db: Se
         )
 
     # Encrypt sensitive fields
-    encrypted_client_id = core_cryptography.encrypt_token_fernet(idp_data.client_id)
-    encrypted_client_secret = core_cryptography.encrypt_token_fernet(idp_data.client_secret)
+    encrypted_client_id = crypto.encrypt_token_fernet(idp_data.client_id)
+    encrypted_client_secret = crypto.encrypt_token_fernet(idp_data.client_secret)
 
     db_idp = idp_models.IdentityProvider(
         name=idp_data.name,
@@ -228,9 +227,9 @@ def update_identity_provider(
 
     # Encrypt sensitive fields if present
     if update_data.get("client_id"):
-        update_data["client_id"] = core_cryptography.encrypt_token_fernet(update_data["client_id"])
+        update_data["client_id"] = crypto.encrypt_token_fernet(update_data["client_id"])
     if update_data.get("client_secret"):
-        update_data["client_secret"] = core_cryptography.encrypt_token_fernet(update_data["client_secret"])
+        update_data["client_secret"] = crypto.encrypt_token_fernet(update_data["client_secret"])
 
     for field, value in update_data.items():
         setattr(db_idp, field, value)

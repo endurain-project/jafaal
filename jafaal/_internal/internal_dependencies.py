@@ -20,7 +20,6 @@ import logging
 from dataclasses import dataclass
 from typing import Annotated
 
-import core.config as core_config
 from fastapi import (
     Depends,
     HTTPException,
@@ -29,7 +28,6 @@ from fastapi import (
     status,
 )
 from fastapi.security import (
-    APIKeyCookie,
     APIKeyHeader,
     OAuth2PasswordBearer,
 )
@@ -38,6 +36,7 @@ from joserfc.errors import MissingClaimError
 import jafaal._internal.token_manager as jafaal_token_manager
 import jafaal.constants as jafaal_constants
 import jafaal.identity_service as jafaal_identity_service
+import jafaal.settings as jafaal_settings
 import jafaal.utils as jafaal_utils
 from jafaal.principal import AccessTokenCred, Principal
 
@@ -80,12 +79,6 @@ class AuthContext:
 
 # Define the API key header for CSRF token
 header_csrf_token_scheme = APIKeyHeader(name="X-CSRF-Token", auto_error=False)
-
-# Define the API key cookie for the refresh token
-cookie_refresh_token_scheme = APIKeyCookie(
-    name="endurain_refresh_token",
-    auto_error=False,
-)
 
 
 def _resolve_and_cache_principal(
@@ -331,16 +324,17 @@ def get_sid_from_access_token(
 
 ## REFRESH TOKEN VALIDATION
 def get_refresh_token(
+    request: Request,
     non_cookie_refresh_token: Annotated[str | None, Depends(oauth2_scheme)],
-    cookie_refresh_token: str | None = Depends(cookie_refresh_token_scheme),
     client_type: str = Depends(header_client_type_scheme),
 ) -> str | None:
     """
-    Retrieves the refresh token from either the Authorization header or a cookie, depending on the client type.
+    Retrieves the refresh token from either the Authorization header or the
+    refresh-token cookie, depending on the client type.
 
     Args:
+        request: The incoming request, used to read the refresh-token cookie.
         non_cookie_refresh_token (str | None): The refresh token provided via the Authorization header (if present).
-        cookie_refresh_token (str | None): The refresh token provided via a cookie (if present).
         client_type (str): The type of client making the request, extracted from the request headers.
 
     Returns:
@@ -349,6 +343,7 @@ def get_refresh_token(
     Raises:
         HTTPException: If no valid refresh token is found or the client type is invalid.
     """
+    cookie_refresh_token = request.cookies.get(jafaal_settings.get_settings().refresh_cookie_name)
     return get_token(
         non_cookie_refresh_token, cookie_refresh_token, client_type, jafaal_token_manager.TokenType.REFRESH
     )
@@ -600,9 +595,9 @@ async def validate_access_token_or_api_key(
         )
 
     # --- API key path ---
-    settings = core_config.settings
+    settings = jafaal_settings.get_settings()
     raw_key = api_key_header
-    if raw_key is None and api_key_query is not None and settings.ALLOW_API_KEY_QUERY_PARAM:
+    if raw_key is None and api_key_query is not None and settings.allow_api_key_query_param:
         logger.warning(
             "API key supplied via query string (?api_key=). "
             "This is a security risk: credentials appear in access logs "

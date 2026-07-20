@@ -9,16 +9,20 @@ backend is used.
 import logging
 from typing import NoReturn
 
-import core.cryptography as core_cryptography
 import infra.runtime as platform_runtime
 from infra.providers import StateBackendUnavailableError, StateProvider
 
-from jafaal._core import hashing
+import jafaal.settings as jafaal_settings
+from jafaal._core import crypto, hashing
 
 logger = logging.getLogger(__name__)
 
-_MFA_SECRET_KEY_PREFIX = "endurain:auth:mfa:setup_secret"  # noqa: S105 - storage key prefix, not a credential
 _DEFAULT_TTL_SECONDS: int = 300
+
+
+def _mfa_secret_key_prefix() -> str:
+    """Return the namespace prefix for MFA setup-secret store keys."""
+    return f"{jafaal_settings.get_settings().store_key_prefix}:mfa:setup_secret"
 
 
 class MFASecretStoreUnavailableError(RuntimeError):
@@ -75,7 +79,7 @@ def _encrypt_secret(secret: str) -> str:
         ValueError: When encryption returns no value.
         HTTPException: When Fernet encryption fails.
     """
-    encrypted_secret = core_cryptography.encrypt_token_fernet(secret)
+    encrypted_secret = crypto.encrypt_token_fernet(secret)
     if not encrypted_secret:
         raise ValueError("Failed to encrypt MFA secret")
     return encrypted_secret
@@ -96,7 +100,7 @@ def _decrypt_secret(encrypted_secret: str, user_id: int) -> str | None:
         None.
     """
     try:
-        return core_cryptography.decrypt_token_fernet(encrypted_secret)
+        return crypto.decrypt_token_fernet(encrypted_secret)
     except Exception as err:
         logger.error(f"Failed to decrypt MFA secret for user {user_id}: {type(err).__name__}", exc_info=err)
         return None
@@ -149,7 +153,7 @@ class MFASecretStore:
 
     def _key(self, user_id: int) -> str:
         """Build the storage key for a user's pending MFA secret."""
-        return f"{_MFA_SECRET_KEY_PREFIX}:{_user_id_digest(user_id)}"
+        return f"{_mfa_secret_key_prefix()}:{_user_id_digest(user_id)}"
 
     def add_secret(self, user_id: int, secret: str) -> None:
         """
@@ -238,7 +242,7 @@ class MFASecretStore:
             MFASecretStoreUnavailableError: When storage is unavailable.
         """
         try:
-            self._state.delete_prefix(f"{_MFA_SECRET_KEY_PREFIX}:")
+            self._state.delete_prefix(f"{_mfa_secret_key_prefix()}:")
         except StateBackendUnavailableError as err:
             _raise_store_unavailable("clear MFA setup secrets", err)
 

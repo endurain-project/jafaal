@@ -3,7 +3,6 @@
 import logging
 from datetime import UTC, datetime, timedelta
 
-import core.cryptography as core_cryptography
 from core.database import SessionLocal
 from sqlalchemy.orm import Session
 
@@ -11,6 +10,7 @@ import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.rotated_refresh_tokens.crud as rotated_token_crud
 import jafaal.sessions.rotated_refresh_tokens.schema as rotated_token_schema
 import jafaal.token_hashing as token_hashing
+from jafaal._core import crypto
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +89,7 @@ def store_rotated_token(
         rotation_count=rotation_count,
         rotated_at=now,
         expires_at=expires_at,
-        replacement_refresh_token=core_cryptography.encrypt_token_fernet(replacement_refresh_token),
+        replacement_refresh_token=crypto.encrypt_token_fernet(replacement_refresh_token),
         replacement_refresh_token_exp=replacement_refresh_token_exp,
     )
 
@@ -183,7 +183,7 @@ def get_grace_replay_token(raw_token: str, db: Session) -> tuple[str, datetime] 
     if not rotated_token.replacement_refresh_token or rotated_token.replacement_refresh_token_exp is None:
         return None
 
-    replacement = core_cryptography.decrypt_token_fernet(rotated_token.replacement_refresh_token)
+    replacement = crypto.decrypt_token_fernet(rotated_token.replacement_refresh_token)
 
     if replacement is None:
         return None

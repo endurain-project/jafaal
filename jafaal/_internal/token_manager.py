@@ -1,7 +1,7 @@
 """JWT token issuance and validation for the authentication module.
 
 Defines :class:`TokenType`, :class:`TokenManager` (issue/decode/validate JWTs
-and mint CSRF tokens) and a singleton accessor used as a FastAPI dependency.
+and mint CSRF tokens) and an accessor used as a FastAPI dependency.
 """
 
 import logging
@@ -10,7 +10,6 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 
-import core.config as core_config
 import modules.users.users.schema as users_schema
 from fastapi import HTTPException, status
 from joserfc import jwt
@@ -27,6 +26,7 @@ from joserfc.jwk import OctKey
 from joserfc.jwt import Token
 
 import jafaal.constants as jafaal_constants
+import jafaal.settings as jafaal_settings
 
 logger = logging.getLogger(__name__)
 
@@ -62,26 +62,42 @@ class TokenManager:
         ValueError: Raised for missing or invalid parameters during token creation.
     """
 
-    def __init__(self, secret_key: str, algorithm: str = "HS256"):
+    def __init__(
+        self,
+        secret_key: str,
+        algorithm: str = "HS256",
+        *,
+        access_token_expire_minutes: int = 15,
+        refresh_token_expire_days: int = 7,
+        issuer: str = "",
+        audience: str = "",
+    ):
         """
-        Initializes the TokenManager with the provided secret key and algorithm.
+        Initializes the TokenManager with the provided secret key and settings.
 
         Args:
-            secret_key (str): The secret key used for token encryption and
-                decryption.
+            secret_key (str): The secret key used for signing and verifying
+                tokens.
             algorithm (str, optional): The algorithm to use for token
                 operations. Defaults to "HS256". Must be a member of
-                :data:`jafaal.constants.JWT_ALLOWED_ALGORITHMS` so that the
+                :data:`jafaal.settings.ALLOWED_ALGORITHMS` so that the
                 allow-list passed to ``jwt.decode`` cannot drift from the
                 signing algorithm.
-
+            access_token_expire_minutes (int): Access-token lifetime in minutes.
+            refresh_token_expire_days (int): Refresh-token lifetime in days.
+            issuer (str): JWT ``iss`` claim value.
+            audience (str): JWT ``aud`` claim value.
         """
-        if algorithm not in jafaal_constants.JWT_ALLOWED_ALGORITHMS:
+        if algorithm not in jafaal_settings.ALLOWED_ALGORITHMS:
             raise ValueError(
-                f"algorithm={algorithm!r} is not in the JWT allow-list {sorted(jafaal_constants.JWT_ALLOWED_ALGORITHMS)}."
+                f"algorithm={algorithm!r} is not in the JWT allow-list {sorted(jafaal_settings.ALLOWED_ALGORITHMS)}."
             )
         self.secret_key = secret_key
         self.algorithm = algorithm
+        self.access_token_expire_minutes = access_token_expire_minutes
+        self.refresh_token_expire_days = refresh_token_expire_days
+        self.issuer = issuer
+        self.audience = audience
         self._key = OctKey.import_key(secret_key)
 
     def get_token_claim(self, token: str, claim: str) -> str | list[str] | int:
@@ -201,11 +217,11 @@ class TokenManager:
                 sid={"essential": True},
                 iss={
                     "essential": True,
-                    "value": f"{core_config.settings.ENDURAIN_HOST}",
+                    "value": self.issuer,
                 },
                 aud={
                     "essential": True,
-                    "value": f"{core_config.settings.ENDURAIN_HOST}",
+                    "value": self.audience,
                 },
                 sub={"essential": True},
                 scope={"essential": True},
@@ -337,17 +353,17 @@ class TokenManager:
         else:
             scope = jafaal_constants.ADMIN_ACCESS_SCOPE
 
-        exp = datetime.now(UTC) + timedelta(minutes=jafaal_constants.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
+        exp = datetime.now(UTC) + timedelta(minutes=self.access_token_expire_minutes)
         if token_type == TokenType.REFRESH:
-            exp = datetime.now(UTC) + timedelta(days=jafaal_constants.JWT_REFRESH_TOKEN_EXPIRE_DAYS)
+            exp = datetime.now(UTC) + timedelta(days=self.refresh_token_expire_days)
 
         # Set now
         now = int(datetime.now(UTC).timestamp())
 
         scope_dict = {
             "sid": session_id,
-            "iss": core_config.settings.ENDURAIN_HOST,
-            "aud": core_config.settings.ENDURAIN_HOST,
+            "iss": self.issuer,
+            "aud": self.audience,
             "sub": user.id,
             "scope": scope,
             "iat": now,
@@ -378,25 +394,30 @@ class TokenManager:
         return secrets.token_urlsafe(32)
 
 
-def get_token_manager() -> TokenManager:
-    """
-    Returns the singleton instance of TokenManager.
+_token_manager: TokenManager | None = None
+_token_manager_generation: int = -1
 
-    This function provides access to the global token_manager instance,
-    which is responsible for managing authentication tokens within the
-    application.
+
+def get_token_manager() -> TokenManager:
+    """Return a process-wide :class:`TokenManager` built from settings.
+
+    The instance is cached and transparently rebuilt if :func:`jafaal.configure`
+    is called again (detected via the settings generation counter).
 
     Returns:
-        TokenManager: The singleton token manager instance.
+        TokenManager: Token manager bound to the installed ``AuthSettings``.
     """
-    return token_manager
-
-
-# Validate required configuration before creating token manager
-if jafaal_constants.JWT_SECRET_KEY is None:
-    raise ValueError("JWT_SECRET_KEY must be set in environment variables")
-
-if jafaal_constants.JWT_ALGORITHM is None:
-    raise ValueError("JWT_ALGORITHM must be set in environment variables")
-
-token_manager = TokenManager(jafaal_constants.JWT_SECRET_KEY, jafaal_constants.JWT_ALGORITHM)
+    global _token_manager, _token_manager_generation
+    generation = jafaal_settings.settings_generation()
+    if _token_manager is None or _token_manager_generation != generation:
+        settings = jafaal_settings.get_settings()
+        _token_manager = TokenManager(
+            settings.secret_key,
+            settings.algorithm,
+            access_token_expire_minutes=settings.access_token_expire_minutes,
+            refresh_token_expire_days=settings.refresh_token_expire_days,
+            issuer=settings.resolved_issuer,
+            audience=settings.resolved_audience,
+        )
+        _token_manager_generation = generation
+    return _token_manager

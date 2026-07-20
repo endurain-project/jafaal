@@ -7,13 +7,13 @@ import logging
 import re
 from typing import Any
 
-import core.config as core_config
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 import jafaal.identity_providers.links.crud as jafaal_identity_links_crud
 import jafaal.identity_providers.schema as idp_schema
 import jafaal.identity_providers.service as idp_service
+import jafaal.settings as jafaal_settings
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ def validate_redirect_url(redirect: str | None) -> None:
     # Handle custom URI schemes (e.g., gadgetbridge://callback)
     if "://" in value:
         scheme = value.split("://", 1)[0].lower()
-        allowed = core_config.settings.ALLOWED_REDIRECT_SCHEMES
+        allowed = jafaal_settings.get_settings().allowed_redirect_schemes
         if scheme not in allowed:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

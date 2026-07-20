@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-import core.config as core_config
 import modules.server_settings.utils as server_settings_utils
 import modules.users.users.schema as users_schema
 import modules.users.users.utils as users_utils
@@ -16,6 +15,7 @@ import jafaal._internal.services.step_up_service as step_up_service
 import jafaal.password_policy as jafaal_password_policy
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.schema as jafaal_sessions_schema
+import jafaal.settings as jafaal_settings
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ def get_user_sessions(
     db: Session,
 ) -> list[jafaal_sessions_schema.UsersSessionsRead]:
     """Retrieve active sessions for the authenticated user."""
-    if core_config.settings.ENVIRONMENT == "demo":
+    if jafaal_settings.get_settings().environment == "demo":
         logger.info("Session retrieval attempted in demo environment - returning empty list")
         return []
 

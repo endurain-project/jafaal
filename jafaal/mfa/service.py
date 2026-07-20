@@ -22,7 +22,6 @@ import logging
 from io import BytesIO
 from typing import TYPE_CHECKING
 
-import core.cryptography as core_cryptography
 import modules.users.users.utils as users_utils
 import pyotp
 import qrcode
@@ -33,6 +32,8 @@ import jafaal.mfa.backup_codes.crud as mfa_backup_codes_crud
 import jafaal.mfa.backup_codes.utils as mfa_backup_codes_utils
 import jafaal.mfa.crud as jafaal_mfa_crud
 import jafaal.mfa.schema as mfa_schema
+import jafaal.settings as jafaal_settings
+from jafaal._core import crypto
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,7 @@ def verify_totp(secret: str, token: str) -> bool:
     return totp.verify(token, valid_window=1)  # Allow 1 window tolerance
 
 
-def generate_qr_code(secret: str, username: str, app_name: str = "Endurain") -> str:
+def generate_qr_code(secret: str, username: str, app_name: str = "Jafaal") -> str:
     """
     Generate QR code for MFA setup.
 
@@ -131,9 +132,10 @@ def setup_user_mfa(user_id: int, db: Session) -> mfa_schema.MFASetupResponse:
         )
 
     secret = generate_totp_secret()
-    qr_code = generate_qr_code(secret, user.username)
+    app_name = jafaal_settings.get_settings().app_name
+    qr_code = generate_qr_code(secret, user.username, app_name)
 
-    return mfa_schema.MFASetupResponse(secret=secret, qr_code=qr_code, app_name="Endurain")
+    return mfa_schema.MFASetupResponse(secret=secret, qr_code=qr_code, app_name=app_name)
 
 
 def enable_user_mfa(
@@ -171,7 +173,7 @@ def enable_user_mfa(
     if not verify_totp(secret, mfa_code):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid MFA code")
 
-    encrypted_secret = core_cryptography.encrypt_token_fernet(secret)
+    encrypted_secret = crypto.encrypt_token_fernet(secret)
 
     if not encrypted_secret:
         raise HTTPException(
@@ -256,7 +258,7 @@ def verify_user_mfa(
     # Try TOTP first (6 digits)
     if len(normalized_code) == 6 and normalized_code.isdigit():
         try:
-            secret = core_cryptography.decrypt_token_fernet(mfa_row.mfa_secret)
+            secret = crypto.decrypt_token_fernet(mfa_row.mfa_secret)
             if not secret:
                 logger.error("Failed to decrypt MFA secret")
                 return False

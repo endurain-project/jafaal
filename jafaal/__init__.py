@@ -81,6 +81,7 @@ from .schema import (
     TokenResponseMobile,
     TokenResponseWeb,
 )
+from .settings import AuthSettings, configure, get_settings, reset
 from .user_model import IntPKUserMixin, UserMixin, UUIDPKUserMixin
 from .utils import (
     authenticate_user,
@@ -90,6 +91,11 @@ from .utils import (
 )
 
 __all__ = [
+    # Configuration
+    "AuthSettings",
+    "configure",
+    "get_settings",
+    "reset",
     # Security dependencies
     "AuthContext",
     "FailedLoginAttempts",
