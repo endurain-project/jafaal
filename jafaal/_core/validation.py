@@ -1,6 +1,6 @@
 """Shared validation helpers for JAFAAL routers."""
 
-from fastapi import HTTPException, status
+import jafaal.exceptions as jafaal_exceptions
 
 
 def validate_id(identifier: int, min_value: int, message: str) -> None:
@@ -12,10 +12,7 @@ def validate_id(identifier: int, min_value: int, message: str) -> None:
         message: Error detail for invalid values.
 
     Raises:
-        HTTPException: 422 if the value is not above the minimum.
+        UnprocessableError: 422 if the value is not above the minimum.
     """
     if not (int(identifier) > min_value):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=message,
-        )
+        raise jafaal_exceptions.UnprocessableError(message)

@@ -93,7 +93,7 @@ async def create_identity_provider(
         The newly created identity provider.
 
     Raises:
-        HTTPException: 409 if the slug already exists, 500 on
+        JafaalError: 409 if the slug already exists, 500 on
             database errors.
     """
     return idp_crud.create_identity_provider(idp_data, db)
@@ -128,7 +128,7 @@ async def update_identity_provider(
         The updated identity provider.
 
     Raises:
-        HTTPException: 404 if the provider is not found, 409 on slug
+        JafaalError: 404 if the provider is not found, 409 on slug
             conflict, 500 on database errors.
     """
     return idp_crud.update_identity_provider(idp_id, idp_data, db)
@@ -154,7 +154,7 @@ async def delete_identity_provider(
         db: SQLAlchemy database session dependency.
 
     Raises:
-        HTTPException: 404 if the provider is not found, 409 if users
+        JafaalError: 404 if the provider is not found, 409 if users
             are still linked to the provider.
     """
     idp_crud.delete_identity_provider(idp_id, db)

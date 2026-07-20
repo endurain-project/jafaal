@@ -20,7 +20,7 @@ def get_user_mfa_row(user_id: int, db: Session) -> jafaal_mfa_models.UsersMFA | 
         The user's ``UsersMFA`` row, or None if no row exists.
 
     Raises:
-        HTTPException: 500 if a database error occurs.
+        JafaalError: 500 if a database error occurs.
     """
     stmt = select(jafaal_mfa_models.UsersMFA).where(jafaal_mfa_models.UsersMFA.user_id == user_id)
     return db.execute(stmt).scalar_one_or_none()
@@ -41,7 +41,7 @@ def update_user_mfa(user_id: int, db: Session, encrypted_secret: str | None = No
         None
 
     Raises:
-        HTTPException: 500 if database error occurs.
+        JafaalError: 500 if database error occurs.
     """
     mfa_enabled = bool(encrypted_secret)
     mfa_secret_value = encrypted_secret if encrypted_secret else None
@@ -83,7 +83,7 @@ def create_users_mfa_row(user_id: int, db: Session) -> jafaal_mfa_models.UsersMF
         The persisted ``UsersMFA`` row.
 
     Raises:
-        HTTPException: 500 if the database operation fails.
+        JafaalError: 500 if the database operation fails.
     """
     mfa_row = jafaal_mfa_models.UsersMFA(
         user_id=user_id,

@@ -4,11 +4,11 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import HTTPException, status
 from sqlalchemy import CursorResult, delete, select
 from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
+import jafaal.exceptions as jafaal_exceptions
 import jafaal.oauth_state.crud as oauth_state_crud
 import jafaal.oauth_state.models as oauth_state_models
 import jafaal.sessions.models as jafaal_sessions_models
@@ -35,7 +35,7 @@ def get_user_sessions(
         List of session objects, ordered by most recent first.
 
     Raises:
-        HTTPException: If database error occurs.
+        JafaalError: If database error occurs.
     """
     stmt = (
         select(jafaal_sessions_models.UsersSessions)
@@ -61,7 +61,7 @@ def get_session_by_id(
         The session object if found, None otherwise.
 
     Raises:
-        HTTPException: If database error occurs.
+        JafaalError: If database error occurs.
     """
     stmt = select(jafaal_sessions_models.UsersSessions).where(jafaal_sessions_models.UsersSessions.id == session_id)
     return db.execute(stmt).scalar_one_or_none()
@@ -83,7 +83,7 @@ def get_session_by_id_not_expired(
         The session object if found and not expired, None otherwise.
 
     Raises:
-        HTTPException: If database error occurs.
+        JafaalError: If database error occurs.
     """
     stmt = (
         select(jafaal_sessions_models.UsersSessions)
@@ -120,7 +120,7 @@ def get_session_with_oauth_state(
         None if not linked. Returns None if session not found.
 
     Raises:
-        HTTPException: If database error occurs.
+        JafaalError: If database error occurs.
     """
     # Query session
     stmt = (
@@ -157,7 +157,7 @@ def create_session(
         The newly created session object.
 
     Raises:
-        HTTPException: If database error occurs.
+        JafaalError: If database error occurs.
     """
     db_session = jafaal_sessions_models.UsersSessions(**session.model_dump())
     db.add(db_session)
@@ -185,16 +185,13 @@ def set_session_refresh_token_hash(
         The updated session object.
 
     Raises:
-        HTTPException: If session not found (404) or database error
+        JafaalError: If session not found (404) or database error
             occurs (500).
     """
     db_session = get_session_by_id(session_id, db)
 
     if not db_session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session {session_id} not found",
-        )
+        raise jafaal_exceptions.NotFoundError(f"Session {session_id} not found")
 
     db_session.refresh_token = hashed_refresh_token
     db.commit()
@@ -217,7 +214,7 @@ def mark_tokens_exchanged(session_id: str, db: Session) -> None:
         db: SQLAlchemy database session.
 
     Raises:
-        HTTPException: If session not found (404) or database
+        JafaalError: If session not found (404) or database
             error occurs (500).
     """
     # Get the session from the database
@@ -225,10 +222,7 @@ def mark_tokens_exchanged(session_id: str, db: Session) -> None:
 
     # Check if the session exists
     if not db_session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session {session_id} not found",
-        )
+        raise jafaal_exceptions.NotFoundError(f"Session {session_id} not found")
 
     # Store oauth_state_id before clearing (for cleanup)
     oauth_state_id_to_delete = db_session.oauth_state_id
@@ -284,7 +278,7 @@ def claim_session_for_token_exchange(
         exchanged — caller should respond with 409 Conflict.
 
     Raises:
-        HTTPException: 500 if the database operation fails.
+        JafaalError: 500 if the database operation fails.
     """
     stmt = (
         sa_update(jafaal_sessions_models.UsersSessions)
@@ -335,7 +329,7 @@ def edit_session(
         db: SQLAlchemy database session.
 
     Raises:
-        HTTPException: If session not found (404) or database
+        JafaalError: If session not found (404) or database
             error occurs (500).
     """
     # Get the session from the database
@@ -343,10 +337,7 @@ def edit_session(
 
     # Check if the session exists
     if not db_session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session {session.id} not found",
-        )
+        raise jafaal_exceptions.NotFoundError(f"Session {session.id} not found")
 
     # Update fields dynamically
     session_data = session.model_dump(exclude_unset=True)
@@ -376,16 +367,13 @@ def update_session_csrf_hash(
         db: SQLAlchemy database session.
 
     Raises:
-        HTTPException: If session not found (404) or database
+        JafaalError: If session not found (404) or database
             error occurs (500).
     """
     db_session = get_session_by_id(session_id, db)
 
     if not db_session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session {session_id} not found",
-        )
+        raise jafaal_exceptions.NotFoundError(f"Session {session_id} not found")
 
     db_session.csrf_token_hash = csrf_token_hash
     db.commit()
@@ -411,7 +399,7 @@ def delete_session(
         db: SQLAlchemy database session.
 
     Raises:
-        HTTPException: If session not found (404) or database
+        JafaalError: If session not found (404) or database
             error occurs (500).
     """
     # Get the session to retrieve token_family_id before deletion
@@ -423,10 +411,7 @@ def delete_session(
 
     # Check if the session was found
     if session is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=(f"Session {session_id} not found for user {user_id}"),
-        )
+        raise jafaal_exceptions.NotFoundError(f"Session {session_id} not found for user {user_id}")
 
     # Store oauth_state_id before deleting session (if exists)
     oauth_state_id_to_delete = session.oauth_state_id
@@ -469,7 +454,7 @@ def delete_idle_sessions(
         Number of sessions deleted.
 
     Raises:
-        HTTPException: If database error occurs.
+        JafaalError: If database error occurs.
     """
     stmt = delete(jafaal_sessions_models.UsersSessions).where(
         jafaal_sessions_models.UsersSessions.last_activity_at < cutoff_time
@@ -498,7 +483,7 @@ def delete_sessions_by_family(
         Number of sessions deleted.
 
     Raises:
-        HTTPException: If database error occurs.
+        JafaalError: If database error occurs.
     """
     stmt = delete(jafaal_sessions_models.UsersSessions).where(
         jafaal_sessions_models.UsersSessions.token_family_id == token_family_id
@@ -531,7 +516,7 @@ def delete_sessions_by_user(
         Number of sessions deleted.
 
     Raises:
-        HTTPException: If database error occurs.
+        JafaalError: If database error occurs.
     """
     stmt = delete(jafaal_sessions_models.UsersSessions).where(jafaal_sessions_models.UsersSessions.user_id == user_id)
     if exclude_session_id is not None:

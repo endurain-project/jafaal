@@ -5,12 +5,13 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from fastapi import HTTPException, Request, status
+from fastapi import Request
 from sqlalchemy.orm import Session
 
 import jafaal._internal.security_stores as jafaal_security_stores
 import jafaal._internal.services.step_up_service as step_up_service
 import jafaal.credentials.crud as jafaal_credentials_crud
+import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_providers.crud as idp_crud
 import jafaal.identity_providers.link_tokens.crud as idp_link_token_crud
 import jafaal.identity_providers.link_tokens.schema as idp_link_token_schema
@@ -47,10 +48,7 @@ def generate_link_token(
 
     idp = idp_crud.get_identity_provider(idp_id, db)
     if not idp or not idp.enabled:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Identity provider not found or disabled",
-        )
+        raise jafaal_exceptions.NotFoundError("Identity provider not found or disabled")
 
     existing_link = jafaal_identity_links_crud.get_user_identity_provider_by_user_id_and_idp_id(
         token_user_id,
@@ -58,10 +56,7 @@ def generate_link_token(
         db,
     )
     if existing_link:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Identity provider {idp.name} is already linked to your account",
-        )
+        raise jafaal_exceptions.ConflictError(f"Identity provider {idp.name} is already linked to your account")
 
     ip_address = request.client.host if request.client else None
     link_token = idp_link_token_utils.generate_idp_link_token(
@@ -96,10 +91,7 @@ def delete_identity_provider_link(
 
     idp = idp_crud.get_identity_provider(idp_id, db)
     if idp is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Identity provider with id {idp_id} not found",
-        )
+        raise jafaal_exceptions.NotFoundError(f"Identity provider with id {idp_id} not found")
 
     link = jafaal_identity_links_crud.get_user_identity_provider_by_user_id_and_idp_id(
         token_user_id,
@@ -107,10 +99,7 @@ def delete_identity_provider_link(
         db,
     )
     if not link:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Identity provider {idp.name} is not linked to your account",
-        )
+        raise jafaal_exceptions.NotFoundError(f"Identity provider {idp.name} is not linked to your account")
 
     all_idp_links = jafaal_identity_links_crud.get_user_identity_providers_by_user_id(
         token_user_id,
@@ -119,9 +108,8 @@ def delete_identity_provider_link(
     remaining_idp_count = len(all_idp_links) - 1
 
     if not identity_service.has_local_password(token_user_id) and remaining_idp_count == 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot unlink last authentication method. Please set a password first.",
+        raise jafaal_exceptions.InvalidRequestError(
+            "Cannot unlink last authentication method. Please set a password first."
         )
 
     success = jafaal_identity_links_crud.delete_user_identity_provider(
@@ -131,10 +119,7 @@ def delete_identity_provider_link(
     )
 
     if not success:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to unlink identity provider",
-        )
+        raise jafaal_exceptions.InternalError("Failed to unlink identity provider")
 
     logger.info(f"User {token_user_id} unlinked IdP: idp_id={idp_id} ({idp.name})")
 
@@ -160,17 +145,14 @@ def admin_delete_identity_provider_link(
         None.
 
     Raises:
-        HTTPException: 404 if the IdP or the user-IdP link does not
+        JafaalError: 404 if the IdP or the user-IdP link does not
             exist, 400 if unlinking would remove the user's last
             authentication method, 500 if the deletion fails at the
             database level.
     """
     idp = idp_crud.get_identity_provider(idp_id, db)
     if idp is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Identity provider with id {idp_id} not found",
-        )
+        raise jafaal_exceptions.NotFoundError(f"Identity provider with id {idp_id} not found")
 
     link = jafaal_identity_links_crud.get_user_identity_provider_by_user_id_and_idp_id(
         user_id,
@@ -178,10 +160,7 @@ def admin_delete_identity_provider_link(
         db,
     )
     if not link:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Identity provider {idp.name} is not linked to this user",
-        )
+        raise jafaal_exceptions.NotFoundError(f"Identity provider {idp.name} is not linked to this user")
 
     all_idp_links = jafaal_identity_links_crud.get_user_identity_providers_by_user_id(
         user_id,
@@ -191,17 +170,13 @@ def admin_delete_identity_provider_link(
 
     has_local_password = jafaal_credentials_crud.get_credential(user_id, db) is not None
     if not has_local_password and remaining_idp_count == 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot unlink last authentication method. User has no password set.",
+        raise jafaal_exceptions.InvalidRequestError(
+            "Cannot unlink last authentication method. User has no password set."
         )
 
     success = jafaal_identity_links_crud.delete_user_identity_provider(user_id, idp_id, db)
     if not success:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to unlink identity provider",
-        )
+        raise jafaal_exceptions.InternalError("Failed to unlink identity provider")
 
     logger.info(f"Admin unlinked IdP for user {user_id}: idp_id={idp_id} ({idp.name})")
 
@@ -237,24 +212,18 @@ def validate_and_claim_browser_link_token(
         The user ID encoded in the token.
 
     Raises:
-        HTTPException: 401 if token is invalid, expired, or IdP mismatch.
-        HTTPException: 400 if token was already used (race/replay).
-        HTTPException: 409 if the IdP is already linked to the user.
+        JafaalError: 401 if token is invalid, expired, or IdP mismatch.
+        JafaalError: 400 if token was already used (race/replay).
+        JafaalError: 409 if the IdP is already linked to the user.
     """
     link_token_hash = idp_link_token_utils.hash_idp_link_token(link_token)
     db_token = idp_link_token_crud.get_idp_link_token_by_hash(link_token_hash, db)
     if not db_token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired link token",
-        )
+        raise jafaal_exceptions.InvalidTokenError("Invalid or expired link token")
 
     if db_token.idp_id != idp_id:
         logger.warning(f"Link token IdP mismatch: token idp_id={db_token.idp_id}, requested idp_id={idp_id}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid link token for this identity provider",
-        )
+        raise jafaal_exceptions.InvalidTokenError("Invalid link token for this identity provider")
 
     if db_token.ip_address and client_ip and db_token.ip_address != client_ip:
         logger.warning(f"Link token IP mismatch: token ip={db_token.ip_address}, request ip={client_ip}")
@@ -267,17 +236,11 @@ def validate_and_claim_browser_link_token(
     if existing_link:
         idp = idp_crud.get_identity_provider(idp_id, db)
         idp_name = idp.name if idp else f"ID {idp_id}"
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Identity provider {idp_name} is already linked to your account",
-        )
+        raise jafaal_exceptions.ConflictError(f"Identity provider {idp_name} is already linked to your account")
 
     if not idp_link_token_crud.mark_token_as_used(link_token_hash, db):
         logger.warning(f"IdP link token replay/race rejected for user {token_user_id}: token row {db_token.id}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid or expired link token",
-        )
+        raise jafaal_exceptions.InvalidRequestError("Invalid or expired link token")
 
     return token_user_id
 

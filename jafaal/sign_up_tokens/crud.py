@@ -25,7 +25,7 @@ def get_sign_up_token_by_hash(token_hash: str, db: Session) -> sign_up_tokens_mo
         None otherwise.
 
     Raises:
-        HTTPException: 500 error if database query fails.
+        JafaalError: 500 error if database query fails.
     """
     stmt = select(sign_up_tokens_models.SignUpToken).where(
         sign_up_tokens_models.SignUpToken.token_hash == token_hash,
@@ -50,7 +50,7 @@ def create_sign_up_token(
         The persisted SignUpToken ORM instance.
 
     Raises:
-        HTTPException: 500 error if database operation fails.
+        JafaalError: 500 error if database operation fails.
     """
     db_token = sign_up_tokens_models.SignUpToken(
         id=token.id,
@@ -79,7 +79,7 @@ def mark_sign_up_token_used(token_id: str, db: Session) -> sign_up_tokens_models
         None otherwise.
 
     Raises:
-        HTTPException: 500 error if database operation fails.
+        JafaalError: 500 error if database operation fails.
     """
     stmt = select(sign_up_tokens_models.SignUpToken).where(
         sign_up_tokens_models.SignUpToken.id == token_id,
@@ -105,7 +105,7 @@ def delete_expired_sign_up_tokens(db: Session) -> int:
         Number of deleted rows.
 
     Raises:
-        HTTPException: 500 error if database operation fails.
+        JafaalError: 500 error if database operation fails.
     """
     stmt = sa_delete(sign_up_tokens_models.SignUpToken).where(
         sign_up_tokens_models.SignUpToken.expires_at < datetime.now(UTC)

@@ -18,11 +18,11 @@ import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 import jafaal._internal.security_stores as jafaal_security_stores
 import jafaal._internal.services.step_up_service as step_up_service
+import jafaal.exceptions as jafaal_exceptions
 import jafaal.mfa.backup_codes.crud as mfa_backup_codes_crud
 import jafaal.mfa.backup_codes.schema as mfa_backup_codes_schema
 import jafaal.mfa.schema as mfa_schema
@@ -106,10 +106,7 @@ def enable_mfa(
 
     secret = mfa_secret_store.get_secret(token_user_id)
     if not secret:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No MFA setup in progress. Please run setup first.",
-        )
+        raise jafaal_exceptions.InvalidRequestError("No MFA setup in progress. Please run setup first.")
 
     try:
         backup_codes = mfa_service.enable_user_mfa(
@@ -125,9 +122,12 @@ def enable_mfa(
             "message": "MFA enabled successfully",
             "backup_codes": backup_codes,
         }
-    except HTTPException as exc:
-        if not (exc.status_code == status.HTTP_400_BAD_REQUEST and exc.detail == "Invalid MFA code"):
-            mfa_secret_store.delete_secret(token_user_id)
+    except jafaal_exceptions.InvalidMFACodeError:
+        # Wrong code — keep the pending setup secret so the user can retry.
+        raise
+    except jafaal_exceptions.JafaalError:
+        # Any other failure — abandon the pending setup secret.
+        mfa_secret_store.delete_secret(token_user_id)
         raise
 
 
@@ -166,10 +166,7 @@ def verify_mfa(
         db,
     )
     if not is_valid:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid MFA code",
-        )
+        raise jafaal_exceptions.InvalidMFACodeError()
 
     return {"message": "MFA code verified successfully"}
 
@@ -185,16 +182,10 @@ def generate_backup_codes(
     user = jafaal_ports.get_user_repository().get_by_id(token_user_id, db)
 
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found",
-        )
+        raise jafaal_exceptions.NotFoundError("User not found")
 
     if not user.mfa_enabled:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="MFA must be enabled to generate backup codes",
-        )
+        raise jafaal_exceptions.InvalidRequestError("MFA must be enabled to generate backup codes")
 
     step_up_service.verify_step_up_credentials(
         token_user_id,

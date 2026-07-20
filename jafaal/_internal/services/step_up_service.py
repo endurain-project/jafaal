@@ -5,12 +5,12 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 import jafaal._internal.security_stores as jafaal_security_stores
 import jafaal._internal.user_guards as jafaal_user_guards
 import jafaal.credentials.crud as jafaal_credentials_crud
+import jafaal.exceptions as jafaal_exceptions
 import jafaal.mfa.service as mfa_service
 
 logger = logging.getLogger(__name__)
@@ -83,7 +83,7 @@ def verify_step_up_credentials(
         None.
 
     Raises:
-        HTTPException: 429 if the user is currently locked out;
+        JafaalError: 429 if the user is currently locked out;
             401 if the current password is wrong, is missing for
             an account that has one, or when MFA is enabled and
             the supplied code is missing or invalid.
@@ -99,10 +99,9 @@ def verify_step_up_credentials(
             remaining = lockout_until - datetime.now(UTC)
             retry_after = max(0, int(remaining.total_seconds()))
         logger.warning(f"Step-up blocked for user {user_id}: locked out")
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Too many failed step-up attempts. Try again later.",
-            headers={"Retry-After": str(retry_after)},
+        raise jafaal_exceptions.RateLimitedError(
+            "Too many failed step-up attempts. Try again later.",
+            retry_after=retry_after,
         )
 
     # Guard: ensure the user exists (raises 404 otherwise).
@@ -112,39 +111,23 @@ def verify_step_up_credentials(
     if credential is not None:
         if not current_password:
             step_up_store.record_failed_attempt(key)
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Step-up verification failed",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+            raise jafaal_exceptions.InvalidCredentialsError("Step-up verification failed")
         if not identity_service.verify_password(
             current_password,
             credential.password_hash,
         ):
             step_up_store.record_failed_attempt(key)
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Step-up verification failed",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+            raise jafaal_exceptions.InvalidCredentialsError("Step-up verification failed")
     # else: SSO-only account; no password to verify. See docstring
     # and docs/developer-guide/auth-boundary.md "Known Structural Debt".
 
     if mfa_service.is_mfa_enabled_for_user(user_id, db):
         if not mfa_code:
             step_up_store.record_failed_attempt(key)
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="MFA code required for this operation",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+            raise jafaal_exceptions.AuthenticationError("MFA code required for this operation")
         if not mfa_service.verify_user_mfa(user_id, mfa_code, identity_service, db):
             step_up_store.record_failed_attempt(key)
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Step-up verification failed",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+            raise jafaal_exceptions.InvalidCredentialsError("Step-up verification failed")
 
     # All factors passed — reset the failure counter.
     step_up_store.reset_attempts(key)

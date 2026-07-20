@@ -31,7 +31,7 @@ def get_credential(
         The user's ``LocalCredential`` row, or ``None`` if none exists.
 
     Raises:
-        HTTPException: 500 if a database error occurs.
+        JafaalError: 500 if a database error occurs.
     """
     stmt = select(jafaal_credentials_models.LocalCredential).where(
         jafaal_credentials_models.LocalCredential.user_id == user_id,
@@ -63,7 +63,7 @@ def upsert_password_hash(
         None.
 
     Raises:
-        HTTPException: 500 if a database error occurs.
+        JafaalError: 500 if a database error occurs.
     """
     stmt = select(jafaal_credentials_models.LocalCredential).where(
         jafaal_credentials_models.LocalCredential.user_id == user_id,
@@ -101,7 +101,7 @@ def delete_credential(
         None.
 
     Raises:
-        HTTPException: 500 if a database error occurs.
+        JafaalError: 500 if a database error occurs.
     """
     db.execute(
         delete(jafaal_credentials_models.LocalCredential).where(

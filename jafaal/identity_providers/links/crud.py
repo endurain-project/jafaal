@@ -2,12 +2,12 @@
 
 from datetime import UTC, datetime
 
-from fastapi import HTTPException
 from sqlalchemy import exists, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
+import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_providers.links.models as jafaal_identity_links_models
 from jafaal._core import db_errors
 
@@ -28,7 +28,7 @@ def check_user_identity_providers_by_idp_id(
         True if at least one user is linked, False otherwise.
 
     Raises:
-        HTTPException: 500 error if database query fails.
+        JafaalError: 500 error if database query fails.
     """
     stmt = select(exists().where(jafaal_identity_links_models.IdentityLink.idp_id == idp_id))
     return db.execute(stmt).scalar() or False
@@ -50,7 +50,7 @@ def get_user_identity_providers_by_user_id(
         List of IdentityLink objects linked to the user.
 
     Raises:
-        HTTPException: 500 error if database query fails.
+        JafaalError: 500 error if database query fails.
     """
     stmt = select(jafaal_identity_links_models.IdentityLink).where(
         jafaal_identity_links_models.IdentityLink.user_id == user_id
@@ -77,7 +77,7 @@ def get_user_identity_provider_by_user_id_and_idp_id(
         otherwise.
 
     Raises:
-        HTTPException: 500 error if database query fails.
+        JafaalError: 500 error if database query fails.
     """
     stmt = select(jafaal_identity_links_models.IdentityLink).where(
         jafaal_identity_links_models.IdentityLink.user_id == user_id,
@@ -105,7 +105,7 @@ def get_user_identity_provider_by_subject_and_idp_id(
         None otherwise.
 
     Raises:
-        HTTPException: 500 error if database query fails.
+        JafaalError: 500 error if database query fails.
     """
     stmt = select(jafaal_identity_links_models.IdentityLink).where(
         jafaal_identity_links_models.IdentityLink.idp_id == idp_id,
@@ -134,8 +134,8 @@ def create_user_identity_provider(
         The newly created IdentityLink link object.
 
     Raises:
-        HTTPException: 409 error if link already exists.
-        HTTPException: 500 error if database operation fails.
+        ConflictError: 409 error if link already exists.
+        InternalError: 500 error if database operation fails.
     """
     db_link = jafaal_identity_links_models.IdentityLink(
         user_id=user_id,
@@ -148,7 +148,7 @@ def create_user_identity_provider(
         db.commit()
     except IntegrityError as err:
         db.rollback()
-        raise HTTPException(status_code=409, detail="Identity provider already linked") from err
+        raise jafaal_exceptions.ConflictError("Identity provider already linked") from err
     db.refresh(db_link)
     return db_link
 
@@ -172,7 +172,7 @@ def update_user_identity_provider_last_login(
         otherwise.
 
     Raises:
-        HTTPException: 500 error if database operation fails.
+        JafaalError: 500 error if database operation fails.
     """
     db_link = get_user_identity_provider_by_user_id_and_idp_id(
         user_id,
@@ -211,7 +211,7 @@ def store_user_identity_provider_tokens(
         otherwise.
 
     Raises:
-        HTTPException: 500 error if database operation fails.
+        JafaalError: 500 error if database operation fails.
     """
     db_link = get_user_identity_provider_by_user_id_and_idp_id(
         user_id,
@@ -248,7 +248,7 @@ def clear_user_identity_provider_refresh_token_by_user_id_and_idp_id(
         True if token was cleared, False if link not found.
 
     Raises:
-        HTTPException: 500 error if database operation fails.
+        JafaalError: 500 error if database operation fails.
     """
     db_link = get_user_identity_provider_by_user_id_and_idp_id(
         user_id,
@@ -285,7 +285,7 @@ def delete_user_identity_provider(
         True if link was found and deleted, False otherwise.
 
     Raises:
-        HTTPException: 500 error if database operation fails.
+        JafaalError: 500 error if database operation fails.
     """
     db_link = get_user_identity_provider_by_user_id_and_idp_id(
         user_id,
@@ -323,7 +323,7 @@ def get_identity_link_counts_for_users(
         Users with no links are not present in the result (default to 0).
 
     Raises:
-        HTTPException: 500 error if database query fails.
+        JafaalError: 500 error if database query fails.
     """
     if not user_ids:
         return {}

@@ -11,8 +11,8 @@ from __future__ import annotations
 import logging
 
 from cryptography.fernet import Fernet
-from fastapi import HTTPException, status
 
+import jafaal.exceptions as jafaal_exceptions
 import jafaal.settings as jafaal_settings
 
 logger = logging.getLogger(__name__)
@@ -25,17 +25,14 @@ def _create_cipher() -> Fernet:
         A Fernet cipher initialised with ``AuthSettings.fernet_key``.
 
     Raises:
-        HTTPException: 500 if the key is missing or malformed.
+        InternalError: 500 if the key is missing or malformed.
     """
     try:
         key = jafaal_settings.get_settings().fernet_key
         return Fernet(key.encode())
     except Exception as err:
         logger.error(f"Error in _create_cipher: {type(err).__name__}", exc_info=err)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal Server Error",
-        ) from err
+        raise jafaal_exceptions.InternalError() from err
 
 
 def encrypt_token_fernet(token: object | None) -> str | None:
@@ -48,7 +45,7 @@ def encrypt_token_fernet(token: object | None) -> str | None:
         Encrypted token string, or None when input is None.
 
     Raises:
-        HTTPException: 500 if encryption fails.
+        InternalError: 500 if encryption fails.
     """
     try:
         if token is None:
@@ -62,10 +59,7 @@ def encrypt_token_fernet(token: object | None) -> str | None:
         return cipher.encrypt(token.encode()).decode()
     except Exception as err:
         logger.error(f"Error in encrypt_token_fernet: {type(err).__name__}", exc_info=err)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal Server Error",
-        ) from err
+        raise jafaal_exceptions.InternalError() from err
 
 
 def decrypt_token_fernet(encrypted_token: str | None) -> str | None:
@@ -78,7 +72,7 @@ def decrypt_token_fernet(encrypted_token: str | None) -> str | None:
         Decrypted token string, or None when input is None.
 
     Raises:
-        HTTPException: 500 if decryption fails.
+        InternalError: 500 if decryption fails.
     """
     try:
         if encrypted_token is None:
@@ -89,7 +83,4 @@ def decrypt_token_fernet(encrypted_token: str | None) -> str | None:
         return cipher.decrypt(encrypted_token.encode()).decode()
     except Exception as err:
         logger.error(f"Error in decrypt_token_fernet: {type(err).__name__}", exc_info=err)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal Server Error",
-        ) from err
+        raise jafaal_exceptions.InternalError() from err

@@ -77,10 +77,13 @@ def test_all_401s_advertise_bearer():
         exc.TokenExpiredError,
         exc.InvalidTokenError,
         exc.SessionExpiredError,
-        exc.InvalidApiKeyError,
         exc.StaleRefreshTokenError,
     ):
         assert cls().headers == {"WWW-Authenticate": "Bearer"}
+
+
+def test_invalid_api_key_advertises_apikey():
+    assert exc.InvalidApiKeyError().headers == {"WWW-Authenticate": "ApiKey"}
 
 
 def test_inheritance_shape():

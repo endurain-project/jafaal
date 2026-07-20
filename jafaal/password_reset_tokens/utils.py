@@ -4,16 +4,13 @@ import logging
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from fastapi import (
-    HTTPException,
-    status,
-)
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 import jafaal._internal.security_stores as jafaal_security_stores
 import jafaal._internal.user_guards as jafaal_user_guards
 import jafaal.credentials.crud as jafaal_credentials_crud
+import jafaal.exceptions as jafaal_exceptions
 import jafaal.password_policy as jafaal_password_policy
 import jafaal.password_reset_tokens.crud as password_reset_tokens_crud
 import jafaal.password_reset_tokens.schema as password_reset_tokens_schema
@@ -114,37 +111,23 @@ def use_password_reset_token(
         None
 
     Raises:
-        HTTPException: 400 if the token is invalid or expired.
-        HTTPException: 422 if the new password fails the account's password policy.
-        HTTPException: 500 if password update or token marking fails.
+        JafaalError: 400 if the token is invalid or expired.
+        JafaalError: 422 if the new password fails the account's password policy.
+        JafaalError: 500 if password update or token marking fails.
     """
     # Hash the provided token to find the database record
     token_hash = token_hashing.sha256_hex(token)
 
     token_user_id = password_reset_tokens_crud.claim_password_reset_token(token_hash, db)
     if token_user_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid or expired password reset token",
-        )
+        raise jafaal_exceptions.InvalidRequestError("Invalid or expired password reset token")
 
     db_user = jafaal_user_guards.get_user_by_id_or_404(token_user_id, db)
-    try:
-        hashed_password = jafaal_password_policy.validate_and_hash_for_user(
-            identity_service,
-            db_user.is_superuser,
-            new_password,
-        )
-    except HTTPException as err:
-        # Re-raised as 422 (distinct from the 400 above) so callers can tell a
-        # weak new password apart from an invalid/expired token instead of
-        # conflating both under the same status code.
-        if err.status_code == status.HTTP_400_BAD_REQUEST:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=err.detail,
-            ) from err
-        raise
+    hashed_password = jafaal_password_policy.validate_and_hash_for_user(
+        identity_service,
+        db_user.is_superuser,
+        new_password,
+    )
 
     try:
         jafaal_credentials_crud.upsert_password_hash(
@@ -156,15 +139,12 @@ def use_password_reset_token(
         password_reset_tokens_crud.mark_user_password_reset_tokens_used(token_user_id, db)
         jafaal_sessions_crud.delete_sessions_by_user(token_user_id, db, commit=False)
         db.commit()
-    except HTTPException:
+    except jafaal_exceptions.JafaalError:
         db.rollback()
         raise
     except SQLAlchemyError as err:
         db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to reset password",
-        ) from err
+        raise jafaal_exceptions.InternalError("Failed to reset password") from err
 
     # Drop any in-flight pending-MFA login that was started with the
     # now-rotated password.

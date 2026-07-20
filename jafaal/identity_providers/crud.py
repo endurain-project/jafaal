@@ -2,10 +2,10 @@
 
 import logging
 
-from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_providers.links.crud as jafaal_identity_links_crud
 import jafaal.identity_providers.models as idp_models
 import jafaal.identity_providers.schema as idp_schema
@@ -27,7 +27,7 @@ def get_identity_provider(idp_id: int, db: Session) -> idp_models.IdentityProvid
         The identity provider if found, otherwise None.
 
     Raises:
-        HTTPException: If a database error occurs.
+        JafaalError: If a database error occurs.
     """
     stmt = select(idp_models.IdentityProvider).where(idp_models.IdentityProvider.id == idp_id)
     return db.execute(stmt).scalar_one_or_none()
@@ -46,7 +46,7 @@ def get_identity_provider_by_slug(slug: str, db: Session) -> idp_models.Identity
         The identity provider if found, otherwise None.
 
     Raises:
-        HTTPException: If a database error occurs.
+        JafaalError: If a database error occurs.
     """
     stmt = select(idp_models.IdentityProvider).where(idp_models.IdentityProvider.slug == slug)
     return db.execute(stmt).scalar_one_or_none()
@@ -64,7 +64,7 @@ def get_all_identity_providers(db: Session) -> list[idp_models.IdentityProvider]
         List of identity provider objects (empty list if none exist).
 
     Raises:
-        HTTPException: If a database error occurs.
+        JafaalError: If a database error occurs.
     """
     stmt = select(idp_models.IdentityProvider).order_by(idp_models.IdentityProvider.name)
     return list(db.execute(stmt).scalars().all())
@@ -89,7 +89,7 @@ def get_identity_providers_by_ids(
         List of IdentityProvider objects matching the IDs.
 
     Raises:
-        HTTPException: If a database error occurs.
+        JafaalError: If a database error occurs.
     """
     if not idp_ids:
         return []
@@ -110,7 +110,7 @@ def get_enabled_identity_providers(db: Session) -> list[idp_models.IdentityProvi
         List of enabled IdentityProvider objects.
 
     Raises:
-        HTTPException: If a database error occurs.
+        JafaalError: If a database error occurs.
     """
     stmt = (
         select(idp_models.IdentityProvider)
@@ -136,7 +136,7 @@ def create_identity_provider(idp_data: idp_schema.IdentityProviderCreate, db: Se
         The newly created identity provider instance.
 
     Raises:
-        HTTPException: 409 if the slug already exists, 500 on database
+        JafaalError: 409 if the slug already exists, 500 on database
             errors.
     """
     slug = idp_data.slug.lower()
@@ -144,10 +144,7 @@ def create_identity_provider(idp_data: idp_schema.IdentityProviderCreate, db: Se
     # Check if slug already exists
     existing = get_identity_provider_by_slug(slug, db)
     if existing:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Identity provider with slug '{slug}' already exists",
-        )
+        raise jafaal_exceptions.ConflictError(f"Identity provider with slug '{slug}' already exists")
 
     # Encrypt sensitive fields
     encrypted_client_id = crypto.encrypt_token_fernet(idp_data.client_id)
@@ -200,16 +197,13 @@ def update_identity_provider(
         The updated identity provider instance.
 
     Raises:
-        HTTPException: 404 if the provider is not found, 409 if the new
+        JafaalError: 404 if the provider is not found, 409 if the new
             slug conflicts with an existing provider, 500 on database
             errors.
     """
     db_idp = get_identity_provider(idp_id, db)
     if not db_idp:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Identity provider not found",
-        )
+        raise jafaal_exceptions.NotFoundError("Identity provider not found")
 
     update_data = idp_data.model_dump(exclude_unset=True)
 
@@ -220,10 +214,7 @@ def update_identity_provider(
         if new_slug != db_idp.slug:
             existing = get_identity_provider_by_slug(new_slug, db)
             if existing:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=(f"Identity provider with slug '{new_slug}' already exists"),
-                )
+                raise jafaal_exceptions.ConflictError(f"Identity provider with slug '{new_slug}' already exists")
 
     # Encrypt sensitive fields if present
     if update_data.get("client_id"):
@@ -255,23 +246,17 @@ def delete_identity_provider(idp_id: int, db: Session) -> None:
         db: SQLAlchemy database session.
 
     Raises:
-        HTTPException: 404 if the provider is not found, 409 if users
+        JafaalError: 404 if the provider is not found, 409 if users
             are linked to the provider, 500 on database errors.
     """
     db_idp = get_identity_provider(idp_id, db)
     if not db_idp:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Identity provider not found",
-        )
+        raise jafaal_exceptions.NotFoundError("Identity provider not found")
 
     # Check if any users are linked to this provider
     db_user_idp = jafaal_identity_links_crud.check_user_identity_providers_by_idp_id(idp_id, db)
     if db_user_idp:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Cannot delete identity provider with linked users",
-        )
+        raise jafaal_exceptions.ConflictError("Cannot delete identity provider with linked users")
 
     db.delete(db_idp)
     db.commit()

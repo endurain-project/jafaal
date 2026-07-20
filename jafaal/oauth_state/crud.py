@@ -29,7 +29,7 @@ def get_oauth_state_by_id_and_not_used(state_id: str, db: Session) -> oauth_stat
         None otherwise.
 
     Raises:
-        HTTPException: 500 error if database query fails.
+        JafaalError: 500 error if database query fails.
     """
     stmt = select(oauth_state_models.OAuthState).where(
         oauth_state_models.OAuthState.id == state_id,
@@ -56,7 +56,7 @@ def get_oauth_state_by_id(state_id: str, db: Session) -> oauth_state_models.OAut
         The matching OAuthState if found, None otherwise.
 
     Raises:
-        HTTPException: 500 error if database query fails.
+        JafaalError: 500 error if database query fails.
     """
     stmt = select(oauth_state_models.OAuthState).where(oauth_state_models.OAuthState.id == state_id)
     return db.execute(stmt).scalar_one_or_none()
@@ -75,7 +75,7 @@ def get_oauth_state_by_id_not_expired(state_id: str, db: Session) -> oauth_state
         None otherwise.
 
     Raises:
-        HTTPException: 500 error if database query fails.
+        JafaalError: 500 error if database query fails.
     """
     stmt = select(oauth_state_models.OAuthState).where(
         oauth_state_models.OAuthState.id == state_id,
@@ -104,7 +104,7 @@ def get_oauth_state_by_session_id(session_id: str, db: Session) -> oauth_state_m
         The linked OAuthState if found, None otherwise.
 
     Raises:
-        HTTPException: 500 error if database query fails.
+        JafaalError: 500 error if database query fails.
     """
     stmt = select(jafaal_sessions_models.UsersSessions).where(jafaal_sessions_models.UsersSessions.id == session_id)
     session = db.execute(stmt).scalar_one_or_none()
@@ -146,7 +146,7 @@ def create_oauth_state(
         The persisted OAuthState instance.
 
     Raises:
-        HTTPException: 500 error if database operation fails.
+        JafaalError: 500 error if database operation fails.
     """
     expires_at = datetime.now(UTC) + timedelta(minutes=10)
 
@@ -189,7 +189,7 @@ def mark_oauth_state_used(state_id: str, db: Session) -> bool:
         missing, expired, or already consumed.
 
     Raises:
-        HTTPException: 500 error if database operation fails.
+        JafaalError: 500 error if database operation fails.
     """
     stmt = (
         sa_update(oauth_state_models.OAuthState)
@@ -223,7 +223,7 @@ def delete_oauth_state(oauth_state_id: str, db: Session) -> int:
         Number of OAuth states deleted (0 or 1).
 
     Raises:
-        HTTPException: 500 error if database operation fails.
+        JafaalError: 500 error if database operation fails.
     """
     stmt = sa_delete(oauth_state_models.OAuthState).where(oauth_state_models.OAuthState.id == oauth_state_id)
     result: CursorResult[Any] = db.execute(stmt)
@@ -244,7 +244,7 @@ def delete_expired_oauth_states(db: Session) -> int:
         Number of OAuth states deleted.
 
     Raises:
-        HTTPException: 500 error if database operation fails.
+        JafaalError: 500 error if database operation fails.
     """
     stmt = sa_delete(oauth_state_models.OAuthState).where(oauth_state_models.OAuthState.expires_at < datetime.now(UTC))
     result: CursorResult[Any] = db.execute(stmt)

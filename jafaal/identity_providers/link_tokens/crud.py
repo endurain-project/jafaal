@@ -29,7 +29,7 @@ def get_idp_link_token_by_hash(token_hash: str, db: Session) -> idp_link_token_m
         None otherwise.
 
     Raises:
-        HTTPException: 500 error if database query fails.
+        JafaalError: 500 error if database query fails.
     """
     stmt = select(idp_link_token_models.IdpLinkToken).where(
         idp_link_token_models.IdpLinkToken.token_hash == token_hash,
@@ -53,7 +53,7 @@ def create_idp_link_token(
         The persisted IdpLinkToken instance.
 
     Raises:
-        HTTPException: 500 error if database operation fails.
+        JafaalError: 500 error if database operation fails.
     """
     db_token = idp_link_token_models.IdpLinkToken(**token_data.model_dump())
     db.add(db_token)
@@ -78,7 +78,7 @@ def mark_token_as_used(token_hash: str, db: Session) -> bool:
         missing, expired, or already consumed.
 
     Raises:
-        HTTPException: 500 error if database operation fails.
+        JafaalError: 500 error if database operation fails.
     """
     stmt = (
         sa_update(idp_link_token_models.IdpLinkToken)
@@ -109,7 +109,7 @@ def delete_expired_tokens(db: Session) -> int:
         Number of tokens deleted.
 
     Raises:
-        HTTPException: 500 error if database operation fails.
+        JafaalError: 500 error if database operation fails.
     """
     stmt = sa_delete(idp_link_token_models.IdpLinkToken).where(
         idp_link_token_models.IdpLinkToken.expires_at < datetime.now(UTC)

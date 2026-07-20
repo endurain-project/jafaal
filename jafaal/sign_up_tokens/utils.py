@@ -5,13 +5,10 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from fastapi import (
-    HTTPException,
-    status,
-)
 from sqlalchemy.orm import Session
 
 import jafaal._internal.user_guards as jafaal_user_guards
+import jafaal.exceptions as jafaal_exceptions
 import jafaal.password_policy as jafaal_password_policy
 import jafaal.ports as jafaal_ports
 import jafaal.schema as jafaal_schema
@@ -157,7 +154,7 @@ async def notify_signup_approved(user_id: int, db: Session) -> None:
         db: Active SQLAlchemy session.
 
     Raises:
-        HTTPException: 404 if the user does not exist.
+        JafaalError: 404 if the user does not exist.
     """
     user = jafaal_user_guards.get_user_by_id_or_404(user_id, db)
     event = jafaal_ports.SignupApproved(
@@ -184,8 +181,8 @@ def use_sign_up_token(token: str, db: Session) -> int:
         The user ID associated with the token.
 
     Raises:
-        HTTPException: 400 if the token is invalid or expired.
-        HTTPException: 500 if an unexpected error occurs.
+        JafaalError: 400 if the token is invalid or expired.
+        JafaalError: 500 if an unexpected error occurs.
     """
     # Hash the provided token to find the database record
     token_hash = token_hashing.sha256_hex(token)
@@ -194,10 +191,7 @@ def use_sign_up_token(token: str, db: Session) -> int:
     db_token = sign_up_tokens_crud.get_sign_up_token_by_hash(token_hash, db)
 
     if not db_token:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid or expired sign up token",
-        )
+        raise jafaal_exceptions.InvalidRequestError("Invalid or expired sign up token")
 
     try:
         # Mark token as used
@@ -205,14 +199,11 @@ def use_sign_up_token(token: str, db: Session) -> int:
 
         # Return the associated user ID
         return db_token.user_id
-    except HTTPException as http_err:
-        raise http_err
+    except jafaal_exceptions.JafaalError:
+        raise
     except Exception as err:
         logger.error(f"Error in use_sign_up_token: {err}", exc_info=err)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal Server Error",
-        ) from err
+        raise jafaal_exceptions.InternalError() from err
 
 
 def delete_invalid_tokens_from_db() -> None:

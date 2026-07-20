@@ -34,7 +34,7 @@ import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Annotated, Protocol, runtime_checkable
 
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, Request
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -47,6 +47,7 @@ import jafaal._internal.user_guards as jafaal_user_guards
 import jafaal.api_keys.crud as jafaal_api_keys_crud
 import jafaal.api_keys.utils as jafaal_api_keys_utils
 import jafaal.credentials.crud as jafaal_credentials_crud
+import jafaal.exceptions as jafaal_exceptions
 import jafaal.mfa.crud as jafaal_mfa_crud
 import jafaal.orm as jafaal_orm
 import jafaal.ports as jafaal_ports
@@ -90,7 +91,7 @@ class IdentityService(Protocol):
     """Typed contract for the auth boundary.
 
     All methods except :meth:`check_scope` may raise
-    :class:`~fastapi.HTTPException` on invalid or expired
+    :class:`~jafaal.exceptions.JafaalError` on invalid or expired
     credentials. Methods delegate database operations to auth
     CRUD helpers, including those helpers' commit behaviour.
     """
@@ -111,7 +112,7 @@ class IdentityService(Protocol):
                 :class:`~auth.principal.PasswordCred`.
 
         Raises:
-            HTTPException: 401 if the credentials are
+            JafaalError: 401 if the credentials are
                 invalid or the account does not exist.
         """
         ...
@@ -131,7 +132,7 @@ class IdentityService(Protocol):
                 :class:`~auth.principal.AccessTokenCred`.
 
         Raises:
-            HTTPException: 401 if the token is expired,
+            JafaalError: 401 if the token is expired,
                 invalid, or the user is not found.
         """
         ...
@@ -155,7 +156,7 @@ class IdentityService(Protocol):
                 :class:`~auth.principal.ApiKeyCred`.
 
         Raises:
-            HTTPException: 401 if the key is not found,
+            JafaalError: 401 if the key is not found,
                 revoked, or expired.
         """
         ...
@@ -175,7 +176,7 @@ class IdentityService(Protocol):
                 :class:`~auth.principal.SessionCookieCred`.
 
         Raises:
-            HTTPException: 401 if the session is not
+            JafaalError: 401 if the session is not
                 found or has expired.
         """
         ...
@@ -213,7 +214,7 @@ class IdentityService(Protocol):
                 prevent cross-user revocations).
 
         Raises:
-            HTTPException: 404 if the session is not
+            JafaalError: 404 if the session is not
                 found for this user.
         """
         ...
@@ -231,7 +232,7 @@ class IdentityService(Protocol):
                 be present in ``principal.scopes``.
 
         Raises:
-            HTTPException: 403 if any required scope is
+            JafaalError: 403 if any required scope is
                 missing.
         """
         ...
@@ -253,7 +254,7 @@ class IdentityService(Protocol):
             Secure password hash.
 
         Raises:
-            HTTPException: 400 if the password policy fails.
+            JafaalError: 400 if the password policy fails.
         """
         ...
 
@@ -422,7 +423,7 @@ class IdentityService(Protocol):
             None.
 
         Raises:
-            HTTPException: If step-up verification or persistence fails.
+            JafaalError: If step-up verification or persistence fails.
         """
         ...
 
@@ -437,7 +438,7 @@ class IdentityService(Protocol):
             None.
 
         Raises:
-            HTTPException: If password persistence fails.
+            JafaalError: If password persistence fails.
         """
         ...
 
@@ -498,7 +499,7 @@ class IdentityService(Protocol):
             Confirmation payload including backup codes.
 
         Raises:
-            HTTPException: If step-up or verification fails.
+            JafaalError: If step-up or verification fails.
         """
         ...
 
@@ -519,7 +520,7 @@ class IdentityService(Protocol):
             Confirmation payload.
 
         Raises:
-            HTTPException: If step-up verification fails.
+            JafaalError: If step-up verification fails.
         """
         ...
 
@@ -534,7 +535,7 @@ class IdentityService(Protocol):
             Confirmation payload.
 
         Raises:
-            HTTPException: If the code is invalid.
+            JafaalError: If the code is invalid.
         """
         ...
 
@@ -555,7 +556,7 @@ class IdentityService(Protocol):
             Newly generated backup codes.
 
         Raises:
-            HTTPException: If MFA is disabled or step-up fails.
+            JafaalError: If MFA is disabled or step-up fails.
         """
         ...
 
@@ -580,7 +581,7 @@ class IdentityService(Protocol):
             The generated one-time link token.
 
         Raises:
-            HTTPException: If step-up fails, the IdP is missing/disabled, or
+            JafaalError: If step-up fails, the IdP is missing/disabled, or
                 already linked.
         """
         ...
@@ -604,7 +605,7 @@ class IdentityService(Protocol):
             None.
 
         Raises:
-            HTTPException: If step-up fails, the link is missing, or unlinking
+            JafaalError: If step-up fails, the link is missing, or unlinking
                 would remove the last authentication method.
         """
         ...
@@ -638,7 +639,7 @@ class IdentityService(Protocol):
             None.
 
         Raises:
-            HTTPException: If the IdP or the link is missing.
+            JafaalError: If the IdP or the link is missing.
         """
         ...
 
@@ -659,7 +660,7 @@ class IdentityService(Protocol):
             The user ID encoded in the token.
 
         Raises:
-            HTTPException: 401/400/409 on invalid, replayed, or conflicting tokens.
+            JafaalError: 401/400/409 on invalid, replayed, or conflicting tokens.
         """
         ...
 
@@ -765,7 +766,7 @@ class DefaultIdentityService:
                 :class:`~auth.principal.PasswordCred`.
 
         Raises:
-            HTTPException: 401 if the credentials are
+            JafaalError: 401 if the credentials are
                 invalid or the account does not exist.
         """
         user = jafaal_utils.authenticate_user(
@@ -795,31 +796,22 @@ class DefaultIdentityService:
                 :class:`~auth.principal.AccessTokenCred`.
 
         Raises:
-            HTTPException: 401 if the token is expired,
+            JafaalError: 401 if the token is expired,
                 invalid, or the user is not found.
         """
         self._token_manager.validate_access_expiration_logged(access_token)
 
         sub = self._token_manager.get_token_claim(access_token, "sub")
         if not isinstance(sub, int):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token: 'sub' claim must be an integer",
-            )
+            raise jafaal_exceptions.InvalidTokenError("Invalid token: 'sub' claim must be an integer")
 
         scope = self._token_manager.get_token_claim(access_token, "scope")
         if not isinstance(scope, list):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token: 'scope' claim must be a list",
-            )
+            raise jafaal_exceptions.InvalidTokenError("Invalid token: 'scope' claim must be a list")
 
         sid = self._token_manager.get_token_claim(access_token, "sid")
         if not isinstance(sid, str):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=("Invalid token: 'sid' claim must be a string"),
-            )
+            raise jafaal_exceptions.InvalidTokenError("Invalid token: 'sid' claim must be a string")
 
         user = jafaal_user_guards.get_user_by_id_or_404(sub, self._db)
         jafaal_user_guards.check_user_is_active(user)
@@ -849,7 +841,7 @@ class DefaultIdentityService:
                 :class:`~auth.principal.ApiKeyCred`.
 
         Raises:
-            HTTPException: 401 if the key is not found,
+            JafaalError: 401 if the key is not found,
                 revoked, or expired.
         """
         computed_hash = jafaal_api_keys_utils.hash_api_key(raw_key)
@@ -862,28 +854,16 @@ class DefaultIdentityService:
             db_key = None
 
         if db_key is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid API key",
-                headers={"WWW-Authenticate": "ApiKey"},
-            )
+            raise jafaal_exceptions.InvalidApiKeyError("Invalid API key")
 
         user = jafaal_user_guards.get_user_by_id_or_404(db_key.user_id, self._db)
         jafaal_user_guards.check_user_is_active(user)
 
         if not db_key.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="API key has been revoked",
-                headers={"WWW-Authenticate": "ApiKey"},
-            )
+            raise jafaal_exceptions.InvalidApiKeyError("API key has been revoked")
 
         if db_key.expires_at is not None and datetime.now(UTC) > db_key.expires_at:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="API key has expired",
-                headers={"WWW-Authenticate": "ApiKey"},
-            )
+            raise jafaal_exceptions.InvalidApiKeyError("API key has expired")
 
         # Best-effort last_used_at update; never fails the request.
         try:
@@ -926,16 +906,12 @@ class DefaultIdentityService:
                 :class:`~auth.principal.SessionCookieCred`.
 
         Raises:
-            HTTPException: 401 if the session is not
+            JafaalError: 401 if the session is not
                 found or has expired.
         """
         db_session = jafaal_sessions_crud.get_session_by_id_not_expired(session_id, self._db)
         if db_session is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Session not found or expired",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+            raise jafaal_exceptions.SessionExpiredError("Session not found or expired")
 
         user = jafaal_user_guards.get_user_by_id_or_404(db_session.user_id, self._db)
         jafaal_user_guards.check_user_is_active(user)
@@ -979,7 +955,7 @@ class DefaultIdentityService:
                 prevent cross-user revocations).
 
         Raises:
-            HTTPException: 404 if the session is not
+            JafaalError: 404 if the session is not
                 found for this user.
         """
         jafaal_sessions_crud.delete_session(session_id, user_id, self._db)
@@ -997,14 +973,14 @@ class DefaultIdentityService:
                 be present in ``principal.scopes``.
 
         Raises:
-            HTTPException: 403 if any required scope is
+            JafaalError: 403 if any required scope is
                 missing.
         """
         missing = required_scopes - principal.scopes
         if missing:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=(f"Unauthorized Access - Missing permissions: {missing}"),
+            raise jafaal_exceptions.MissingScopeError(
+                f"Unauthorized Access - Missing permissions: {missing}",
+                missing=missing,
             )
 
     def validate_and_hash_password(
@@ -1024,19 +1000,13 @@ class DefaultIdentityService:
             Secure password hash.
 
         Raises:
-            HTTPException: 400 if the password policy fails.
+            PasswordPolicyError: 422 if the password fails the configured policy.
         """
-        try:
-            self._password_hasher.validate_password(
-                password,
-                min_length,
-                password_type,
-            )
-        except jafaal_password_hasher.PasswordPolicyError as err:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=str(err),
-            ) from err
+        self._password_hasher.validate_password(
+            password,
+            min_length,
+            password_type,
+        )
         return self._password_hasher.hash_password(password)
 
     def hash_password(self, password: str) -> str:

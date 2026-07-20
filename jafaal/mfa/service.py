@@ -24,10 +24,10 @@ from typing import TYPE_CHECKING
 
 import pyotp
 import qrcode
-from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 import jafaal._internal.user_guards as jafaal_user_guards
+import jafaal.exceptions as jafaal_exceptions
 import jafaal.mfa.backup_codes.crud as mfa_backup_codes_crud
 import jafaal.mfa.backup_codes.utils as mfa_backup_codes_utils
 import jafaal.mfa.crud as jafaal_mfa_crud
@@ -121,15 +121,13 @@ def setup_user_mfa(user_id: int, db: Session) -> mfa_schema.MFASetupResponse:
         MFA setup response with secret and QR code.
 
     Raises:
-        HTTPException: If user not found or MFA already enabled.
+        NotFoundError: If the user is not found.
+        InvalidRequestError: If MFA is already enabled.
     """
     user = jafaal_user_guards.get_user_by_id_or_404(user_id, db)
 
     if user.mfa_enabled:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="MFA is already enabled for this user",
-        )
+        raise jafaal_exceptions.InvalidRequestError("MFA is already enabled for this user")
 
     secret = generate_totp_secret()
     app_name = jafaal_settings.get_settings().app_name
@@ -159,27 +157,23 @@ def enable_user_mfa(
         List of generated backup codes.
 
     Raises:
-        HTTPException: If user not found, MFA already enabled, code
-            invalid, or encryption fails.
+        NotFoundError: If the user is not found.
+        InvalidRequestError: If MFA is already enabled.
+        InvalidMFACodeError: If the verification code is invalid.
+        InternalError: If encryption of the MFA secret fails.
     """
     user = jafaal_user_guards.get_user_by_id_or_404(user_id, db)
 
     if user.mfa_enabled:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="MFA is already enabled for this user",
-        )
+        raise jafaal_exceptions.InvalidRequestError("MFA is already enabled for this user")
 
     if not verify_totp(secret, mfa_code):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid MFA code")
+        raise jafaal_exceptions.InvalidMFACodeError()
 
     encrypted_secret = crypto.encrypt_token_fernet(secret)
 
     if not encrypted_secret:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to encrypt MFA secret",
-        )
+        raise jafaal_exceptions.InternalError("Failed to encrypt MFA secret")
 
     jafaal_mfa_crud.update_user_mfa(user_id, db, encrypted_secret=encrypted_secret)
 
@@ -205,16 +199,13 @@ def disable_user_mfa(user_id: int, db: Session) -> None:
         db: Database session.
 
     Raises:
-        HTTPException: 404 if the user is not found, 400 if MFA
-            is not currently enabled.
+        NotFoundError: If the user is not found.
+        InvalidRequestError: If MFA is not currently enabled.
     """
     user = jafaal_user_guards.get_user_by_id_or_404(user_id, db)
 
     if not user.mfa_enabled:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="MFA is not enabled for this user",
-        )
+        raise jafaal_exceptions.InvalidRequestError("MFA is not enabled for this user")
 
     jafaal_mfa_crud.update_user_mfa(user_id, db)
     mfa_backup_codes_crud.delete_user_backup_codes(user_id, db)
@@ -239,7 +230,7 @@ def verify_user_mfa(
         True if code is valid, False otherwise.
 
     Raises:
-        HTTPException: If user not found.
+        NotFoundError: If the user is not found.
 
     Notes:
         - First tries TOTP verification (6 digits)
@@ -305,10 +296,8 @@ def is_mfa_enabled_for_user(user_id: int, db: Session) -> bool:
     """
     try:
         user = jafaal_user_guards.get_user_by_id_or_404(user_id, db)
-    except HTTPException as err:
-        if err.status_code == status.HTTP_404_NOT_FOUND:
-            return False
-        raise
+    except jafaal_exceptions.NotFoundError:
+        return False
 
     if not user:
         return False

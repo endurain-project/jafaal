@@ -75,7 +75,7 @@ def store_rotated_token(
             refresh token.
 
     Raises:
-        HTTPException: If storage fails.
+        JafaalError: If storage fails.
     """
     now = datetime.now(UTC)
     expires_at = now + timedelta(seconds=TOKEN_REUSE_GRACE_PERIOD_SECONDS)
@@ -114,7 +114,7 @@ def check_token_reuse(raw_token: str, db: Session) -> tuple[bool, bool]:
             - (True, False): Reused after grace period - THEFT!
 
     Raises:
-        HTTPException: If lookup fails.
+        JafaalError: If lookup fails.
     """
     # Use HMAC-SHA256 for deterministic lookup
     hashed_token = hmac_hash_token(raw_token)
@@ -168,7 +168,7 @@ def get_grace_replay_token(raw_token: str, db: Session) -> tuple[str, datetime] 
         in-grace record with a stored replacement exists, else None.
 
     Raises:
-        HTTPException: If lookup or decryption fails.
+        JafaalError: If lookup or decryption fails.
     """
     hashed_token = hmac_hash_token(raw_token)
     rotated_token = rotated_token_crud.get_rotated_token_by_hash(hashed_token, db)
@@ -203,7 +203,7 @@ def invalidate_token_family(token_family_id: str, db: Session) -> int:
         Number of sessions invalidated.
 
     Raises:
-        HTTPException: If invalidation fails.
+        JafaalError: If invalidation fails.
     """
     # Delete all sessions in the family
     num_sessions_deleted = jafaal_sessions_crud.delete_sessions_by_family(token_family_id, db)

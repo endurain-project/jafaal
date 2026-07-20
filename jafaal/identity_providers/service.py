@@ -10,7 +10,7 @@ from typing import Any
 
 import httpx
 from authlib.integrations.httpx_client import AsyncOAuth2Client
-from fastapi import HTTPException, Request, status
+from fastapi import Request
 from joserfc import jwt
 from joserfc.errors import (
     BadSignatureError,
@@ -23,6 +23,7 @@ from joserfc.jwk import ECKey, OctKey, RSAKey
 from sqlalchemy.orm import Session
 
 import jafaal._internal.password_hasher as jafaal_password_hasher
+import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_providers.crud as idp_crud
 import jafaal.identity_providers.links.crud as jafaal_identity_links_crud
 import jafaal.identity_providers.links.models as jafaal_identity_links_models
@@ -162,7 +163,7 @@ class IdentityProviderService:
             A dictionary containing the JWKS response with 'keys' array
 
         Raises:
-            HTTPException: If the JWKS cannot be fetched (network errors, timeouts, invalid JSON)
+            JafaalError: If the JWKS cannot be fetched (network errors, timeouts, invalid JSON)
 
         Example JWKS response:
         {
@@ -208,10 +209,7 @@ class IdentityProviderService:
             # Validate JWKS structure
             if not isinstance(jwks, dict) or "keys" not in jwks:
                 logger.error(f"Invalid JWKS format from {jwks_uri}: missing 'keys' array")
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail="Identity provider returned invalid JWKS format",
-                )
+                raise jafaal_exceptions.IdentityProviderError("Identity provider returned invalid JWKS format")
 
             # Cache the JWKS with timestamp
             self._jwks_cache[jwks_uri] = {"jwks": jwks, "cached_at": now}
@@ -223,28 +221,20 @@ class IdentityProviderService:
 
         except httpx.TimeoutException as err:
             logger.error(f"Timeout fetching JWKS from {jwks_uri}: {err}", exc_info=err)
-            raise HTTPException(
-                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                detail="Timeout retrieving signing keys from identity provider",
+            raise jafaal_exceptions.IdentityProviderTimeoutError(
+                "Timeout retrieving signing keys from identity provider"
             ) from err
         except httpx.HTTPStatusError as err:
             logger.error(f"HTTP error fetching JWKS from {jwks_uri}: {err.response.status_code}", exc_info=err)
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Identity provider JWKS endpoint returned error: {err.response.status_code}",
+            raise jafaal_exceptions.IdentityProviderError(
+                f"Identity provider JWKS endpoint returned error: {err.response.status_code}"
             ) from err
         except json.JSONDecodeError as err:
             logger.error(f"Invalid JSON in JWKS response from {jwks_uri}: {err}", exc_info=err)
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Identity provider returned invalid JWKS JSON",
-            ) from err
+            raise jafaal_exceptions.IdentityProviderError("Identity provider returned invalid JWKS JSON") from err
         except Exception as err:
             logger.error(f"Unexpected error fetching JWKS from {jwks_uri}: {err}", exc_info=err)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to retrieve signing keys from identity provider",
-            ) from err
+            raise jafaal_exceptions.InternalError("Failed to retrieve signing keys from identity provider") from err
 
     async def _verify_id_token(
         self,
@@ -279,7 +269,7 @@ class IdentityProviderService:
             Dictionary containing the verified JWT claims (sub, email, name, etc.)
 
         Raises:
-            HTTPException: If verification fails (invalid signature, expired token, claim mismatch)
+            JafaalError: If verification fails (invalid signature, expired token, claim mismatch)
 
         Security Notes:
             - BadSignatureError: Token was tampered with or signed by wrong key
@@ -293,10 +283,7 @@ class IdentityProviderService:
             parts = id_token.split(".")
             if len(parts) != 3:
                 logger.warning(f"Invalid JWT format: expected 3 parts, got {len(parts)}")
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid ID token format",
-                )
+                raise jafaal_exceptions.InvalidTokenError("Invalid ID token format")
 
             # Decode header (first part) to get 'kid' and 'alg'
             header_b64 = parts[0]
@@ -313,17 +300,11 @@ class IdentityProviderService:
 
             if not kid:
                 logger.warning("ID token header missing 'kid' claim")
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="ID token missing key identifier",
-                )
+                raise jafaal_exceptions.InvalidTokenError("ID token missing key identifier")
 
             if not alg:
                 logger.warning("ID token header missing 'alg' claim")
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="ID token missing algorithm",
-                )
+                raise jafaal_exceptions.InvalidTokenError("ID token missing algorithm")
 
             # Reject disallowed algorithms before importing the key.
             # This blocks ``alg=none`` and symmetric ``HS*`` algorithms,
@@ -331,10 +312,7 @@ class IdentityProviderService:
             # key-confusion attacks against the public JWKS keys.
             if alg not in ID_TOKEN_ALLOWED_ALGORITHMS:
                 logger.warning(f"ID token uses disallowed algorithm: {alg}")
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="ID token uses an unsupported signature algorithm",
-                )
+                raise jafaal_exceptions.InvalidTokenError("ID token uses an unsupported signature algorithm")
 
             logger.debug(f"ID token header: kid={kid}, alg={alg}")
 
@@ -350,10 +328,7 @@ class IdentityProviderService:
 
             if not matching_key:
                 logger.warning(f"No matching key found in JWKS for kid={kid}")
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="ID token signed with unknown key",
-                )
+                raise jafaal_exceptions.InvalidTokenError("ID token signed with unknown key")
 
             logger.debug(f"Found matching key in JWKS: kid={kid}, kty={matching_key.get('kty')}")
 
@@ -368,10 +343,7 @@ class IdentityProviderService:
                 key = OctKey.import_key(matching_key)
             else:
                 logger.warning(f"Unsupported key type in JWKS: {key_type}")
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail=f"Unsupported key type: {key_type}",
-                )
+                raise jafaal_exceptions.InvalidTokenError(f"Unsupported key type: {key_type}")
 
             # Step 5: Verify signature and decode claims
             # joserfc will verify the signature using the public key.
@@ -406,57 +378,36 @@ class IdentityProviderService:
                 token_nonce = claims.get("nonce")
                 if not token_nonce:
                     logger.warning("ID token missing nonce claim but nonce was expected")
-                    raise HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail="ID token missing nonce",
-                    )
+                    raise jafaal_exceptions.InvalidTokenError("ID token missing nonce")
 
                 if token_nonce != expected_nonce:
                     logger.warning(f"ID token nonce mismatch: expected {expected_nonce}, got {token_nonce}")
-                    raise HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail="ID token nonce mismatch",
-                    )
+                    raise jafaal_exceptions.InvalidTokenError("ID token nonce mismatch")
 
             # Return verified claims
             return claims
 
         except BadSignatureError as err:
             logger.warning(f"ID token signature verification failed: {err}", exc_info=err)
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="ID token signature is invalid",
-            ) from err
+            raise jafaal_exceptions.InvalidTokenError("ID token signature is invalid") from err
         except ExpiredTokenError as err:
             logger.warning(f"ID token has expired: {err}", exc_info=err)
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="ID token has expired") from err
+            raise jafaal_exceptions.TokenExpiredError("ID token has expired") from err
         except InvalidClaimError as err:
             logger.warning(f"ID token claim validation failed: {err}", exc_info=err)
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=f"ID token claim validation failed: {err}",
-            ) from err
+            raise jafaal_exceptions.InvalidTokenError(f"ID token claim validation failed: {err}") from err
         except MissingClaimError as err:
             logger.warning(f"ID token missing required claim: {err}", exc_info=err)
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=f"ID token missing required claim: {err}",
-            ) from err
+            raise jafaal_exceptions.InvalidTokenError(f"ID token missing required claim: {err}") from err
         except InvalidPayloadError as err:
             logger.warning(f"ID token payload is invalid: {err}", exc_info=err)
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="ID token payload is invalid",
-            ) from err
-        except HTTPException:
-            # Re-raise HTTPExceptions from _fetch_jwks or our own validations
+            raise jafaal_exceptions.InvalidTokenError("ID token payload is invalid") from err
+        except jafaal_exceptions.JafaalError:
+            # Re-raise JafaalErrors from _fetch_jwks or our own validations
             raise
         except Exception as err:
             logger.error(f"Unexpected error verifying ID token: {err}", exc_info=err)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to verify ID token",
-            ) from err
+            raise jafaal_exceptions.InternalError("Failed to verify ID token") from err
 
     async def get_oidc_configuration(self, idp: idp_models.IdentityProvider) -> dict[str, Any] | None:
         """
@@ -517,7 +468,7 @@ class IdentityProviderService:
         except httpx.RequestError as err:
             logger.warning(f"Request error fetching OIDC discovery for {idp.name}. URL: {discovery_url}. Error: {err}")
             return None
-        except HTTPException as err:
+        except jafaal_exceptions.JafaalError as err:
             # SSRF guard or other 4xx from reject_private_url.
             # Log with an actionable hint for the operator
             # so they know about the SSRF_ALLOWED_HOSTS
@@ -561,7 +512,7 @@ class IdentityProviderService:
             str: The decrypted client ID.
 
         Raises:
-            HTTPException: If decryption fails or returns an empty value, an HTTP 500 error is raised.
+            JafaalError: If decryption fails or returns an empty value, an HTTP 500 error is raised.
         """
         try:
             client_id = crypto.decrypt_token_fernet(idp.client_id)
@@ -570,9 +521,8 @@ class IdentityProviderService:
             return client_id
         except Exception as err:
             logger.error(f"Failed to decrypt client ID for IdP {idp.name}: {err}", exc_info=err)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Identity provider {idp.name} configuration error. Please contact administrator.",
+            raise jafaal_exceptions.InternalError(
+                f"Identity provider {idp.name} configuration error. Please contact administrator."
             ) from err
 
     def _decrypt_client_secret(self, idp: idp_models.IdentityProvider) -> str:
@@ -589,11 +539,11 @@ class IdentityProviderService:
             str: The decrypted client secret.
 
         Raises:
-            HTTPException: If decryption fails or returns empty value (500 Internal Server Error).
+            JafaalError: If decryption fails or returns empty value (500 Internal Server Error).
 
         Security Note:
             - Decrypted secret only exists in function scope (not logged)
-            - Raises HTTPException to prevent OAuth flows with invalid credentials
+            - Raises JafaalError to prevent OAuth flows with invalid credentials
         """
         try:
             client_secret = crypto.decrypt_token_fernet(idp.client_secret)
@@ -602,9 +552,8 @@ class IdentityProviderService:
             return client_secret
         except Exception as err:
             logger.error(f"Failed to decrypt client secret for IdP {idp.name}: {err}", exc_info=err)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Identity provider {idp.name} configuration error. Please contact administrator.",
+            raise jafaal_exceptions.InternalError(
+                f"Identity provider {idp.name} configuration error. Please contact administrator."
             ) from err
 
     async def _resolve_token_endpoint(self, idp: idp_models.IdentityProvider) -> str:
@@ -621,7 +570,7 @@ class IdentityProviderService:
             str: The token endpoint URL.
 
         Raises:
-            HTTPException: If token endpoint cannot be resolved (500 Internal Server Error).
+            JafaalError: If token endpoint cannot be resolved (500 Internal Server Error).
 
         Note:
             - Manual configuration (idp.token_endpoint) takes precedence
@@ -641,14 +590,11 @@ class IdentityProviderService:
                 # Continue - will raise below if still no endpoint
 
         if not token_endpoint:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=(
-                    f"Identity provider {idp.name} token endpoint could "
-                    "not be resolved. Verify the issuer URL is reachable; "
-                    "if it is on a private network, add its host or CIDR "
-                    "to SSRF_ALLOWED_HOSTS."
-                ),
+            raise jafaal_exceptions.IdentityProviderError(
+                f"Identity provider {idp.name} token endpoint could "
+                "not be resolved. Verify the issuer URL is reachable; "
+                "if it is on a private network, add its host or CIDR "
+                "to SSRF_ALLOWED_HOSTS."
             )
 
         # SSRF guard: the token endpoint can come from admin config or from
@@ -716,7 +662,7 @@ class IdentityProviderService:
             str: The authorization URL to which the user should be redirected to initiate login.
 
         Raises:
-            HTTPException: If the identity provider is not properly configured or if an error occurs during initiation.
+            JafaalError: If the identity provider is not properly configured or if an error occurs during initiation.
         """
         try:
             client_id = self._decrypt_client_id(idp)
@@ -731,30 +677,21 @@ class IdentityProviderService:
                     authorization_endpoint = config.get("authorization_endpoint")
 
             if not authorization_endpoint:
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=(
-                        f"Identity provider {idp.name} authorization "
-                        "endpoint could not be resolved. Verify the "
-                        "issuer URL is reachable; if it is on a "
-                        "private network, add its host or CIDR to "
-                        "SSRF_ALLOWED_HOSTS."
-                    ),
+                raise jafaal_exceptions.IdentityProviderError(
+                    f"Identity provider {idp.name} authorization "
+                    "endpoint could not be resolved. Verify the "
+                    "issuer URL is reachable; if it is on a "
+                    "private network, add its host or CIDR to "
+                    "SSRF_ALLOWED_HOSTS."
                 )
 
             # Retrieve database-backed OAuth state (mandatory for all clients)
             if not oauth_state_id:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="OAuth state ID is required (PKCE mandatory)",
-                )
+                raise jafaal_exceptions.InternalError("OAuth state ID is required (PKCE mandatory)")
 
             oauth_state_obj = oauth_state_crud.get_oauth_state_by_id_and_not_used(oauth_state_id, db)
             if not oauth_state_obj:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="OAuth state not found",
-                )
+                raise jafaal_exceptions.InternalError("OAuth state not found")
 
             state = oauth_state_id
             nonce = oauth_state_obj.nonce
@@ -769,14 +706,11 @@ class IdentityProviderService:
 
             return authorization_url
 
-        except HTTPException:
+        except jafaal_exceptions.JafaalError:
             raise
         except Exception as err:
             logger.error(f"Error initiating OAuth login for IdP {idp.name}: {err}", exc_info=err)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to initiate SSO login",
-            ) from err
+            raise jafaal_exceptions.InternalError("Failed to initiate SSO login") from err
 
     async def initiate_link(
         self,
@@ -804,7 +738,7 @@ class IdentityProviderService:
             str: The authorization URL to redirect the user to for identity provider authentication.
 
         Raises:
-            HTTPException:
+            JafaalError:
                 - 500 status code if the identity provider is not properly configured (missing
                   authorization endpoint).
                 - 500 status code if OAuth state ID is missing or invalid.
@@ -828,37 +762,25 @@ class IdentityProviderService:
                     authorization_endpoint = config.get("authorization_endpoint")
 
             if not authorization_endpoint:
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=(
-                        f"Identity provider {idp.name} authorization "
-                        "endpoint could not be resolved. Verify the "
-                        "issuer URL is reachable; if it is on a "
-                        "private network, add its host or CIDR to "
-                        "SSRF_ALLOWED_HOSTS."
-                    ),
+                raise jafaal_exceptions.IdentityProviderError(
+                    f"Identity provider {idp.name} authorization "
+                    "endpoint could not be resolved. Verify the "
+                    "issuer URL is reachable; if it is on a "
+                    "private network, add its host or CIDR to "
+                    "SSRF_ALLOWED_HOSTS."
                 )
 
             # Retrieve database-backed OAuth state (required for link mode)
             if not oauth_state_id:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="OAuth state ID is required for secure linking",
-                )
+                raise jafaal_exceptions.InternalError("OAuth state ID is required for secure linking")
 
             oauth_state_obj = oauth_state_crud.get_oauth_state_by_id_and_not_used(oauth_state_id, db)
             if not oauth_state_obj:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="OAuth state not found",
-                )
+                raise jafaal_exceptions.InternalError("OAuth state not found")
 
             # Validate user_id matches (security check for link mode)
             if oauth_state_obj.user_id != user_id:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="OAuth state user mismatch",
-                )
+                raise jafaal_exceptions.InternalError("OAuth state user mismatch")
 
             state = oauth_state_id
             nonce = oauth_state_obj.nonce
@@ -873,14 +795,11 @@ class IdentityProviderService:
 
             return authorization_url
 
-        except HTTPException:
+        except jafaal_exceptions.JafaalError:
             raise
         except Exception as err:
             logger.error(f"Error initiating OAuth link for IdP {idp.name}, user {user_id}: {err}", exc_info=err)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to initiate identity provider linking",
-            ) from err
+            raise jafaal_exceptions.InternalError("Failed to initiate identity provider linking") from err
 
     async def handle_callback(
         self,
@@ -916,7 +835,7 @@ class IdentityProviderService:
                 - mode (optional): "link" if this was a link operation (not present for login)
 
         Raises:
-            HTTPException: With appropriate status codes for various error conditions:
+            JafaalError: With appropriate status codes for various error conditions:
                 - 400 BAD_REQUEST: Invalid/expired state, missing parameters, user ID mismatch
                 - 404 NOT_FOUND: User not found during link mode
                 - 409 CONFLICT: IdP account already linked to a user
@@ -995,9 +914,8 @@ class IdentityProviderService:
                 token_response = await client.fetch_token(token_endpoint, grant_type="authorization_code", code=code)
             except httpx.TimeoutException as err:
                 logger.error(f"Timeout connecting to IdP {idp.name} token endpoint: {err}", exc_info=err)
-                raise HTTPException(
-                    status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                    detail=f"Identity provider {idp.name} is not responding. Please try again later.",
+                raise jafaal_exceptions.IdentityProviderTimeoutError(
+                    f"Identity provider {idp.name} is not responding. Please try again later."
                 ) from err
             except httpx.HTTPStatusError as err:
                 logger.error(
@@ -1012,22 +930,15 @@ class IdentityProviderService:
                 else:
                     detail = f"Identity provider {idp.name} returned an error. Please try again later."
 
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=detail,
-                ) from err
+                raise jafaal_exceptions.IdentityProviderError(detail) from err
             except httpx.RequestError as err:
                 logger.error(f"Network error connecting to IdP {idp.name}: {err}", exc_info=err)
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=f"Unable to connect to identity provider {idp.name}. Please check your network connection.",
+                raise jafaal_exceptions.IdentityProviderError(
+                    f"Unable to connect to identity provider {idp.name}. Please check your network connection."
                 ) from err
             except Exception as err:
                 logger.error(f"Unexpected error during token exchange with IdP {idp.name}: {err}", exc_info=err)
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Failed to complete authentication. Please try again.",
-                ) from err
+                raise jafaal_exceptions.InternalError("Failed to complete authentication. Please try again.") from err
 
             # Get user information with ID token verification
             userinfo = await self._get_userinfo(
@@ -1044,9 +955,8 @@ class IdentityProviderService:
             subject = userinfo.get("sub") or userinfo.get("id")
             if not subject:
                 logger.error(f"IdP {idp.name} did not provide 'sub' or 'id' claim in userinfo: {list(userinfo.keys())}")
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=f"Identity provider {idp.name} did not provide required user identifier. Please contact administrator.",
+                raise jafaal_exceptions.IdentityProviderError(
+                    f"Identity provider {idp.name} did not provide required user identifier. Please contact administrator."
                 )
 
             # Handle link mode differently from login mode
@@ -1056,10 +966,7 @@ class IdentityProviderService:
                 # Verify user exists
                 user = jafaal_ports.get_user_repository().get_by_id(link_user_id, db)
                 if not user:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail="User not found",
-                    )
+                    raise jafaal_exceptions.NotFoundError("User not found")
 
                 # Check if this IdP subject is already linked to ANY user
                 existing_link = jafaal_identity_links_crud.get_user_identity_provider_by_subject_and_idp_id(
@@ -1068,15 +975,13 @@ class IdentityProviderService:
                 if existing_link:
                     # Check if it's already linked to THIS user
                     if existing_link.user_id == link_user_id:
-                        raise HTTPException(
-                            status_code=status.HTTP_409_CONFLICT,
-                            detail=f"This {idp.name} account is already linked to your account",
+                        raise jafaal_exceptions.ConflictError(
+                            f"This {idp.name} account is already linked to your account"
                         )
                     else:
                         # Linked to a DIFFERENT user - security issue
-                        raise HTTPException(
-                            status_code=status.HTTP_409_CONFLICT,
-                            detail=f"This {idp.name} account is already linked to another user",
+                        raise jafaal_exceptions.ConflictError(
+                            f"This {idp.name} account is already linked to another user"
                         )
 
                 # Create the link
@@ -1117,15 +1022,14 @@ class IdentityProviderService:
                     "client_type": client_type,
                 }
 
-        except HTTPException:
-            # Re-raise HTTPExceptions as-is (already have proper status codes and messages)
+        except jafaal_exceptions.JafaalError:
+            # Re-raise JafaalErrors as-is (already have proper status codes and messages)
             raise
         except Exception as err:
             # Catch-all for unexpected errors
             logger.error(f"Unexpected error handling OAuth callback for IdP {idp.name}: {err}", exc_info=err)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"An unexpected error occurred during authentication with {idp.name}. Please try again or contact administrator.",
+            raise jafaal_exceptions.InternalError(
+                f"An unexpected error occurred during authentication with {idp.name}. Please try again or contact administrator."
             ) from err
 
     async def _get_userinfo(
@@ -1164,7 +1068,7 @@ class IdentityProviderService:
             dict[str, Any]: The user information claims retrieved from the identity provider.
 
         Raises:
-            HTTPException: If user information cannot be retrieved from either the userinfo endpoint or the ID token,
+            JafaalError: If user information cannot be retrieved from either the userinfo endpoint or the ID token,
                           or if ID token verification fails.
         """
         # Try to get from userinfo endpoint first
@@ -1231,16 +1135,13 @@ class IdentityProviderService:
                     # Only ID token available, return verified claims
                     return id_token_claims
 
-            except HTTPException:
+            except jafaal_exceptions.JafaalError:
                 # Re-raise verification errors (signature failed, expired, etc.)
                 # These are security-critical and should not be ignored
                 raise
             except Exception as err:
                 logger.error(f"Unexpected error verifying ID token: {err}", exc_info=err)
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Failed to verify ID token",
-                ) from err
+                raise jafaal_exceptions.InternalError("Failed to verify ID token") from err
 
         # If we got userinfo from endpoint but no ID token, return userinfo
         if userinfo_claims:
@@ -1255,9 +1156,8 @@ class IdentityProviderService:
 
         # If we get here, we couldn't retrieve or verify any user information
         logger.error("Failed to retrieve user information from userinfo endpoint or ID token")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Unable to retrieve user information from identity provider. Please contact administrator.",
+        raise jafaal_exceptions.InternalError(
+            "Unable to retrieve user information from identity provider. Please contact administrator."
         )
 
     async def _store_idp_tokens(
@@ -1428,7 +1328,7 @@ class IdentityProviderService:
             The found or newly created user instance.
 
         Raises:
-            HTTPException: If an existing account matches the email but the IdP
+            JafaalError: If an existing account matches the email but the IdP
                 did not assert a verified email (403), or if user creation is
                 disabled for the identity provider and no existing user is found.
         """
@@ -1441,10 +1341,7 @@ class IdentityProviderService:
             # relationship (link.users) and crossing the module boundary.
             user = jafaal_ports.get_user_repository().get_by_id(link.user_id, db)
             if user is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="User not found",
-                )
+                raise jafaal_exceptions.NotFoundError("User not found")
             # Update last login timestamp
             jafaal_identity_links_crud.update_user_identity_provider_last_login(link.user_id, idp.id, db)
 
@@ -1474,13 +1371,10 @@ class IdentityProviderService:
                         f"Refusing to link IdP {idp.name} to existing account "
                         f"{user.username}: provider did not assert a verified email"
                     )
-                    raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail=(
-                            "Cannot link this identity provider to an existing "
-                            "account because the provider did not verify the "
-                            "email address."
-                        ),
+                    raise jafaal_exceptions.AuthorizationError(
+                        "Cannot link this identity provider to an existing "
+                        "account because the provider did not verify the "
+                        "email address."
                     )
 
                 # Link existing account to IdP
@@ -1495,10 +1389,7 @@ class IdentityProviderService:
 
         # Create new user if auto-creation is enabled
         if not idp.auto_create_users:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="User account creation is disabled for this identity provider",
-            )
+            raise jafaal_exceptions.AuthorizationError("User account creation is disabled for this identity provider")
 
         user = await self._create_user_from_idp(idp, subject, mapped_data, db)
 
@@ -1530,7 +1421,7 @@ class IdentityProviderService:
             The newly created user.
 
         Raises:
-            HTTPException: If user creation fails (e.g. duplicate username/email).
+            JafaalError: If user creation fails (e.g. duplicate username/email).
         """
         repo = jafaal_ports.get_user_repository()
 
@@ -1612,7 +1503,7 @@ class IdentityProviderService:
                 or None if the refresh failed (expired/revoked token, network error, etc.).
 
         Raises:
-            HTTPException: If the IdP is not found, disabled, or misconfigured.
+            JafaalError: If the IdP is not found, disabled, or misconfigured.
 
         Example return value:
             {
@@ -1630,10 +1521,7 @@ class IdentityProviderService:
         # Get the IdP configuration
         idp = idp_crud.get_identity_provider(idp_id, db)
         if not idp or not idp.enabled:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Identity provider (ID: {idp_id}) not found or disabled",
-            )
+            raise jafaal_exceptions.NotFoundError(f"Identity provider (ID: {idp_id}) not found or disabled")
 
         # Get the encrypted refresh token from database
         encrypted_refresh_token = (

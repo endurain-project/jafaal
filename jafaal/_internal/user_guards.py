@@ -1,17 +1,17 @@
 """Shared user-lookup guards built on the :class:`~jafaal.ports.UserRepository`.
 
 Small helpers that resolve a user through the configured repository (or check an
-already-loaded user) and raise the same HTTP errors JAFAAL raised when it called
-the host's user utilities. Kept dependency-light (only ``fastapi`` +
-:mod:`jafaal.ports`) so any layer can import it without import cycles.
+already-loaded user) and raise the same domain errors JAFAAL raised when it
+called the host's user utilities. Kept dependency-light (only
+:mod:`jafaal.exceptions` + :mod:`jafaal.ports`) so any layer can import it
+without import cycles.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from fastapi import HTTPException, status
-
+import jafaal.exceptions as jafaal_exceptions
 import jafaal.ports as jafaal_ports
 
 if TYPE_CHECKING:
@@ -29,14 +29,11 @@ def get_user_by_id_or_404(user_id: Any, db: Session) -> jafaal_ports.UserProtoco
         The resolved user (guaranteed non-``None``).
 
     Raises:
-        HTTPException: 404 if no such user exists.
+        NotFoundError: 404 if no such user exists.
     """
     user = jafaal_ports.get_user_repository().get_by_id(user_id, db)
     if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found",
-        )
+        raise jafaal_exceptions.NotFoundError("User not found")
     return user
 
 
@@ -47,11 +44,10 @@ def check_user_is_active(user: jafaal_ports.UserProtocol) -> None:
         user: The user to check.
 
     Raises:
-        HTTPException: 403 if the account is inactive.
+        AuthorizationError: 403 if the account is inactive.
     """
     if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Inactive user",
+        raise jafaal_exceptions.AuthorizationError(
+            "Inactive user",
             headers={"WWW-Authenticate": "Bearer"},
         )

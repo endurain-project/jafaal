@@ -10,7 +10,6 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 
-from fastapi import HTTPException, status
 from joserfc import jwt
 from joserfc.errors import (
     DecodeError,
@@ -25,6 +24,7 @@ from joserfc.jwk import OctKey
 from joserfc.jwt import Token
 
 import jafaal.constants as jafaal_constants
+import jafaal.exceptions as jafaal_exceptions
 import jafaal.ports as jafaal_ports
 import jafaal.settings as jafaal_settings
 
@@ -58,7 +58,7 @@ class TokenManager:
         create_token(session_id: str, user: jafaal_ports.UserProtocol, token_type: TokenType) -> tuple[datetime, str]:
         create_csrf_token() -> str:
             Generates a secure random CSRF (Cross-Site Request Forgery) token.
-        HTTPException: Raised for invalid, expired, or missing claims in JWT tokens.
+        JafaalError: Raised for invalid, expired, or missing claims in JWT tokens.
         ValueError: Raised for missing or invalid parameters during token creation.
     """
 
@@ -113,7 +113,7 @@ class TokenManager:
                 be a string, list of strings, or integer.
 
         Raises:
-            HTTPException: If the claim is not found in the token or if there
+            JafaalError: If the claim is not found in the token or if there
                 is an error retrieving the claim.
         """
         try:
@@ -124,23 +124,15 @@ class TokenManager:
             return payload.claims[claim]
         except KeyError as err:
             logger.error(f"Claim '{claim}' not found in token: {err}", exc_info=err, extra={"token": "[REDACTED]"})
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=f"Claim '{claim}' is missing in the token.",
-                headers={"WWW-Authenticate": "Bearer"},
-            ) from err
-        except HTTPException:
+            raise jafaal_exceptions.InvalidTokenError(f"Claim '{claim}' is missing in the token.") from err
+        except jafaal_exceptions.JafaalError:
             # decode_token already raised a properly-formed 401; re-raise as-is.
             raise
         except Exception as err:
             logger.error(
                 f"Unexpected error retrieving claim: {type(err).__name__}", exc_info=err, extra={"token": "[REDACTED]"}
             )
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Unable to retrieve claim",
-                headers={"WWW-Authenticate": "Bearer"},
-            ) from err
+            raise jafaal_exceptions.InvalidTokenError("Unable to retrieve claim") from err
 
     def decode_token(self, token: str) -> Token:
         """
@@ -154,7 +146,7 @@ class TokenManager:
                 payload claims).
 
         Raises:
-            HTTPException: If the token cannot be decoded, raises an HTTP 401
+            JafaalError: If the token cannot be decoded, raises an HTTP 401
                 Unauthorized exception.
         """
         try:
@@ -166,27 +158,15 @@ class TokenManager:
             return jwt.decode(token, self._key, algorithms=[self.algorithm])
         except InvalidPayloadError as payload_err:
             logger.error(f"Invalid token payload: {payload_err}", exc_info=payload_err, extra={"token": "[REDACTED]"})
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token payload",
-                headers={"WWW-Authenticate": "Bearer"},
-            ) from payload_err
+            raise jafaal_exceptions.InvalidTokenError("Invalid token payload") from payload_err
         except DecodeError as decode_err:
             logger.error(f"Error decoding token: {decode_err}", exc_info=decode_err, extra={"token": "[REDACTED]"})
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Unable to decode token",
-                headers={"WWW-Authenticate": "Bearer"},
-            ) from decode_err
+            raise jafaal_exceptions.InvalidTokenError("Unable to decode token") from decode_err
         except Exception as err:
             logger.error(
                 f"Unexpected error decoding token: {type(err).__name__}", exc_info=err, extra={"token": "[REDACTED]"}
             )
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Unable to decode token",
-                headers={"WWW-Authenticate": "Bearer"},
-            ) from err
+            raise jafaal_exceptions.InvalidTokenError("Unable to decode token") from err
 
     def validate_token_expiration(
         self,
@@ -208,7 +188,7 @@ class TokenManager:
                 ``TokenType.REFRESH``).
 
         Raises:
-            HTTPException: If the token is missing required claims, expired,
+            JafaalError: If the token is missing required claims, expired,
                 not yet valid, contains invalid claims, or has the wrong type.
         """
         try:
@@ -242,56 +222,32 @@ class TokenManager:
             claims_requests.validate(payload.claims)
         except MissingClaimError as missing_err:
             logger.error(f"JWT missing claim error: {missing_err}", exc_info=missing_err, extra={"token": "[REDACTED]"})
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token is missing required claims.",
-                headers={"WWW-Authenticate": "Bearer"},
-            ) from missing_err
+            raise jafaal_exceptions.InvalidTokenError("Token is missing required claims.") from missing_err
         except ExpiredTokenError as expired_err:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token is expired.",
-                headers={"WWW-Authenticate": "Bearer"},
-            ) from expired_err
+            raise jafaal_exceptions.TokenExpiredError("Token is expired.") from expired_err
         except InvalidTokenError as invalid_err:
             logger.error(
                 f"JWT is not valid yet error: {invalid_err}", exc_info=invalid_err, extra={"token": "[REDACTED]"}
             )
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token is not valid yet.",
-                headers={"WWW-Authenticate": "Bearer"},
-            ) from invalid_err
+            raise jafaal_exceptions.InvalidTokenError("Token is not valid yet.") from invalid_err
         except InsecureClaimError as insecure_err:
             logger.error(
                 f"JWT insecure claim error: {insecure_err}", exc_info=insecure_err, extra={"token": "[REDACTED]"}
             )
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token has insecure claims.",
-                headers={"WWW-Authenticate": "Bearer"},
-            ) from insecure_err
+            raise jafaal_exceptions.InvalidTokenError("Token has insecure claims.") from insecure_err
         except InvalidClaimError as claims_err:
             logger.error(
                 f"JWT claims validation error: {claims_err}", exc_info=claims_err, extra={"token": "[REDACTED]"}
             )
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token has invalid claims.",
-                headers={"WWW-Authenticate": "Bearer"},
-            ) from claims_err
-        except HTTPException:
+            raise jafaal_exceptions.InvalidTokenError("Token has invalid claims.") from claims_err
+        except jafaal_exceptions.JafaalError:
             # decode_token already raised a properly-formed 401; re-raise as-is.
             raise
         except Exception as err:
             logger.error(
                 f"Unexpected error validating token: {type(err).__name__}", exc_info=err, extra={"token": "[REDACTED]"}
             )
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token expired or invalid.",
-                headers={"WWW-Authenticate": "Bearer"},
-            ) from err
+            raise jafaal_exceptions.InvalidTokenError("Token expired or invalid.") from err
 
     def validate_access_expiration_logged(self, access_token: str) -> None:
         """
@@ -301,20 +257,20 @@ class TokenManager:
         applies the shared logging policy used by the access-token validation
         dependency and ``IdentityService``: expired tokens log at ``debug``
         (an expected, routine condition) while all other validation failures
-        log at ``error``. The original :class:`HTTPException` is re-raised
+        log at ``error``. The original :class:`JafaalError` is re-raised
         unchanged so callers keep the same 401 semantics.
 
         Args:
             access_token: The raw JWT access token to validate.
 
         Raises:
-            HTTPException: 401 if the token is missing claims, expired, not
+            JafaalError: 401 if the token is missing claims, expired, not
                 yet valid, or otherwise invalid.
         """
         try:
             self.validate_token_expiration(access_token, TokenType.ACCESS)
-        except HTTPException as http_err:
-            is_expired = "expired" in http_err.detail.lower()
+        except jafaal_exceptions.JafaalError as http_err:
+            is_expired = isinstance(http_err, jafaal_exceptions.TokenExpiredError)
             logger.log(
                 logging.DEBUG if is_expired else logging.ERROR,
                 f"Access token validation failed: {http_err.detail}",

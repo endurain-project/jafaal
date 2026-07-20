@@ -22,10 +22,8 @@ from typing import Annotated
 
 from fastapi import (
     Depends,
-    HTTPException,
     Query,
     Request,
-    status,
 )
 from fastapi.security import (
     APIKeyHeader,
@@ -35,9 +33,9 @@ from joserfc.errors import MissingClaimError
 
 import jafaal._internal.token_manager as jafaal_token_manager
 import jafaal.constants as jafaal_constants
+import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_service as jafaal_identity_service
 import jafaal.settings as jafaal_settings
-import jafaal.utils as jafaal_utils
 from jafaal.principal import AccessTokenCred, Principal
 
 logger = logging.getLogger(__name__)
@@ -103,7 +101,7 @@ def _resolve_and_cache_principal(
         Principal: Cached or freshly-resolved principal.
 
     Raises:
-        HTTPException: 401 if the token is invalid or
+        JafaalError: 401 if the token is invalid or
             the user is not found.
     """
     cached: Principal | None = getattr(request.state, "principal", None)
@@ -133,40 +131,27 @@ def get_token(
         str: The authentication token appropriate for the client type and token type.
 
     Raises:
-        HTTPException: If the required token is missing, or if the client type is invalid.
+        JafaalError: If the required token is missing, or if the client type is invalid.
     """
     # OAuth 2.1: Access tokens always come from Authorization header (all clients)
     if token_type == jafaal_token_manager.TokenType.ACCESS:
         if non_cookie_token is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Access token missing from Authorization header",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+            raise jafaal_exceptions.AuthenticationError("Access token missing from Authorization header")
         return non_cookie_token
 
     # Refresh tokens: cookie (web) or Authorization header (mobile)
     if token_type == jafaal_token_manager.TokenType.REFRESH:
         if client_type == "web":
             if cookie_token is None:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Refresh token missing from cookie",
-                    headers={"WWW-Authenticate": "Bearer"},
-                )
+                raise jafaal_exceptions.AuthenticationError("Refresh token missing from cookie")
             return cookie_token
         if client_type == "mobile":
             if non_cookie_token is None:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Refresh token missing from Authorization header",
-                    headers={"WWW-Authenticate": "Bearer"},
-                )
+                raise jafaal_exceptions.AuthenticationError("Refresh token missing from Authorization header")
             return non_cookie_token
 
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="Invalid client type or token type",
+    raise jafaal_exceptions.AuthorizationError(
+        "Invalid client type or token type",
         headers={"WWW-Authenticate": "Bearer"},
     )
 
@@ -187,14 +172,10 @@ def get_access_token(
         str: The access token from the Authorization header.
 
     Raises:
-        HTTPException: If the access token is missing from the Authorization header.
+        JafaalError: If the access token is missing from the Authorization header.
     """
     if access_token is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Access token missing from Authorization header",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise jafaal_exceptions.AuthenticationError("Access token missing from Authorization header")
     return access_token
 
 
@@ -209,13 +190,13 @@ def _validate_access_token_impl(
         token_manager: The configured token manager.
 
     Raises:
-        HTTPException: If the token is missing claims, expired, or otherwise
+        JafaalError: If the token is missing claims, expired, or otherwise
             invalid. Unexpected exceptions are wrapped as a 500 so the global
             error handler can record them.
     """
     try:
         token_manager.validate_access_expiration_logged(access_token)
-    except HTTPException:
+    except jafaal_exceptions.JafaalError:
         raise
     except Exception as err:
         logger.error(
@@ -223,10 +204,7 @@ def _validate_access_token_impl(
             exc_info=err,
             extra={"access_token": "[REDACTED]"},
         )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error during token validation",
-        ) from err
+        raise jafaal_exceptions.InternalError("Internal server error during token validation") from err
 
 
 def validate_access_token_expiration(
@@ -250,7 +228,7 @@ def validate_access_token_expiration(
         token_manager (jafaal_token_manager.TokenManager): The token manager instance used for validation.
 
     Raises:
-        HTTPException: If the token is expired or invalid.
+        JafaalError: If the token is expired or invalid.
     """
     _validate_access_token_impl(access_token, token_manager)
 
@@ -279,7 +257,7 @@ def get_sub_from_access_token(
         int: Authenticated user's primary key.
 
     Raises:
-        HTTPException: 401 if the token is invalid,
+        JafaalError: 401 if the token is invalid,
             expired, or the user is not found.
     """
     principal = _resolve_and_cache_principal(access_token, request, identity_service)
@@ -309,16 +287,13 @@ def get_sid_from_access_token(
         str: Session ID (``sid`` claim) from the token.
 
     Raises:
-        HTTPException: 401 if the token is invalid,
+        JafaalError: 401 if the token is invalid,
             expired, or the credential type is unexpected.
     """
     principal = _resolve_and_cache_principal(access_token, request, identity_service)
     cred = principal.credential
     if not isinstance(cred, AccessTokenCred):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credential type for session ID",
-        )
+        raise jafaal_exceptions.InvalidTokenError("Invalid credential type for session ID")
     return cred.session_id
 
 
@@ -341,7 +316,7 @@ def get_refresh_token(
         str: The resolved refresh token based on the provided sources and client type.
 
     Raises:
-        HTTPException: If no valid refresh token is found or the client type is invalid.
+        JafaalError: If no valid refresh token is found or the client type is invalid.
     """
     cookie_refresh_token = request.cookies.get(jafaal_settings.get_settings().refresh_cookie_name)
     return get_token(
@@ -364,7 +339,7 @@ def validate_refresh_token(
         token_manager (jafaal_token_manager.TokenManager): The token manager instance used to validate the token, injected via dependency.
 
     Raises:
-        HTTPException: If the refresh token is expired or invalid, or if an unexpected error occurs during validation.
+        JafaalError: If the refresh token is expired or invalid, or if an unexpected error occurs during validation.
 
     Logs:
         Errors and unexpected exceptions are logged with context, including a redacted refresh token.
@@ -375,8 +350,8 @@ def validate_refresh_token(
             refresh_token,
             jafaal_token_manager.TokenType.REFRESH,
         )
-    except HTTPException as http_err:
-        is_expired = "expired" in http_err.detail.lower()
+    except jafaal_exceptions.JafaalError as http_err:
+        is_expired = isinstance(http_err, jafaal_exceptions.TokenExpiredError)
         logger.log(
             logging.DEBUG if is_expired else logging.ERROR,
             f"Refresh token validation failed: {http_err.detail}",
@@ -392,11 +367,7 @@ def validate_refresh_token(
         # ``MissingClaimError``-style failures to avoid logging users out
         # on transient issues.
         if isinstance(http_err.__cause__, MissingClaimError):
-            raise jafaal_utils.ClearRefreshTokenCookieHTTPException(
-                status_code=http_err.status_code,
-                detail=http_err.detail,
-                headers=http_err.headers,
-            ) from http_err
+            raise jafaal_exceptions.StaleRefreshTokenError(http_err.detail) from http_err
         raise
     except Exception as err:
         logger.error(
@@ -404,10 +375,7 @@ def validate_refresh_token(
             exc_info=err,
             extra={"refresh_token": "[REDACTED]"},
         )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error during token validation",
-        ) from err
+        raise jafaal_exceptions.InternalError("Internal server error during token validation") from err
 
 
 def get_sub_from_refresh_token(
@@ -433,10 +401,7 @@ def get_sub_from_refresh_token(
     # Return the user ID associated with the token
     sub = token_manager.get_token_claim(refresh_token, "sub")
     if not isinstance(sub, int):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token: 'sub' claim must be an integer",
-        )
+        raise jafaal_exceptions.InvalidTokenError("Invalid token: 'sub' claim must be an integer")
     return sub
 
 
@@ -463,10 +428,7 @@ def get_sid_from_refresh_token(
     # Return the session ID associated with the token
     sid = token_manager.get_token_claim(refresh_token, "sid")
     if not isinstance(sid, str):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token: 'sid' claim must be a string",
-        )
+        raise jafaal_exceptions.InvalidTokenError("Invalid token: 'sid' claim must be a string")
     return sid
 
 
@@ -512,7 +474,7 @@ async def validate_api_key(
         auth_type set to ``"api_key"``.
 
     Raises:
-        HTTPException: 401 if the key is not found,
+        JafaalError: 401 if the key is not found,
             revoked, or expired.
     """
     principal = identity_service.resolve_from_api_key(raw_key, request)
@@ -571,7 +533,7 @@ async def validate_access_token_or_api_key(
         auth_type (``"jwt"`` or ``"api_key"``).
 
     Raises:
-        HTTPException: 401 if no valid credential is
+        JafaalError: 401 if no valid credential is
             provided.
     """
     # --- Cache check: return early if Principal already resolved ---
@@ -613,11 +575,7 @@ async def validate_access_token_or_api_key(
             auth_type="api_key",
         )
 
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail=("Not authenticated. Provide a Bearer token or an API key."),
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+    raise jafaal_exceptions.AuthenticationError("Not authenticated. Provide a Bearer token or an API key.")
 
 
 def get_user_id_from_auth(

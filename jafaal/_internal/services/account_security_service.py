@@ -104,7 +104,7 @@ def change_own_password(
         None.
 
     Raises:
-        HTTPException: If step-up verification or persistence fails.
+        JafaalError: If step-up verification or persistence fails.
     """
     step_up_service.verify_step_up_credentials(
         user_id,
@@ -154,7 +154,7 @@ def change_managed_user_password(
         None.
 
     Raises:
-        HTTPException: If password persistence fails.
+        JafaalError: If password persistence fails.
     """
     db_user = jafaal_user_guards.get_user_by_id_or_404(user_id, db)
     hashed_password = jafaal_password_policy.validate_and_hash_for_user(

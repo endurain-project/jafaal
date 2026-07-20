@@ -19,6 +19,7 @@ from infra.providers import StateBackendUnavailableError, StateProvider
 
 import jafaal.settings as jafaal_settings
 from jafaal._core import hashing
+from jafaal.exceptions import StoreUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,7 @@ def _key_prefix() -> str:
     return jafaal_settings.get_settings().store_key_prefix
 
 
-class AuthSecurityStoreUnavailableError(RuntimeError):
+class AuthSecurityStoreUnavailableError(StoreUnavailableError):
     """
     Raised when auth security storage cannot be reached.
 

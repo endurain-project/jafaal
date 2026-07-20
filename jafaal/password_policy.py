@@ -33,7 +33,7 @@ def validate_and_hash_for_user(
         The hashed password string.
 
     Raises:
-        HTTPException: If the password fails validation.
+        JafaalError: If the password fails validation.
     """
     policy = jafaal_ports.get_settings_provider().get_password_policy()
     min_length = policy.min_length_for(is_superuser=is_superuser)

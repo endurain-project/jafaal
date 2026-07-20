@@ -4,13 +4,13 @@ import logging
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 import jafaal.api_keys.models as api_keys_models
 import jafaal.api_keys.schema as api_keys_schema
 import jafaal.api_keys.utils as api_keys_utils
+import jafaal.exceptions as jafaal_exceptions
 import jafaal.settings as jafaal_settings
 from jafaal._core import db_errors
 
@@ -34,7 +34,7 @@ def get_api_keys_by_user_id(
         date descending.
 
     Raises:
-        HTTPException: If a database error occurs.
+        JafaalError: If a database error occurs.
     """
     stmt = (
         select(api_keys_models.UsersApiKeys)
@@ -62,7 +62,7 @@ def get_api_key_by_id(
         The API key object if found, None otherwise.
 
     Raises:
-        HTTPException: If a database error occurs.
+        JafaalError: If a database error occurs.
     """
     stmt = select(api_keys_models.UsersApiKeys).where(
         api_keys_models.UsersApiKeys.id == api_key_id,
@@ -90,7 +90,7 @@ def get_api_key_by_hash(
         The API key object if found, None otherwise.
 
     Raises:
-        HTTPException: If a database error occurs.
+        JafaalError: If a database error occurs.
     """
     stmt = select(api_keys_models.UsersApiKeys).where(api_keys_models.UsersApiKeys.key_hash == key_hash)
     return db.execute(stmt).scalar_one_or_none()
@@ -122,7 +122,7 @@ def create_api_key(
         Tuple of (UsersApiKeys ORM object, raw key string).
 
     Raises:
-        HTTPException: If a database error occurs.
+        JafaalError: If a database error occurs.
     """
     raw_key = api_keys_utils.generate_api_key()
     # Key format is "<prefix>_<random>"; the stored key_prefix is the first 8
@@ -173,17 +173,14 @@ def update_last_used(
         db: SQLAlchemy database session.
 
     Raises:
-        HTTPException: If the key is not found (404) or
-            a database error occurs.
+        NotFoundError: If the key is not found.
+        InternalError: If a database error occurs.
     """
     stmt = select(api_keys_models.UsersApiKeys).where(api_keys_models.UsersApiKeys.id == api_key_id)
     db_api_key = db.execute(stmt).scalar_one_or_none()
 
     if db_api_key is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"API key {api_key_id} not found",
-        )
+        raise jafaal_exceptions.NotFoundError(f"API key {api_key_id} not found")
 
     db_api_key.last_used_at = datetime.now(UTC)
     db.commit()
@@ -207,17 +204,13 @@ def revoke_api_key(
         db: SQLAlchemy database session.
 
     Raises:
-        HTTPException: If the key is not found or does not
-            belong to the user (404), or a database error
-            occurs.
+        NotFoundError: If the key is not found or does not belong to the user.
+        InternalError: If a database error occurs.
     """
     db_api_key = get_api_key_by_id(api_key_id, user_id, db)
 
     if db_api_key is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=(f"API key {api_key_id} not found for user {user_id}"),
-        )
+        raise jafaal_exceptions.NotFoundError(f"API key {api_key_id} not found for user {user_id}")
 
     db_api_key.is_active = False
     db.commit()
@@ -249,17 +242,13 @@ def delete_api_key(
         db: SQLAlchemy database session.
 
     Raises:
-        HTTPException: If the key is not found or does not
-            belong to the user (404), or a database error
-            occurs.
+        NotFoundError: If the key is not found or does not belong to the user.
+        InternalError: If a database error occurs.
     """
     db_api_key = get_api_key_by_id(api_key_id, user_id, db)
 
     if db_api_key is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=(f"API key {api_key_id} not found for user {user_id}"),
-        )
+        raise jafaal_exceptions.NotFoundError(f"API key {api_key_id} not found for user {user_id}")
 
     db.delete(db_api_key)
     db.commit()

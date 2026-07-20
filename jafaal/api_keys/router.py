@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
 import jafaal._internal.internal_dependencies as jafaal_internal_dependencies
@@ -12,6 +12,7 @@ import jafaal.api_keys.crud as jafaal_api_keys_crud
 import jafaal.api_keys.schema as api_keys_schema
 import jafaal.api_keys.utils as api_keys_utils
 import jafaal.dependencies as jafaal_dependencies
+import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_service as jafaal_identity_service
 import jafaal.orm as jafaal_orm
 
@@ -89,9 +90,9 @@ async def create_user_api_key(
         Created API key including the raw key string.
 
     Raises:
-        HTTPException: 401 if step-up verification fails.
-        HTTPException: 400 if scopes are not supported for API keys.
-        HTTPException: 404 if the user is not found.
+        AuthenticationError: 401 if step-up verification fails.
+        InvalidRequestError: 400 if scopes are not supported for API keys.
+        NotFoundError: 404 if the user is not found.
     """
     jafaal_user_guards.get_user_by_id_or_404(token_user_id, db)
 
@@ -107,10 +108,7 @@ async def create_user_api_key(
     try:
         api_keys_utils.validate_api_key_scopes(data.scopes)
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
+        raise jafaal_exceptions.InvalidRequestError(str(exc)) from exc
 
     db_api_key, raw_key = jafaal_api_keys_crud.create_api_key(token_user_id, data, db)
 
@@ -155,7 +153,7 @@ async def revoke_user_api_key(
         None.
 
     Raises:
-        HTTPException: 404 if the key is not found or
+        JafaalError: 404 if the key is not found or
             does not belong to the authenticated user.
     """
     jafaal_api_keys_crud.revoke_api_key(api_key_id, token_user_id, db)
@@ -188,7 +186,7 @@ async def delete_user_api_key(
         None.
 
     Raises:
-        HTTPException: 404 if the key is not found or
+        JafaalError: 404 if the key is not found or
             does not belong to the authenticated user.
     """
     jafaal_api_keys_crud.delete_api_key(api_key_id, token_user_id, db)

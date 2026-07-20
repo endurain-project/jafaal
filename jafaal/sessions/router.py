@@ -81,7 +81,7 @@ async def delete_session_user(
         None.
 
     Raises:
-        HTTPException: If session not found or unauthorized.
+        JafaalError: If session not found or unauthorized.
     """
     jafaal_sessions_crud.delete_session(session_id, user_id, db)
 

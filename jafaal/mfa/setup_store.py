@@ -14,6 +14,7 @@ from infra.providers import StateBackendUnavailableError, StateProvider
 
 import jafaal.settings as jafaal_settings
 from jafaal._core import crypto, hashing
+from jafaal.exceptions import StoreUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,7 @@ def _mfa_secret_key_prefix() -> str:
     return f"{jafaal_settings.get_settings().store_key_prefix}:mfa:setup_secret"
 
 
-class MFASecretStoreUnavailableError(RuntimeError):
+class MFASecretStoreUnavailableError(StoreUnavailableError):
     """
     Raised when MFA secret storage cannot be reached.
 
@@ -77,7 +78,7 @@ def _encrypt_secret(secret: str) -> str:
 
     Raises:
         ValueError: When encryption returns no value.
-        HTTPException: When Fernet encryption fails.
+        JafaalError: When Fernet encryption fails.
     """
     encrypted_secret = crypto.encrypt_token_fernet(secret)
     if not encrypted_secret:
@@ -166,7 +167,7 @@ class MFASecretStore:
         Raises:
             MFASecretStoreUnavailableError: When storage is unavailable.
             ValueError: If encryption fails.
-            HTTPException: If Fernet encryption fails.
+            JafaalError: If Fernet encryption fails.
         """
         encrypted_secret = _encrypt_secret(secret)
         try:

@@ -32,7 +32,7 @@ def get_user_identity_provider_refresh_token_by_user_id_and_idp_id(
         The encrypted refresh token if found, None otherwise.
 
     Raises:
-        HTTPException: 500 error if database query fails.
+        JafaalError: 500 error if database query fails.
     """
     db_link = jafaal_identity_links_crud.get_user_identity_provider_by_user_id_and_idp_id(
         user_id,

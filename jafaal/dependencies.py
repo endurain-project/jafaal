@@ -18,10 +18,11 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, Request
 from fastapi.security import SecurityScopes
 
 import jafaal._internal.security_stores as jafaal_security_stores
+import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_service as jafaal_identity_service
 from jafaal._internal.internal_dependencies import (
     AuthContext,
@@ -50,7 +51,7 @@ def validate_access_token(
         identity_service: Per-request IdentityService.
 
     Raises:
-        HTTPException: 401 if the token is invalid.
+        AuthenticationError: 401 if the token is invalid.
     """
     _resolve_and_cache_principal(access_token, request, identity_service)
 
@@ -73,7 +74,7 @@ def check_scopes(
         security_scopes: Required scopes for the endpoint.
 
     Raises:
-        HTTPException: 403 if required scopes are missing.
+        MissingScopeError: 403 if required scopes are missing.
     """
     principal = _resolve_and_cache_principal(access_token, request, identity_service)
     identity_service.check_scope(principal, frozenset(security_scopes.scopes))
@@ -98,15 +99,15 @@ def check_auth_scopes(
         security_scopes: Required scopes for the endpoint.
 
     Raises:
-        HTTPException: 403 if any required scope is missing from the
+        MissingScopeError: 403 if any required scope is missing from the
             AuthContext.
     """
     missing = set(security_scopes.scopes) - set(auth.scopes)
     if missing:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=(f"Unauthorized Access - Missing permissions: {missing}"),
-            headers={"WWW-Authenticate": (f'Bearer scope="{security_scopes.scopes}"')},
+        raise jafaal_exceptions.MissingScopeError(
+            f"Unauthorized Access - Missing permissions: {missing}",
+            missing=missing,
+            headers={"WWW-Authenticate": f'Bearer scope="{security_scopes.scopes}"'},
         )
 
 

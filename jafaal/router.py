@@ -7,7 +7,6 @@ import core.rate_limit as core_rate_limit
 from fastapi import (
     APIRouter,
     Depends,
-    HTTPException,
     Query,
     Request,
     Response,
@@ -21,6 +20,7 @@ import jafaal._internal.password_hasher as jafaal_password_hasher
 import jafaal._internal.security_stores as jafaal_security_stores
 import jafaal._internal.token_manager as jafaal_token_manager
 import jafaal._internal.user_guards as jafaal_user_guards
+import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_providers.utils as idp_utils
 import jafaal.identity_service as jafaal_identity_service
 import jafaal.mfa.service as mfa_service
@@ -55,7 +55,7 @@ def _validate_pkce_query_params(
         None.
 
     Raises:
-        HTTPException: If PKCE parameters are supplied partially.
+        JafaalError: If PKCE parameters are supplied partially.
     """
     if client_type != "mobile":
         return
@@ -64,9 +64,8 @@ def _validate_pkce_query_params(
     has_complete_pkce_params = bool(code_challenge and code_challenge_method)
 
     if has_any_pkce_param and not has_complete_pkce_params:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=("code_challenge and code_challenge_method must be provided together"),
+        raise jafaal_exceptions.InvalidRequestError(
+            "code_challenge and code_challenge_method must be provided together"
         )
 
 
@@ -83,13 +82,10 @@ def _raise_auth_security_store_unavailable(
         None.
 
     Raises:
-        HTTPException: Always raised with a 503 status.
+        JafaalError: Always raised with a 503 status.
     """
     logger.error("Auth security storage unavailable during authentication", exc_info=err)
-    raise HTTPException(
-        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        detail="Authentication temporarily unavailable",
-    ) from err
+    raise jafaal_exceptions.StoreUnavailableError("Authentication temporarily unavailable") from err
 
 
 @router.post(
@@ -171,7 +167,7 @@ async def login_for_access_token(
             - If MFA is not required and no PKCE, proceeds with normal login via jafaal_utils.complete_login()
 
     Raises:
-        HTTPException: If authentication fails, user is inactive, or account is locked
+        JafaalError: If authentication fails, user is inactive, or account is locked
     """
     _validate_pkce_query_params(
         client_type,
@@ -185,9 +181,9 @@ async def login_for_access_token(
             lockout_until = failed_attempts.get_lockout_time(form_data.username)
             if lockout_until:
                 seconds_remaining = int((lockout_until - datetime.now(UTC)).total_seconds())
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail=f"Account locked due to too many failed login attempts. Try again in {seconds_remaining} seconds.",
+                raise jafaal_exceptions.RateLimitedError(
+                    f"Account locked due to too many failed login attempts. Try again in {seconds_remaining} seconds.",
+                    retry_after=seconds_remaining,
                 )
     except jafaal_security_stores.AuthSecurityStoreUnavailableError as err:
         _raise_auth_security_store_unavailable(err)
@@ -195,9 +191,9 @@ async def login_for_access_token(
     # Authenticate user
     try:
         user = jafaal_utils.authenticate_user(form_data.username, form_data.password, password_hasher, db)
-    except HTTPException as err:
+    except jafaal_exceptions.JafaalError as err:
         # Record failed attempt on authentication errors (401 Unauthorized)
-        if err.status_code == 401:
+        if isinstance(err, jafaal_exceptions.AuthenticationError):
             try:
                 failed_attempts.record_failed_attempt(form_data.username)
             except jafaal_security_stores.AuthSecurityStoreUnavailableError as store_err:
@@ -327,7 +323,7 @@ async def verify_mfa_and_login(
         Result from jafaal_utils.complete_login() or PKCE session response
 
     Raises:
-        HTTPException: If no pending login found, MFA code is invalid, or user not found
+        JafaalError: If no pending login found, MFA code is invalid, or user not found
     """
     _validate_pkce_query_params(
         client_type,
@@ -343,9 +339,9 @@ async def verify_mfa_and_login(
             lockout_until = pending_mfa_store.get_lockout_time(mfa_request.username)
             if lockout_until:
                 seconds_remaining = int((lockout_until - datetime.now(UTC)).total_seconds())
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail=f"Too many failed MFA attempts. Account locked for {seconds_remaining} seconds.",
+                raise jafaal_exceptions.RateLimitedError(
+                    f"Too many failed MFA attempts. Account locked for {seconds_remaining} seconds.",
+                    retry_after=seconds_remaining,
                 )
     except jafaal_security_stores.AuthSecurityStoreUnavailableError as err:
         _raise_auth_security_store_unavailable(err)
@@ -363,10 +359,7 @@ async def verify_mfa_and_login(
         # which usernames are mid-login by measuring response time.
         password_hasher.dummy_verify()
         logger.warning(f"No pending MFA login found for {username_log_id}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No pending MFA login found for this username",
-        )
+        raise jafaal_exceptions.InvalidRequestError("No pending MFA login found for this username")
 
     # Verify the MFA code (TOTP or backup code)
     if not mfa_service.verify_user_mfa(user_id, mfa_request.mfa_code, identity_service, db):
@@ -376,10 +369,7 @@ async def verify_mfa_and_login(
         except jafaal_security_stores.AuthSecurityStoreUnavailableError as err:
             _raise_auth_security_store_unavailable(err)
         logger.warning(f"Invalid MFA code for {username_log_id}. Failed attempts: {failed_count}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid MFA code, backup code or backup code already used.",
-        )
+        raise jafaal_exceptions.InvalidMFACodeError("Invalid MFA code, backup code or backup code already used.")
 
     try:
         claimed_user_id = pending_mfa_store.claim_pending_login(mfa_request.username)
@@ -387,20 +377,13 @@ async def verify_mfa_and_login(
         _raise_auth_security_store_unavailable(err)
     if claimed_user_id != user_id:
         logger.warning(f"Pending MFA login for {username_log_id} was missing or already claimed")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No pending MFA login found for this username",
-        )
+        raise jafaal_exceptions.InvalidRequestError("No pending MFA login found for this username")
 
     # Get the user and complete login
     user = jafaal_ports.get_user_repository().get_by_id(user_id, db)
     if not user:
         logger.warning(f"User ID {user_id} not found during MFA verification")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Unable to authenticate",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise jafaal_exceptions.AuthenticationError("Unable to authenticate")
 
     # Check if the user is still active
     jafaal_user_guards.check_user_is_active(user)
@@ -496,7 +479,7 @@ async def refresh_token(
         dict: Contains session_id, access_token, csrf_token, token_type, expires_in, refresh_token_expires_in.
 
     Raises:
-        HTTPException: If session not found, refresh token invalid,
+        JafaalError: If session not found, refresh token invalid,
                        user is inactive, or CSRF token is invalid (when provided).
     """
     # Get the session from the database
@@ -504,9 +487,8 @@ async def refresh_token(
 
     # Check if the session was found
     if session is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Session not found",
+        raise jafaal_exceptions.NotFoundError(
+            "Session not found",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -521,11 +503,7 @@ async def refresh_token(
         logger.warning(
             f"Refresh token session owner mismatch: token sub={token_user_id}, session user_id={session.user_id}"
         )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid refresh token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise jafaal_exceptions.InvalidTokenError("Invalid refresh token")
 
     # Validate session hasn't exceeded idle or absolute timeout
     jafaal_sessions_utils.validate_session_timeout(session)
@@ -551,19 +529,14 @@ async def refresh_token(
         and not jafaal_sessions_utils.verify_csrf_token(x_csrf_token, session.csrf_token_hash)
     ):
         # CSRF token was provided: validate it
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Invalid CSRF token",
+        raise jafaal_exceptions.AuthorizationError(
+            "Invalid CSRF token",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
     # Verify session has a refresh token (not pending PKCE exchange)
     if not session.refresh_token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Tokens not yet exchanged via PKCE. Complete SSO/PKCE flow first.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise jafaal_exceptions.InvalidTokenError("Tokens not yet exchanged via PKCE. Complete SSO/PKCE flow first.")
 
     # Check for token reuse BEFORE validating token
     # Uses HMAC-SHA256 internally for deterministic, secure lookup
@@ -572,11 +545,7 @@ async def refresh_token(
     if is_reused and not in_grace:
         # Token theft detected - invalidate entire family
         jafaal_sessions_rotated_tokens_utils.invalidate_token_family(session.token_family_id, db)
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token reuse detected. All sessions invalidated.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise jafaal_exceptions.InvalidTokenError("Token reuse detected. All sessions invalidated.")
 
     if is_reused and in_grace:
         # Idempotent in-grace replay. The presented refresh token was already
@@ -592,11 +561,7 @@ async def refresh_token(
         if replay is None:
             # Replacement was cleaned up (or never stored); fall back to the
             # standard invalid-token response.
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid refresh token",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+            raise jafaal_exceptions.InvalidTokenError("Invalid refresh token")
 
         replay_refresh_token, replay_refresh_token_exp = replay
 
@@ -605,11 +570,7 @@ async def refresh_token(
 
         if replay_user is None:
             logger.warning(f"User ID {token_user_id} not found during token refresh replay")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Unable to authenticate",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+            raise jafaal_exceptions.AuthenticationError("Unable to authenticate")
 
         jafaal_user_guards.check_user_is_active(replay_user)
 
@@ -640,22 +601,14 @@ async def refresh_token(
     is_valid = password_hasher.verify_password(refresh_token_value, session.refresh_token)
 
     if not is_valid:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid refresh token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise jafaal_exceptions.InvalidTokenError("Invalid refresh token")
 
     # get user
     user = jafaal_ports.get_user_repository().get_by_id(token_user_id, db)
 
     if user is None:
         logger.warning(f"User ID {token_user_id} not found during token refresh")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Unable to authenticate",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise jafaal_exceptions.AuthenticationError("Unable to authenticate")
 
     # Check if the user is active
     jafaal_user_guards.check_user_is_active(user)
@@ -760,8 +713,8 @@ async def logout(
         dict: A message indicating successful logout.
 
     Raises:
-        HTTPException: If refresh token is invalid (401 Unauthorized).
-        HTTPException: If client type is invalid (403 Forbidden).
+        JafaalError: If refresh token is invalid (401 Unauthorized).
+        JafaalError: If client type is invalid (403 Forbidden).
     """
     # Get the session from the database
     session = jafaal_sessions_crud.get_session_by_id_not_expired(token_session_id, db)
@@ -770,10 +723,8 @@ async def logout(
     if session is not None:
         # Verify session has a refresh token (not pending PKCE exchange)
         if not session.refresh_token:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Tokens not yet exchanged via PKCE. Cannot logout incomplete session.",
-                headers={"WWW-Authenticate": "Bearer"},
+            raise jafaal_exceptions.InvalidTokenError(
+                "Tokens not yet exchanged via PKCE. Cannot logout incomplete session."
             )
 
         # Verify the refresh token
@@ -781,11 +732,7 @@ async def logout(
 
         # If the refresh token is not valid, raise an exception
         if not is_valid:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid refresh token",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+            raise jafaal_exceptions.InvalidTokenError("Invalid refresh token")
 
         # Delete the session from the database
         jafaal_sessions_crud.delete_session(session.id, token_user_id, db)
@@ -798,8 +745,7 @@ async def logout(
         return {"message": "Logout successful"}
     if client_type == "mobile":
         return {"message": "Logout successful"}
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="Invalid client type",
+    raise jafaal_exceptions.AuthorizationError(
+        "Invalid client type",
         headers={"WWW-Authenticate": "Bearer"},
     )

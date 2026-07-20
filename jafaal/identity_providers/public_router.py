@@ -7,13 +7,14 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
 import core.rate_limit as core_rate_limit
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 import jafaal._internal.password_hasher as jafaal_password_hasher
 import jafaal._internal.token_manager as jafaal_token_manager
 import jafaal._internal.user_guards as jafaal_user_guards
+import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_providers.crud as idp_crud
 import jafaal.identity_providers.schema as idp_schema
 import jafaal.identity_providers.service as idp_service
@@ -140,28 +141,19 @@ async def initiate_login(
         RedirectResponse: A redirect response to the identity provider's authorization URL.
 
     Raises:
-        HTTPException: If the identity provider is not found, disabled, or PKCE validation fails.
+        JafaalError: If the identity provider is not found, disabled, or PKCE validation fails.
     """
     try:
         # Get the identity provider
         idp = idp_crud.get_identity_provider_by_slug(idp_slug, db)
         if not idp or not idp.enabled:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Identity provider not found or disabled",
-            )
+            raise jafaal_exceptions.NotFoundError("Identity provider not found or disabled")
 
         # PKCE is REQUIRED for all clients (OAuth 2.1 compliance)
         if not code_challenge:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="code_challenge is required (PKCE mandatory for all clients)",
-            )
+            raise jafaal_exceptions.InvalidRequestError("code_challenge is required (PKCE mandatory for all clients)")
         if not code_challenge_method or code_challenge_method != "S256":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="code_challenge_method must be S256",
-            )
+            raise jafaal_exceptions.InvalidRequestError("code_challenge_method must be S256")
 
         # Validate PKCE challenge format
         idp_utils.validate_pkce_challenge(code_challenge, code_challenge_method)
@@ -207,14 +199,11 @@ async def initiate_login(
         )
 
         return RedirectResponse(url=authorization_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
-    except HTTPException:
+    except jafaal_exceptions.JafaalError:
         raise
     except Exception as err:
         logger.error(f"Error in initiate_login: {err}", exc_info=err)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to initiate login",
-        ) from err
+        raise jafaal_exceptions.InternalError("Failed to initiate login") from err
 
 
 @router.get("/callback/{idp_slug}", status_code=status.HTTP_307_TEMPORARY_REDIRECT)
@@ -256,7 +245,7 @@ async def handle_callback(
             - Error page: /login with error parameter if callback fails
 
     Raises:
-        HTTPException: If the identity provider is not found, disabled, or if callback processing fails.
+        JafaalError: If the identity provider is not found, disabled, or if callback processing fails.
 
     Notes:
         - In link mode: Redirects to settings without creating a new session
@@ -270,20 +259,14 @@ async def handle_callback(
         # Get the identity provider
         idp = idp_crud.get_identity_provider_by_slug(idp_slug, db)
         if not idp or not idp.enabled:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Identity provider not found or disabled",
-            )
+            raise jafaal_exceptions.NotFoundError("Identity provider not found or disabled")
 
         # Lookup OAuth state from database (mandatory for all clients)
         oauth_state = oauth_state_crud.get_oauth_state_by_id_and_not_used(state, db)
 
         if not oauth_state:
             logger.warning(f"OAuth state not found in database: {state[:8]}...")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid or expired OAuth state",
-            )
+            raise jafaal_exceptions.InvalidRequestError("Invalid or expired OAuth state")
 
         # Bind the OAuth state to the IdP named in the callback URL.
         # The `idp` is resolved from the URL slug while the `oauth_state`
@@ -299,10 +282,7 @@ async def handle_callback(
                 f"OAuth state IdP mismatch for state {state[:8]}...: "
                 f"state.idp_id={oauth_state.idp_id}, callback idp.id={idp.id}"
             )
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid or expired OAuth state",
-            )
+            raise jafaal_exceptions.InvalidRequestError("Invalid or expired OAuth state")
 
         # Mark state as used atomically (prevents replay attacks).
         # Two concurrent callbacks can both reach this point with the same
@@ -312,10 +292,7 @@ async def handle_callback(
         # do not leak whether the state existed but was already consumed.
         if not oauth_state_crud.mark_oauth_state_used(state, db):
             logger.warning(f"OAuth state replay/race rejected: {state[:8]}...")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid or expired OAuth state",
-            )
+            raise jafaal_exceptions.InvalidRequestError("Invalid or expired OAuth state")
 
         logger.debug(f"OAuth callback received for state {state[:8]}... (client_type={oauth_state.client_type})")
 
@@ -348,10 +325,7 @@ async def handle_callback(
 
         # Create the session and store it in the database
         if not oauth_state:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="OAuth state required for token exchange",
-            )
+            raise jafaal_exceptions.InternalError("OAuth state required for token exchange")
 
         jafaal_sessions_utils.create_session(
             session_id,
@@ -385,7 +359,7 @@ async def handle_callback(
             status_code=status.HTTP_307_TEMPORARY_REDIRECT,
         )
 
-    except HTTPException:
+    except jafaal_exceptions.JafaalError:
         raise
     except Exception as err:
         logger.error(f"Error in SSO callback: {err}", exc_info=err)
@@ -452,7 +426,7 @@ async def exchange_tokens_for_session(
         TokenExchangeResponse: JWT tokens (access, refresh, csrf) and metadata.
 
     Raises:
-        HTTPException:
+        JafaalError:
             - 404 NOT_FOUND: Session not found or not linked to OAuth state
             - 400 BAD_REQUEST: Invalid code_verifier or tokens already exchanged
             - 409 CONFLICT: Tokens already exchanged for this session
@@ -463,20 +437,14 @@ async def exchange_tokens_for_session(
 
         if not session_with_state:
             logger.warning(f"Token exchange failed: session {session_id[:8]}... not found")
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Session not found or not eligible for token exchange",
-            )
+            raise jafaal_exceptions.NotFoundError("Session not found or not eligible for token exchange")
 
         session_obj, oauth_state = session_with_state
 
         # Verify session is linked to an OAuth state (mobile flow)
         if not oauth_state:
             logger.warning(f"Token exchange failed: session {session_id[:8]}... has no OAuth state")
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Session not eligible for PKCE token exchange",
-            )
+            raise jafaal_exceptions.NotFoundError("Session not eligible for PKCE token exchange")
 
         # Check if tokens have already been exchanged (prevent replay).
         # This is a fast-path informational check; the authoritative
@@ -485,18 +453,12 @@ async def exchange_tokens_for_session(
         # same code_verifier would otherwise win.
         if session_obj.tokens_exchanged:
             logger.warning(f"Token exchange replay attempt for session {session_id[:8]}...")
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Tokens already exchanged for this session",
-            )
+            raise jafaal_exceptions.ConflictError("Tokens already exchanged for this session")
 
         # Verify PKCE code_verifier matches code_challenge
         if not oauth_state.code_challenge or not oauth_state.code_challenge_method:
             logger.error(f"Token exchange failed: OAuth state {oauth_state.id[:8]}... missing PKCE data")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="OAuth state missing PKCE data",
-            )
+            raise jafaal_exceptions.InvalidRequestError("OAuth state missing PKCE data")
 
         # Validate code_verifier and verify it matches the challenge
         idp_utils.validate_pkce_verifier(
@@ -546,10 +508,7 @@ async def exchange_tokens_for_session(
                     f"{session_id[:8]}...: stored={stored_client_type}, "
                     f"header={header_client_type}"
                 )
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="client_type does not match the OAuth state",
-                )
+                raise jafaal_exceptions.InvalidRequestError("client_type does not match the OAuth state")
             client_type = stored_client_type
         else:
             # Genuine system-browser flow — fall back to the header,
@@ -595,10 +554,7 @@ async def exchange_tokens_for_session(
         )
         if not claimed:
             logger.warning(f"Token exchange lost race for session {session_id[:8]}...")
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Tokens already exchanged for this session",
-            )
+            raise jafaal_exceptions.ConflictError("Tokens already exchanged for this session")
 
         # Set refresh token cookie for web clients (enables logout).
         # Cookie attributes (Secure, SameSite, Path, expiry) are
@@ -641,11 +597,8 @@ async def exchange_tokens_for_session(
                 token_type="Bearer",
             )
 
-    except HTTPException:
+    except jafaal_exceptions.JafaalError:
         raise
     except Exception as err:
         logger.error(f"Error in token exchange for session {session_id[:8]}...: {err}", exc_info=err)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to exchange tokens",
-        ) from err
+        raise jafaal_exceptions.InternalError("Failed to exchange tokens") from err

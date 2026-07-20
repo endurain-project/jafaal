@@ -27,7 +27,7 @@ def get_rotated_token_by_hash(
         The RotatedRefreshToken if found, None otherwise.
 
     Raises:
-        HTTPException: If database error occurs.
+        JafaalError: If database error occurs.
     """
     stmt = select(rotated_token_models.RotatedRefreshToken).where(
         rotated_token_models.RotatedRefreshToken.hashed_token == hashed_token
@@ -51,7 +51,7 @@ def create_rotated_token(
         The created RotatedRefreshToken object.
 
     Raises:
-        HTTPException: If database error occurs.
+        JafaalError: If database error occurs.
     """
     db_rotated_token = rotated_token_models.RotatedRefreshToken(
         token_family_id=rotated_token.token_family_id,
@@ -83,7 +83,7 @@ def delete_expired_tokens(cutoff_time: datetime, db: Session) -> int:
         Number of tokens deleted.
 
     Raises:
-        HTTPException: If database error occurs.
+        JafaalError: If database error occurs.
     """
     stmt = delete(rotated_token_models.RotatedRefreshToken).where(
         rotated_token_models.RotatedRefreshToken.expires_at < cutoff_time
@@ -106,7 +106,7 @@ def delete_by_family(token_family_id: str, db: Session) -> int:
         Number of tokens deleted.
 
     Raises:
-        HTTPException: If database error occurs.
+        JafaalError: If database error occurs.
     """
     stmt = delete(rotated_token_models.RotatedRefreshToken).where(
         rotated_token_models.RotatedRefreshToken.token_family_id == token_family_id

@@ -28,7 +28,7 @@ def create_password_reset_token(
         The persisted PasswordResetToken ORM instance.
 
     Raises:
-        HTTPException: 500 error if database operation fails.
+        JafaalError: 500 error if database operation fails.
     """
     # Create a new password reset token
     db_token = password_reset_tokens_models.PasswordResetToken(
@@ -62,7 +62,7 @@ def get_password_reset_token_by_hash(
         The matching PasswordResetToken if found and valid, None otherwise.
 
     Raises:
-        HTTPException: 500 error if database query fails.
+        JafaalError: 500 error if database query fails.
     """
     stmt = select(password_reset_tokens_models.PasswordResetToken).where(
         password_reset_tokens_models.PasswordResetToken.token_hash == token_hash,
@@ -85,7 +85,7 @@ def claim_password_reset_token(token_hash: str, db: Session) -> int | None:
         expired, or already used.
 
     Raises:
-        HTTPException: 500 error if database operation fails.
+        JafaalError: 500 error if database operation fails.
     """
     stmt = (
         sa_update(password_reset_tokens_models.PasswordResetToken)
@@ -112,7 +112,7 @@ def mark_user_password_reset_tokens_used(user_id: int, db: Session) -> int:
         Number of rows marked as used.
 
     Raises:
-        HTTPException: 500 error if database operation fails.
+        JafaalError: 500 error if database operation fails.
     """
     stmt = (
         sa_update(password_reset_tokens_models.PasswordResetToken)
@@ -140,7 +140,7 @@ def mark_password_reset_token_used(
         Updated PasswordResetToken instance if found, None otherwise.
 
     Raises:
-        HTTPException: 500 error if database operation fails.
+        JafaalError: 500 error if database operation fails.
     """
     stmt = select(password_reset_tokens_models.PasswordResetToken).where(
         password_reset_tokens_models.PasswordResetToken.id == token_id,
@@ -167,7 +167,7 @@ def delete_expired_password_reset_tokens(db: Session) -> int:
         Number of deleted rows.
 
     Raises:
-        HTTPException: 500 error if database operation fails.
+        JafaalError: 500 error if database operation fails.
     """
     stmt = sa_delete(password_reset_tokens_models.PasswordResetToken).where(
         password_reset_tokens_models.PasswordResetToken.expires_at < datetime.now(UTC)

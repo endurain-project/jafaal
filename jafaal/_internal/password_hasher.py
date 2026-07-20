@@ -14,6 +14,8 @@ from pwdlib import PasswordHash
 from pwdlib.hashers.argon2 import Argon2Hasher
 from pwdlib.hashers.bcrypt import BcryptHasher
 
+from jafaal.exceptions import PasswordPolicyError
+
 
 class SupportsHashPassword(Protocol):
     """Structural protocol for objects that can hash a password."""
@@ -25,18 +27,6 @@ class SupportsVerifyPassword(Protocol):
     """Structural protocol for objects that can verify a password against a hash."""
 
     def verify_password(self, password: str, password_hash: str) -> bool: ...
-
-
-class PasswordPolicyError(ValueError):
-    """
-    Exception raised when a password does not comply with the defined password policy.
-
-    This error should be raised to indicate that a password fails to meet one or more
-    requirements such as length, complexity, or character composition.
-
-    Attributes:
-        message (str): Explanation of the policy violation.
-    """
 
 
 class PasswordHasher:

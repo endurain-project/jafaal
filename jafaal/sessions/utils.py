@@ -6,15 +6,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 
-from fastapi import (
-    HTTPException,
-    Request,
-    status,
-)
+from fastapi import Request
 from sqlalchemy.orm import Session
 from user_agents import parse
 
 import jafaal._internal.password_hasher as jafaal_password_hasher
+import jafaal.exceptions as jafaal_exceptions
 import jafaal.ports as jafaal_ports
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.models as jafaal_sessions_models
@@ -112,7 +109,7 @@ def validate_session_timeout(
         session: The session to validate.
 
     Raises:
-        HTTPException: 401 if session has timed out.
+        SessionExpiredError: 401 if the session has timed out.
     """
     # Skip validation if timeouts are disabled
     settings = jafaal_settings.get_settings()
@@ -124,20 +121,12 @@ def validate_session_timeout(
     # Check idle timeout
     idle_limit = session.last_activity_at + timedelta(hours=settings.session_idle_timeout_hours)
     if now > idle_limit:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Session expired due to inactivity",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise jafaal_exceptions.SessionExpiredError("Session expired due to inactivity")
 
     # Check absolute timeout
     absolute_limit = session.created_at + timedelta(hours=settings.session_absolute_timeout_hours)
     if now > absolute_limit:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Session expired. Please login again for security.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise jafaal_exceptions.SessionExpiredError("Session expired. Please login again for security.")
 
 
 def create_session_object(
@@ -263,7 +252,7 @@ def create_session(
         csrf_token: Plain CSRF token to hash and store.
 
     Raises:
-        HTTPException: If database error occurs.
+        JafaalError: If database error occurs.
     """
     # Calculate the refresh token expiration date
     exp = datetime.now(UTC) + timedelta(days=jafaal_settings.get_settings().refresh_token_expire_days)
@@ -306,7 +295,7 @@ def edit_session(
         new_csrf_token: Plain CSRF token to hash and store.
 
     Raises:
-        HTTPException: If database error occurs.
+        JafaalError: If database error occurs.
     """
     # Calculate the refresh token expiration date
     exp = datetime.now(UTC) + timedelta(days=jafaal_settings.get_settings().refresh_token_expire_days)
@@ -345,7 +334,7 @@ def update_session_csrf_token(
         db: SQLAlchemy database session.
 
     Raises:
-        HTTPException: If database error occurs.
+        JafaalError: If database error occurs.
     """
     jafaal_sessions_crud.update_session_csrf_hash(session_id, _hash_csrf_token(new_csrf_token), db)
 
@@ -395,7 +384,7 @@ def cleanup_idle_sessions() -> None:
     Logs count of cleaned sessions.
 
     Raises:
-        HTTPException: If database error occurs.
+        JafaalError: If database error occurs.
     """
     settings = jafaal_settings.get_settings()
     if not settings.session_idle_timeout_enabled:

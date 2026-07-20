@@ -6,13 +6,12 @@ import core.rate_limit as core_rate_limit
 from fastapi import (
     APIRouter,
     Depends,
-    HTTPException,
     Request,
-    status,
 )
 from sqlalchemy.orm import Session
 
 import jafaal._internal.user_guards as jafaal_user_guards
+import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_service as jafaal_identity_service
 import jafaal.orm as jafaal_orm
 import jafaal.ports as jafaal_ports
@@ -55,16 +54,13 @@ async def signup(
         Sign-up result with message and flags.
 
     Raises:
-        HTTPException: 403 if sign-up is disabled.
+        JafaalError: 403 if sign-up is disabled.
     """
     signup_config = jafaal_ports.get_settings_provider().get_signup_config()
 
     # Check if signup is enabled
     if not signup_config.enabled:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User sign-up is not enabled on this server",
-        )
+        raise jafaal_exceptions.AuthorizationError("User sign-up is not enabled on this server")
 
     # Create the user (host provisions its own row + defaults via UserRepository)
     created_user = sign_up_tokens_utils.register_local_user(user, signup_config, identity_service, db)
@@ -115,14 +111,11 @@ async def verify_email(
         Verification result with message and optional flags.
 
     Raises:
-        HTTPException: 412 if email verification is not enabled.
+        JafaalError: 412 if email verification is not enabled.
     """
     signup_config = jafaal_ports.get_settings_provider().get_signup_config()
     if not signup_config.require_email_verification:
-        raise HTTPException(
-            status_code=status.HTTP_412_PRECONDITION_FAILED,
-            detail="Email verification is not enabled",
-        )
+        raise jafaal_exceptions.PreconditionFailedError("Email verification is not enabled")
 
     # Verify the email; activate now unless admin approval is still required.
     user_id = sign_up_tokens_utils.use_sign_up_token(confirm_data.token, db)

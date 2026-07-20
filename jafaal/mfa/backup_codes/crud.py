@@ -6,10 +6,10 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import HTTPException, status
 from sqlalchemy import CursorResult, delete, or_, select
 from sqlalchemy.orm import Session
 
+import jafaal.exceptions as jafaal_exceptions
 import jafaal.mfa.backup_codes.models as mfa_backup_codes_models
 import jafaal.mfa.backup_codes.utils as mfa_backup_codes_utils
 from jafaal._core import db_errors
@@ -30,7 +30,7 @@ def get_user_backup_codes(user_id: int, db: Session) -> list[mfa_backup_codes_mo
         List of MFABackupCode models for the user (used and unused).
 
     Raises:
-        HTTPException: If a database error occurs.
+        InternalError: If a database error occurs.
     """
     stmt = select(mfa_backup_codes_models.MFABackupCode).where(
         mfa_backup_codes_models.MFABackupCode.user_id == user_id,
@@ -50,7 +50,7 @@ def get_user_unused_backup_codes(user_id: int, db: Session) -> list[mfa_backup_c
         List of MFABackupCode models that have not been consumed.
 
     Raises:
-        HTTPException: If a database error occurs.
+        InternalError: If a database error occurs.
     """
     now = datetime.now(UTC)
     stmt = select(mfa_backup_codes_models.MFABackupCode).where(
@@ -88,7 +88,7 @@ def create_backup_codes(
         List of plaintext backup codes shown to the user once.
 
     Raises:
-        HTTPException: If a database error occurs. The transaction is rolled
+        InternalError: If a database error occurs. The transaction is rolled
             back so previously stored codes remain intact.
     """
     # Remove any existing codes within the same transaction so that a failure
@@ -128,17 +128,15 @@ def mark_backup_code_as_used(code_id: int, user_id: int, db: Session) -> None:
         db: Database session.
 
     Raises:
-        HTTPException: 404 if the code does not exist, does not belong to the
-            user, or has already been consumed. 500 on database errors.
+        NotFoundError: 404 if the code does not exist, does not belong to the
+            user, or has already been consumed.
+        InternalError: 500 on database errors.
     """
     db_code = db.get(mfa_backup_codes_models.MFABackupCode, code_id)
 
     if db_code is None or db_code.user_id != user_id or db_code.used:
         logger.warning(f"No unused backup code found to mark as used for user ID {user_id}")
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Backup code not found or already used",
-        )
+        raise jafaal_exceptions.NotFoundError("Backup code not found or already used")
 
     db_code.used = True
     db_code.used_at = datetime.now(UTC)
@@ -160,7 +158,7 @@ def delete_user_backup_codes(user_id: int, db: Session) -> int:
         Number of backup code rows deleted.
 
     Raises:
-        HTTPException: If a database error occurs.
+        InternalError: If a database error occurs.
     """
     stmt = delete(mfa_backup_codes_models.MFABackupCode).where(mfa_backup_codes_models.MFABackupCode.user_id == user_id)
     result: CursorResult[Any] = db.execute(stmt)

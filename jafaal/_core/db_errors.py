@@ -2,10 +2,10 @@
 
 Provides the ``handle_db_errors`` decorator applied across JAFAAL's CRUD
 helpers. It converts unexpected :class:`~sqlalchemy.exc.SQLAlchemyError`
-into a 500 :class:`~fastapi.HTTPException` after rolling back the session and
-logging the error class name (never the SQL text, to avoid leaking PII or
-credentials — OWASP A09). ``HTTPException`` and ``IntegrityError`` are allowed
-to propagate for caller-specific handling.
+into a 500 :class:`~jafaal.exceptions.InternalError` after rolling back the
+session and logging the error class name (never the SQL text, to avoid leaking
+PII or credentials — OWASP A09). ``JafaalError``, ``HTTPException``, and
+``IntegrityError`` are allowed to propagate for caller-specific handling.
 """
 
 import inspect
@@ -14,9 +14,11 @@ from collections.abc import Callable, Coroutine
 from functools import wraps
 from typing import Any, NoReturn, overload
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
+
+import jafaal.exceptions as jafaal_exceptions
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +59,7 @@ def _rollback_session(func_name: str, db_session: Session | None) -> None:
 def _handle_db_error(db_err: SQLAlchemyError, func_name: str, db_session: Session | None) -> NoReturn:
     """Handle database errors consistently.
 
-    Performs rollback, logs the error securely, and raises HTTPException.
+    Performs rollback, logs the error securely, and raises InternalError.
 
     Args:
         db_err: The database error that occurred.
@@ -65,7 +67,7 @@ def _handle_db_error(db_err: SQLAlchemyError, func_name: str, db_session: Sessio
         db_session: Database session to rollback, if any.
 
     Raises:
-        HTTPException: Always raises 500 after logging and rollback.
+        InternalError: Always raises 500 after logging and rollback.
     """
     _rollback_session(func_name, db_session)
 
@@ -74,10 +76,7 @@ def _handle_db_error(db_err: SQLAlchemyError, func_name: str, db_session: Sessio
     # which can leak PII / credentials into logs (OWASP A09).
     logger.error(f"Database error in {func_name}: {type(db_err).__name__}", exc_info=db_err)
 
-    raise HTTPException(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        detail="Database error occurred",
-    ) from db_err
+    raise jafaal_exceptions.InternalError("Database error occurred") from db_err
 
 
 @overload
@@ -92,8 +91,8 @@ def handle_db_errors(func: Callable[..., Any]) -> Callable[..., Any]:
     """Decorator to handle SQLAlchemy database errors consistently.
 
     Catches SQLAlchemyError exceptions, logs them, and converts to
-    HTTPException with 500 status. Allows HTTPException and
-    IntegrityError to pass through for caller-specific handling.
+    InternalError with 500 status. Allows JafaalError, HTTPException,
+    and IntegrityError to pass through for caller-specific handling.
 
     Automatically calls rollback on the database session if found
     in function parameters.
@@ -112,7 +111,7 @@ def handle_db_errors(func: Callable[..., Any]) -> Callable[..., Any]:
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             try:
                 return await func(*args, **kwargs)
-            except HTTPException:
+            except (HTTPException, jafaal_exceptions.JafaalError):
                 raise
             except IntegrityError:
                 _rollback_session(func.__name__, _find_db_session(*args, **kwargs))
@@ -127,7 +126,7 @@ def handle_db_errors(func: Callable[..., Any]) -> Callable[..., Any]:
     def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
         try:
             return func(*args, **kwargs)
-        except HTTPException:
+        except (HTTPException, jafaal_exceptions.JafaalError):
             raise
         except IntegrityError:
             _rollback_session(func.__name__, _find_db_session(*args, **kwargs))

@@ -7,9 +7,9 @@ import logging
 import re
 from typing import Any
 
-from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
+import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_providers.links.crud as jafaal_identity_links_crud
 import jafaal.identity_providers.schema as idp_schema
 import jafaal.identity_providers.service as idp_service
@@ -30,7 +30,7 @@ def validate_redirect_url(redirect: str | None) -> None:
         redirect: The redirect URL string to validate, or None.
 
     Raises:
-        HTTPException: 400 Bad Request if the redirect URL is
+        JafaalError: 400 Bad Request if the redirect URL is
             invalid, uses a disallowed scheme, is an external
             HTTP/HTTPS URL, or contains path traversal sequences.
     """
@@ -41,9 +41,8 @@ def validate_redirect_url(redirect: str | None) -> None:
 
     # Reject external HTTP/HTTPS URLs (open redirect prevention)
     if value.startswith("http://") or value.startswith("https://"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=("External HTTP redirects are not allowed. Use a relative path or a configured custom scheme."),
+        raise jafaal_exceptions.InvalidRequestError(
+            "External HTTP redirects are not allowed. Use a relative path or a configured custom scheme."
         )
 
     # Handle custom URI schemes (e.g., gadgetbridge://callback)
@@ -51,30 +50,23 @@ def validate_redirect_url(redirect: str | None) -> None:
         scheme = value.split("://", 1)[0].lower()
         allowed = jafaal_settings.get_settings().allowed_redirect_schemes
         if scheme not in allowed:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    f"Redirect scheme '{scheme}' is not allowed. "
-                    "Configure ALLOWED_REDIRECT_SCHEMES to permit "
-                    "custom URI schemes."
-                ),
+            raise jafaal_exceptions.InvalidRequestError(
+                f"Redirect scheme '{scheme}' is not allowed. "
+                "Configure ALLOWED_REDIRECT_SCHEMES to permit "
+                "custom URI schemes."
             )
         # Custom scheme is allowed — no further checks needed
         return
 
     # Relative paths must start with '/'
     if not value.startswith("/"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=("Redirect must be a relative path starting with '/' or a configured custom URI scheme."),
+        raise jafaal_exceptions.InvalidRequestError(
+            "Redirect must be a relative path starting with '/' or a configured custom URI scheme."
         )
 
     # Reject path traversal sequences
     if ".." in value or "\\" in value or value.startswith("//"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Redirect path contains disallowed sequences.",
-        )
+        raise jafaal_exceptions.InvalidRequestError("Redirect path contains disallowed sequences.")
 
 
 def is_custom_scheme_redirect(redirect: str | None) -> bool:
@@ -107,29 +99,20 @@ def validate_pkce_challenge(code_challenge: str, code_challenge_method: str) -> 
         code_challenge_method (str): PKCE method identifier (must be "S256").
 
     Raises:
-        HTTPException: 400 Bad Request if validation fails (method not S256,
+        JafaalError: 400 Bad Request if validation fails (method not S256,
             length out of range, or invalid base64url characters).
     """
     # Only S256 is supported (SHA256)
     if code_challenge_method != "S256":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only S256 PKCE method is supported",
-        )
+        raise jafaal_exceptions.InvalidRequestError("Only S256 PKCE method is supported")
 
     # RFC 7636: code_challenge length must be 43-128 characters (base64url)
     if not (43 <= len(code_challenge) <= 128):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="code_challenge must be 43-128 characters",
-        )
+        raise jafaal_exceptions.InvalidRequestError("code_challenge must be 43-128 characters")
 
     # Validate base64url format (alphanumeric, dash, underscore only)
     if not re.match(r"^[A-Za-z0-9_-]+$", code_challenge):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="code_challenge must be valid base64url",
-        )
+        raise jafaal_exceptions.InvalidRequestError("code_challenge must be valid base64url")
 
 
 def validate_pkce_verifier(code_verifier: str, code_challenge: str, code_challenge_method: str) -> None:
@@ -146,28 +129,19 @@ def validate_pkce_verifier(code_verifier: str, code_challenge: str, code_challen
         code_challenge_method (str): PKCE method (must be "S256").
 
     Raises:
-        HTTPException: 400 Bad Request if verifier format is invalid,
+        JafaalError: 400 Bad Request if verifier format is invalid,
             method is not S256, or verifier doesn't match challenge.
     """
     # Validate verifier format
     if not (43 <= len(code_verifier) <= 128):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="code_verifier must be 43-128 characters",
-        )
+        raise jafaal_exceptions.InvalidRequestError("code_verifier must be 43-128 characters")
 
     if not re.match(r"^[A-Za-z0-9_-]+$", code_verifier):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="code_verifier must be valid base64url",
-        )
+        raise jafaal_exceptions.InvalidRequestError("code_verifier must be valid base64url")
 
     # Verify method is S256
     if code_challenge_method != "S256":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only S256 PKCE method is supported",
-        )
+        raise jafaal_exceptions.InvalidRequestError("Only S256 PKCE method is supported")
 
     # Compute SHA256 hash of verifier
     verifier_hash = hashlib.sha256(code_verifier.encode("ascii")).digest()
@@ -178,10 +152,7 @@ def validate_pkce_verifier(code_verifier: str, code_challenge: str, code_challen
         logger.warning(
             f"PKCE verification failed: computed={computed_challenge[:10]}..., expected={code_challenge[:10]}..."
         )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid code_verifier",
-        )
+        raise jafaal_exceptions.InvalidRequestError("Invalid code_verifier")
 
 
 def _secure_compare(a: str, b: str) -> bool:

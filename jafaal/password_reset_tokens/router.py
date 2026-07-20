@@ -87,9 +87,9 @@ async def confirm_password_reset(
         Success message on successful password reset.
 
     Raises:
-        HTTPException: 400 if token is invalid or expired.
-        HTTPException: 422 if the new password fails the account's password policy.
-        HTTPException: 500 if password reset fails.
+        JafaalError: 400 if token is invalid or expired.
+        JafaalError: 422 if the new password fails the account's password policy.
+        JafaalError: 500 if password reset fails.
     """
     # Use the token to reset password
     password_reset_tokens_utils.use_password_reset_token(

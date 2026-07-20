@@ -9,17 +9,15 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from fastapi import (
-    HTTPException,
     Request,
     Response,
-    status,
 )
-from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 import jafaal._internal.password_hasher as jafaal_password_hasher
 import jafaal._internal.token_manager as jafaal_token_manager
 import jafaal.credentials.crud as jafaal_credentials_crud
+import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_providers.utils as idp_utils
 import jafaal.oauth_state.crud as oauth_state_crud
 import jafaal.oauth_state.utils as oauth_state_utils
@@ -32,10 +30,6 @@ import jafaal.settings as jafaal_settings
 # cookies are cleared during migration; the canonical cookie name and path come
 # from AuthSettings.
 LEGACY_REFRESH_TOKEN_COOKIE_PATHS = ("/",)
-
-
-class ClearRefreshTokenCookieHTTPException(HTTPException):
-    """HTTP exception that clears refresh-token cookies."""
 
 
 def authenticate_user(
@@ -57,7 +51,7 @@ def authenticate_user(
         jafaal_ports.UserProtocol: The authenticated user object if authentication is successful.
 
     Raises:
-        HTTPException: If the username does not exist or the password is invalid.
+        JafaalError: If the username does not exist or the password is invalid.
     """
     # Get the user from the database
     user = jafaal_ports.get_user_repository().get_by_username(username, db)
@@ -73,11 +67,7 @@ def authenticate_user(
         # is only recorded on 401, which the attacker does not care
         # about while probing existence).
         password_hasher.dummy_verify()
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Unable to authenticate with provided credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise jafaal_exceptions.InvalidCredentialsError("Unable to authenticate with provided credentials")
 
     # Load the user's local password hash from the auth-owned credential
     # table. A missing row means the account has no local password.
@@ -90,20 +80,12 @@ def authenticate_user(
     # the latency consistent with a normal Argon2 verify.
     if stored_hash is None:
         password_hasher.dummy_verify()
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Unable to authenticate with provided credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise jafaal_exceptions.InvalidCredentialsError("Unable to authenticate with provided credentials")
 
     # Verify password and get updated hash if applicable
     is_password_valid, updated_hash = password_hasher.verify_and_update(password, stored_hash)
     if not is_password_valid:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Unable to authenticate with provided credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise jafaal_exceptions.InvalidCredentialsError("Unable to authenticate with provided credentials")
 
     # Update user hash if applicable
     if updated_hash:
@@ -307,31 +289,6 @@ def build_token_response(
     return body
 
 
-async def clear_refresh_token_cookie_exception_handler(
-    _request: Request,
-    exc: ClearRefreshTokenCookieHTTPException,
-) -> JSONResponse:
-    """Build an error response that clears refresh-token cookies.
-
-    Args:
-        _request: Request that triggered the exception.
-        exc: Exception carrying the HTTP status, detail, and headers.
-
-    Returns:
-        JSON response with refresh-token deletion headers.
-
-    Raises:
-        None.
-    """
-    response = JSONResponse(
-        status_code=exc.status_code,
-        content={"detail": exc.detail},
-        headers=exc.headers,
-    )
-    clear_refresh_token_cookies(response)
-    return response
-
-
 def complete_login(
     response: Response,
     request: Request,
@@ -364,12 +321,11 @@ def complete_login(
         dict: Contains session_id, access_token, csrf_token, token_type, expires_in, and refresh_token_expires_in.
 
     Raises:
-        HTTPException: If the client type is invalid, raises a 403 Forbidden error.
+        JafaalError: If the client type is invalid, raises a 403 Forbidden error.
     """
     if client_type not in ["web", "mobile"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Invalid client type",
+        raise jafaal_exceptions.AuthorizationError(
+            "Invalid client type",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -444,7 +400,7 @@ def create_mobile_pkce_session_response(
         jafaal_schema.MobileSessionResponse: Contains session_id and mfa_required flag
 
     Raises:
-        HTTPException: If PKCE parameters are invalid
+        JafaalError: If PKCE parameters are invalid
 
     Notes:
         - Mobile-only: Web clients use complete_login() with httpOnly cookies
@@ -455,10 +411,7 @@ def create_mobile_pkce_session_response(
     """
     # Validate PKCE challenge format
     if code_challenge_method != "S256":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only S256 PKCE method is supported",
-        )
+        raise jafaal_exceptions.InvalidRequestError("Only S256 PKCE method is supported")
 
     idp_utils.validate_pkce_challenge(code_challenge, code_challenge_method)
 

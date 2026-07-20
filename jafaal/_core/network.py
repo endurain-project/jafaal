@@ -23,8 +23,9 @@ import threading
 import time
 from urllib.parse import urlparse
 
-from fastapi import HTTPException, Request, status
+from fastapi import Request
 
+import jafaal.exceptions as jafaal_exceptions
 import jafaal.settings as jafaal_settings
 
 logger = logging.getLogger(__name__)
@@ -285,38 +286,26 @@ def reject_private_url(url: str, *, purpose: str | None = None) -> None:
         purpose: Optional short tag identifying the outbound call (audit only).
 
     Raises:
-        HTTPException: 400 if the URL is malformed, uses a forbidden scheme, has
-            no hostname, or resolves to any non-public address not covered by
-            ``ssrf_allowed_hosts``.
+        InvalidRequestError: 400 if the URL is malformed, uses a forbidden
+            scheme, has no hostname, or resolves to any non-public address not
+            covered by ``ssrf_allowed_hosts``.
     """
     try:
         parsed = urlparse(url)
     except ValueError as err:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Malformed URL",
-        ) from err
+        raise jafaal_exceptions.InvalidRequestError("Malformed URL") from err
 
     if parsed.scheme.lower() not in _ALLOWED_OUTBOUND_SCHEMES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="URL scheme is not permitted",
-        )
+        raise jafaal_exceptions.InvalidRequestError("URL scheme is not permitted")
 
     hostname = parsed.hostname
     if not hostname:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="URL has no hostname",
-        )
+        raise jafaal_exceptions.InvalidRequestError("URL has no hostname")
 
     try:
         infos = socket.getaddrinfo(hostname, None)
     except socket.gaierror as err:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="URL hostname could not be resolved",
-        ) from err
+        raise jafaal_exceptions.InvalidRequestError("URL hostname could not be resolved") from err
 
     for info in infos:
         sockaddr = info[4]
@@ -326,10 +315,7 @@ def reject_private_url(url: str, *, purpose: str | None = None) -> None:
         except ValueError as err:
             # Defensive: if the resolver hands back something unparseable,
             # treat as unsafe.
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="URL resolves to an unparseable address",
-            ) from err
+            raise jafaal_exceptions.InvalidRequestError("URL resolves to an unparseable address") from err
         if _is_private_or_reserved(addr):
             if _is_ssrf_allowlisted(hostname, addr):
                 # Audit trail: every allowlisted private destination is logged
@@ -339,7 +325,4 @@ def reject_private_url(url: str, *, purpose: str | None = None) -> None:
                     f"host {hostname} (purpose={purpose or 'unspecified'})"
                 )
                 continue
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="URL resolves to a non-public address",
-            )
+            raise jafaal_exceptions.InvalidRequestError("URL resolves to a non-public address")

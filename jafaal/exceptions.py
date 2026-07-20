@@ -188,6 +188,7 @@ class InvalidApiKeyError(AuthenticationError):
 
     code = "invalid_api_key"
     default_detail = "The API key is invalid."
+    headers = {"WWW-Authenticate": "ApiKey"}
 
 
 class StaleRefreshTokenError(AuthenticationError):
