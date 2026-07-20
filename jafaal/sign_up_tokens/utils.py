@@ -2,24 +2,26 @@
 
 import logging
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
-import core.apprise as core_apprise
-import core.i18n as core_i18n
-import modules.users.users.crud as users_crud
-import modules.users.users.schema as users_schema
-import modules.users.users.utils as users_utils
 from fastapi import (
     HTTPException,
     status,
 )
 from sqlalchemy.orm import Session
 
+import jafaal._internal.user_guards as jafaal_user_guards
+import jafaal.password_policy as jafaal_password_policy
+import jafaal.ports as jafaal_ports
+import jafaal.schema as jafaal_schema
 import jafaal.sign_up_tokens.crud as sign_up_tokens_crud
-import jafaal.sign_up_tokens.email_messages as sign_up_tokens_email_messages
 import jafaal.sign_up_tokens.schema as sign_up_tokens_schema
 import jafaal.token_hashing as token_hashing
 from jafaal.orm import session_scope
+
+if TYPE_CHECKING:
+    from jafaal.identity_service import IdentityService
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +39,7 @@ def create_sign_up_token(user_id: int, db: Session) -> str:
         Only the hash is stored in the database.
     """
     # Generate token and hash
-    token, token_hash = core_apprise.generate_token_and_hash()
+    token, token_hash = token_hashing.generate_token_and_hash()
 
     # Create token object
     reset_token = sign_up_tokens_schema.SignUpToken(
@@ -56,151 +58,118 @@ def create_sign_up_token(user_id: int, db: Session) -> str:
     return token
 
 
-async def send_sign_up_email(
-    user: users_schema.UsersRead,
-    email_service: core_apprise.AppriseService,
+def register_local_user(
+    request: jafaal_schema.SignUpRequest,
+    signup_config: jafaal_ports.SignupConfig,
+    identity_service: "IdentityService",
     db: Session,
-) -> bool:
-    """
-    Send a sign-up confirmation email to a user.
+) -> jafaal_ports.UserProtocol:
+    """Create a local (password) account during sign-up.
+
+    Validates and hashes the password with the regular-tier policy, asks the
+    host's ``UserRepository`` to create the user row with the sign-up-derived
+    active/verified state, then persists the credential in JAFAAL's own
+    credential table.
 
     Args:
-        user: User model instance to email.
-        email_service: Configured AppriseService.
+        request: The sign-up request (username, email, password).
+        signup_config: The host's sign-up configuration.
+        identity_service: Identity service (password hashing + credential write).
         db: Active SQLAlchemy session.
 
     Returns:
-        True if the email was sent successfully.
-
-    Raises:
-        HTTPException: 503 if the email service is not configured.
+        The newly created user.
     """
-    # Check if email service is configured
-    if not email_service.is_configured():
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Email service is not configured",
-        )
+    hashed_password = jafaal_password_policy.validate_and_hash_for_user(
+        identity_service,
+        is_superuser=False,
+        password=request.password,
+    )
+    # A new sign-up is immediately active + verified only when neither email
+    # verification nor admin approval is required.
+    is_usable = not (signup_config.require_email_verification or signup_config.require_admin_approval)
+    user = jafaal_ports.get_user_repository().create_local_user(
+        request.username,
+        request.email,
+        db,
+        is_active=is_usable,
+        is_verified=is_usable,
+    )
+    identity_service.set_local_password_hash(user.id, hashed_password)
+    return user
 
-    # Generate sign up token
+
+async def request_email_verification(user: jafaal_ports.UserProtocol, db: Session) -> None:
+    """Mint an email-verification token and emit ``EmailVerificationRequested``.
+
+    The host delivers the token (e.g. by email). Delivery is best-effort:
+    failures are logged, never surfaced.
+
+    Args:
+        user: The newly created user awaiting email verification.
+        db: Active SQLAlchemy session.
+    """
     token = create_sign_up_token(user.id, db)
-
-    # Generate reset link
-    reset_link = f"{email_service.frontend_host}/verify-email?token={token}"
-
-    # Build localized email using the user's preferred language
-    locale = core_i18n.normalize_locale(user.preferred_language)
-    subject, html_content, text_content = sign_up_tokens_email_messages.get_signup_confirmation_email(
-        user.name, reset_link, email_service, locale
+    event = jafaal_ports.EmailVerificationRequested(
+        user_id=user.id,
+        email=user.email,
+        display_name=user.username,
+        token=token,
+        expires_at=datetime.now(UTC) + timedelta(hours=24),
+        locale=None,
     )
-
-    # Send email
-    return await email_service.send_email(
-        to_emails=[user.email],
-        subject=subject,
-        html_content=html_content,
-        text_content=text_content,
-    )
+    try:
+        await jafaal_ports.get_event_sink().on_email_verification_requested(event)
+    except Exception:
+        logger.exception("Failed to deliver email-verification event for user %s", user.id)
 
 
-async def send_sign_up_admin_approval_email(
-    user: users_schema.UsersRead,
-    email_service: core_apprise.AppriseService,
-    db: Session,
-) -> None:
-    """
-    Notify admins about a new sign-up for approval.
+async def notify_pending_admin_approval(user: jafaal_ports.UserProtocol) -> None:
+    """Emit ``SignupPendingAdminApproval`` for a newly verified account.
+
+    JAFAAL emits a single event with the new user's context; the host decides
+    which admins to notify and how (email, websocket, ...). Delivery is
+    best-effort.
 
     Args:
-        user: User model instance who signed up.
-        email_service: Configured AppriseService.
-        db: Active SQLAlchemy session.
-
-    Returns:
-        None
-
-    Raises:
-        HTTPException: 503 if the email service is not configured.
+        user: The user whose sign-up is awaiting admin approval.
     """
-    # Check if email service is configured
-    if not email_service.is_configured():
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Email service is not configured",
-        )
-
-    admins = users_utils.get_admin_users_or_404(db)
-
-    # Send email to all admin users
-    for admin in admins:
-        # Use the admin's preferred language for each notification
-        locale = core_i18n.normalize_locale(admin.preferred_language)
-        subject, html_content, text_content = sign_up_tokens_email_messages.get_admin_signup_notification_email(
-            admin.name,
-            user.name,
-            user.username,
-            email_service,
-            locale,
-        )
-
-        # Send email
-        await email_service.send_email(
-            to_emails=[admin.email],
-            subject=subject,
-            html_content=html_content,
-            text_content=text_content,
-        )
+    event = jafaal_ports.SignupPendingAdminApproval(
+        user_id=user.id,
+        username=user.username,
+        display_name=user.username,
+    )
+    try:
+        await jafaal_ports.get_event_sink().on_signup_pending_admin_approval(event)
+    except Exception:
+        logger.exception("Failed to deliver signup-pending-approval event for user %s", user.id)
 
 
-async def send_sign_up_approval_email(
-    user_id: int,
-    email_service: core_apprise.AppriseService,
-    db: Session,
-) -> bool:
-    """
-    Send an approval notification email to a user.
+async def notify_signup_approved(user_id: int, db: Session) -> None:
+    """Emit ``SignupApproved`` for a user an admin has approved.
+
+    A convenience for a host that runs its own approval endpoint and wants the
+    approval notification delivered through JAFAAL's event sink. Delivery is
+    best-effort.
 
     Args:
         user_id: ID of the approved user.
-        email_service: Configured AppriseService.
         db: Active SQLAlchemy session.
 
-    Returns:
-        True if the email was sent successfully.
-
     Raises:
-        HTTPException: 503 if the email service is not configured.
-        HTTPException: 404 if user is not found.
+        HTTPException: 404 if the user does not exist.
     """
-    # Check if email service is configured
-    if not email_service.is_configured():
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Email service is not configured",
-        )
-
-    # Get user info
-    user = users_crud.get_user_by_id(user_id, db)
-
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found",
-        )
-
-    # Build localized email using the approved user's preferred language
-    locale = core_i18n.normalize_locale(user.preferred_language)
-    subject, html_content, text_content = sign_up_tokens_email_messages.get_user_signup_approved_email(
-        user.name, user.username, email_service, locale
+    user = jafaal_user_guards.get_user_by_id_or_404(user_id, db)
+    event = jafaal_ports.SignupApproved(
+        user_id=user.id,
+        email=user.email,
+        display_name=user.username,
+        locale=None,
     )
-
-    # Send email
-    return await email_service.send_email(
-        to_emails=[user.email],
-        subject=subject,
-        html_content=html_content,
-        text_content=text_content,
-    )
+    try:
+        await jafaal_ports.get_event_sink().on_signup_approved(event)
+    except Exception:
+        logger.exception("Failed to deliver signup-approved event for user %s", user.id)
 
 
 def use_sign_up_token(token: str, db: Session) -> int:

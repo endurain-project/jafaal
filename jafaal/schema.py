@@ -27,6 +27,22 @@ class LoginRequest(BaseModel):
     password: StrictStr = Field(..., min_length=8)
 
 
+class SignUpRequest(BaseModel):
+    """Minimal local sign-up request.
+
+    JAFAAL only needs credentials to create the account and its password; any
+    additional profile fields a host collects at sign-up are the host's own
+    concern (its ``UserRepository`` fills them). ``username``/``email`` are
+    passed to the host repository as supplied.
+    """
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    username: StrictStr = Field(..., min_length=1, max_length=250)
+    email: StrictStr = Field(..., min_length=3, max_length=250)
+    password: StrictStr = Field(..., min_length=8)
+
+
 class MFALoginRequest(BaseModel):
     """
     Schema for MFA login requests.

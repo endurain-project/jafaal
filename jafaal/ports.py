@@ -54,18 +54,6 @@ class UserProtocol(Protocol):
 
 
 @dataclass(frozen=True)
-class SignupData:
-    """Local sign-up credentials handed to the host to create a user row.
-
-    Only the auth-relevant fields; profile fields and their defaults are the
-    host's concern (see §10 of the agnostic-library plan).
-    """
-
-    username: str
-    email: str
-    password: str
-
-
 @dataclass(frozen=True)
 class IdpIdentity:
     """An identity resolved from an external identity provider.
@@ -104,12 +92,22 @@ class UserRepository(Protocol):
         """Return the user with ``username``, or ``None``."""
         ...
 
-    def create_local_user(self, data: SignupData, db: Session, *, is_verified: bool) -> UserProtocol:
+    def create_local_user(
+        self,
+        username: str,
+        email: str,
+        db: Session,
+        *,
+        is_active: bool,
+        is_verified: bool,
+    ) -> UserProtocol:
         """Create a user row for a local sign-up and return it.
 
         JAFAAL validates the password and persists the credential separately in
         its own ``users_local_credentials`` table; the host only creates the
-        user/profile row here (applying any host-specific defaults).
+        user/profile row here (with the given active/verified state and any
+        host-specific defaults). ``username``/``email`` are passed as supplied;
+        the host applies its own normalization and uniqueness checks.
         """
         ...
 
@@ -129,8 +127,13 @@ class UserRepository(Protocol):
         """
         ...
 
-    def set_email_verified(self, user_id: Any, db: Session) -> None:
-        """Mark the user's email address as verified."""
+    def set_email_verified(self, user_id: Any, db: Session, *, activate: bool) -> None:
+        """Mark the user's email address as verified.
+
+        When ``activate`` is ``True`` the account is also activated (used when
+        email verification is the last gate before login); when ``False`` the
+        account stays inactive (e.g. admin approval is still pending).
+        """
         ...
 
 
@@ -345,7 +348,6 @@ __all__ = [
     "SettingsProvider",
     "SignupApproved",
     "SignupConfig",
-    "SignupData",
     "SignupPendingAdminApproval",
     "UserProtocol",
     "UserRepository",
