@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 
-import modules.users.users.schema as users_schema
 from fastapi import (
     HTTPException,
     Request,
@@ -16,6 +15,7 @@ from sqlalchemy.orm import Session
 from user_agents import parse
 
 import jafaal._internal.password_hasher as jafaal_password_hasher
+import jafaal.ports as jafaal_ports
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.models as jafaal_sessions_models
 import jafaal.sessions.schema as jafaal_sessions_schema
@@ -142,7 +142,7 @@ def validate_session_timeout(
 
 def create_session_object(
     session_id: str,
-    user: users_schema.UsersRead,
+    user: jafaal_ports.UserProtocol,
     request: Request,
     hashed_refresh_token: str | None,
     refresh_token_exp: datetime,
@@ -241,7 +241,7 @@ def edit_session_object(
 
 def create_session(
     session_id: str,
-    user: users_schema.UsersRead,
+    user: jafaal_ports.UserProtocol,
     request: Request,
     refresh_token: str | None,
     password_hasher: jafaal_password_hasher.PasswordHasher,

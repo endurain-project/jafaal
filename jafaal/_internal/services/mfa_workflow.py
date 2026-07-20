@@ -18,8 +18,6 @@ import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-import modules.users.users.crud as users_crud
-import modules.users.users.schema as users_schema
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -29,6 +27,8 @@ import jafaal.mfa.backup_codes.crud as mfa_backup_codes_crud
 import jafaal.mfa.backup_codes.schema as mfa_backup_codes_schema
 import jafaal.mfa.schema as mfa_schema
 import jafaal.mfa.service as mfa_service
+import jafaal.ports as jafaal_ports
+import jafaal.schema as jafaal_schema
 from jafaal.mfa.setup_store import MFASecretStoreBackend
 
 logger = logging.getLogger(__name__)
@@ -175,14 +175,14 @@ def verify_mfa(
 
 
 def generate_backup_codes(
-    step_up: users_schema.StepUpVerification,
+    step_up: jafaal_schema.StepUpVerification,
     token_user_id: int,
     identity_service: IdentityService,
     step_up_store: jafaal_security_stores.StepUpStore,
     db: Session,
 ) -> mfa_backup_codes_schema.MFABackupCodesResponse:
     """Generate new backup codes for an MFA-enabled account."""
-    user = users_crud.get_user_by_id(token_user_id, db)
+    user = jafaal_ports.get_user_repository().get_by_id(token_user_id, db)
 
     if not user:
         raise HTTPException(

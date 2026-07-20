@@ -45,6 +45,36 @@ class MFALoginRequest(BaseModel):
     )
 
 
+class StepUpVerification(BaseModel):
+    """Generic step-up verification payload.
+
+    Used by sensitive account-level operations (API-key creation, MFA
+    backup-code regeneration, IdP unlink, ...) to require fresh proof of
+    identity beyond a valid access token. For SSO-only accounts (no local
+    password) the ``current_password`` field may be omitted and the password
+    check is skipped.
+
+    Attributes:
+        current_password: Caller's existing password. Required when the account
+            has a local password; may be omitted for SSO-only accounts.
+        mfa_code: TOTP or backup code, required when MFA is enabled.
+    """
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    current_password: StrictStr | None = Field(
+        default=None,
+        min_length=1,
+        max_length=250,
+        description="Current password (step-up verification). Required when the account has a local password.",
+    )
+    mfa_code: StrictStr | None = Field(
+        default=None,
+        max_length=32,
+        description="TOTP or backup code, required when MFA is enabled",
+    )
+
+
 class MFARequiredResponse(BaseModel):
     """
     Response indicating MFA verification is required.

@@ -2,12 +2,12 @@
 
 from typing import Annotated
 
-import modules.users.users.crud as users_crud
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 import jafaal._internal.internal_dependencies as jafaal_internal_dependencies
 import jafaal._internal.services.step_up_service as step_up_service
+import jafaal._internal.user_guards as jafaal_user_guards
 import jafaal.api_keys.crud as jafaal_api_keys_crud
 import jafaal.api_keys.schema as api_keys_schema
 import jafaal.api_keys.utils as api_keys_utils
@@ -93,12 +93,7 @@ async def create_user_api_key(
         HTTPException: 400 if scopes are not supported for API keys.
         HTTPException: 404 if the user is not found.
     """
-    db_user = users_crud.get_user_by_id(token_user_id, db)
-    if db_user is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found",
-        )
+    jafaal_user_guards.get_user_by_id_or_404(token_user_id, db)
 
     step_up_service.verify_step_up_credentials(
         token_user_id,
@@ -110,7 +105,7 @@ async def create_user_api_key(
     )
 
     try:
-        api_keys_utils.validate_api_key_scopes(data.scopes, db_user.access_type)
+        api_keys_utils.validate_api_key_scopes(data.scopes)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-import modules.users.users.schema as users_schema
 from fastapi import HTTPException, Request, status
 from sqlalchemy.orm import Session
 
@@ -19,6 +18,7 @@ import jafaal.identity_providers.link_tokens.utils as idp_link_token_utils
 import jafaal.identity_providers.links.crud as jafaal_identity_links_crud
 import jafaal.identity_providers.links.schema as jafaal_identity_links_schema
 import jafaal.identity_providers.links.utils as jafaal_identity_links_utils
+import jafaal.schema as jafaal_schema
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ def generate_link_token(
 
 def delete_identity_provider_link(
     idp_id: int,
-    step_up: users_schema.StepUpVerification,
+    step_up: jafaal_schema.StepUpVerification,
     token_user_id: int,
     identity_service: IdentityService,
     step_up_store: jafaal_security_stores.StepUpStore,

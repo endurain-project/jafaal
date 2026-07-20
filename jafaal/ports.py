@@ -40,7 +40,8 @@ class UserProtocol(Protocol):
 
     Satisfied by a host user model built on :class:`jafaal.UserMixin` (Phase 3):
     ``id``, ``username``, ``email``, ``is_active``, ``is_superuser``,
-    ``is_verified``. JAFAAL never reads app-specific profile fields.
+    ``is_verified``, and the ``mfa_enabled`` property. JAFAAL never reads
+    app-specific profile fields.
     """
 
     id: Any
@@ -49,6 +50,7 @@ class UserProtocol(Protocol):
     is_active: bool
     is_superuser: bool
     is_verified: bool
+    mfa_enabled: bool
 
 
 @dataclass(frozen=True)

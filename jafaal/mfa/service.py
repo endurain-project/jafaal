@@ -22,12 +22,12 @@ import logging
 from io import BytesIO
 from typing import TYPE_CHECKING
 
-import modules.users.users.utils as users_utils
 import pyotp
 import qrcode
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
+import jafaal._internal.user_guards as jafaal_user_guards
 import jafaal.mfa.backup_codes.crud as mfa_backup_codes_crud
 import jafaal.mfa.backup_codes.utils as mfa_backup_codes_utils
 import jafaal.mfa.crud as jafaal_mfa_crud
@@ -123,7 +123,7 @@ def setup_user_mfa(user_id: int, db: Session) -> mfa_schema.MFASetupResponse:
     Raises:
         HTTPException: If user not found or MFA already enabled.
     """
-    user = users_utils.get_user_by_id_or_404(user_id, db)
+    user = jafaal_user_guards.get_user_by_id_or_404(user_id, db)
 
     if user.mfa_enabled:
         raise HTTPException(
@@ -162,7 +162,7 @@ def enable_user_mfa(
         HTTPException: If user not found, MFA already enabled, code
             invalid, or encryption fails.
     """
-    user = users_utils.get_user_by_id_or_404(user_id, db)
+    user = jafaal_user_guards.get_user_by_id_or_404(user_id, db)
 
     if user.mfa_enabled:
         raise HTTPException(
@@ -208,7 +208,7 @@ def disable_user_mfa(user_id: int, db: Session) -> None:
         HTTPException: 404 if the user is not found, 400 if MFA
             is not currently enabled.
     """
-    user = users_utils.get_user_by_id_or_404(user_id, db)
+    user = jafaal_user_guards.get_user_by_id_or_404(user_id, db)
 
     if not user.mfa_enabled:
         raise HTTPException(
@@ -246,7 +246,7 @@ def verify_user_mfa(
         - If TOTP fails and code is 9 characters (XXXX-XXXX), tries backup code
         - Backup codes are consumed on successful verification
     """
-    user = users_utils.get_user_by_id_or_404(user_id, db)
+    user = jafaal_user_guards.get_user_by_id_or_404(user_id, db)
 
     mfa_row = jafaal_mfa_crud.get_user_mfa_row(user.id, db)
     if not mfa_row or not mfa_row.mfa_enabled or not mfa_row.mfa_secret:
@@ -304,7 +304,7 @@ def is_mfa_enabled_for_user(user_id: int, db: Session) -> bool:
         True if MFA is enabled, False otherwise.
     """
     try:
-        user = users_utils.get_user_by_id_or_404(user_id, db)
+        user = jafaal_user_guards.get_user_by_id_or_404(user_id, db)
     except HTTPException as err:
         if err.status_code == status.HTTP_404_NOT_FOUND:
             return False

@@ -5,11 +5,11 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-import modules.users.users.utils as users_utils
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 import jafaal._internal.security_stores as jafaal_security_stores
+import jafaal._internal.user_guards as jafaal_user_guards
 import jafaal.credentials.crud as jafaal_credentials_crud
 import jafaal.mfa.service as mfa_service
 
@@ -106,7 +106,7 @@ def verify_step_up_credentials(
         )
 
     # Guard: ensure the user exists (raises 404 otherwise).
-    users_utils.get_user_by_id_or_404(user_id, db)
+    jafaal_user_guards.get_user_by_id_or_404(user_id, db)
 
     credential = jafaal_credentials_crud.get_credential(user_id, db)
     if credential is not None:
