@@ -9,11 +9,6 @@ from enum import Enum
 from typing import Any
 
 import httpx
-import modules.server_settings.schema as server_settings_schema
-import modules.server_settings.utils as server_settings_utils
-import modules.users.users.crud as users_crud
-import modules.users.users.schema as users_schema
-import modules.users.users.utils as users_utils
 from authlib.integrations.httpx_client import AsyncOAuth2Client
 from fastapi import HTTPException, Request, status
 from joserfc import jwt
@@ -28,15 +23,14 @@ from joserfc.jwk import ECKey, OctKey, RSAKey
 from sqlalchemy.orm import Session
 
 import jafaal._internal.password_hasher as jafaal_password_hasher
-import jafaal._internal.token_manager as jafaal_token_manager
 import jafaal.identity_providers.crud as idp_crud
 import jafaal.identity_providers.links.crud as jafaal_identity_links_crud
 import jafaal.identity_providers.links.models as jafaal_identity_links_models
 import jafaal.identity_providers.links.utils as jafaal_identity_links_utils
 import jafaal.identity_providers.models as idp_models
-import jafaal.identity_service as jafaal_identity_service
 import jafaal.oauth_state.crud as oauth_state_crud
 import jafaal.oauth_state.models as oauth_state_models
+import jafaal.ports as jafaal_ports
 import jafaal.settings as jafaal_settings
 from jafaal._core import crypto, network
 
@@ -1060,7 +1054,7 @@ class IdentityProviderService:
                 # LINK MODE: Associate IdP with existing authenticated user
 
                 # Verify user exists
-                user = users_crud.get_user_by_id(link_user_id, db)
+                user = jafaal_ports.get_user_repository().get_by_id(link_user_id, db)
                 if not user:
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND,
@@ -1108,7 +1102,7 @@ class IdentityProviderService:
                 }
             else:
                 # LOGIN MODE: Find or create user and establish session
-                user = await self._find_or_create_user(idp, subject, userinfo, password_hasher, db)
+                user = await self._find_or_create_user(idp, subject, userinfo, db)
 
                 # Store IdP tokens for future session renewal
                 await self._store_idp_tokens(user.id, idp.id, token_response, db)
@@ -1411,9 +1405,8 @@ class IdentityProviderService:
         idp: idp_models.IdentityProvider,
         subject: str,
         userinfo: dict[str, Any],
-        password_hasher: jafaal_password_hasher.PasswordHasher,
         db: Session,
-    ) -> users_schema.UsersRead:
+    ) -> jafaal_ports.UserProtocol:
         """
         Finds an existing user linked to the given identity provider and subject, or creates a new user if allowed.
 
@@ -1432,7 +1425,7 @@ class IdentityProviderService:
             db (Session): Database session.
 
         Returns:
-            users_schema.UsersRead: The found or newly created user instance.
+            The found or newly created user instance.
 
         Raises:
             HTTPException: If an existing account matches the email but the IdP
@@ -1446,7 +1439,7 @@ class IdentityProviderService:
             # Fetch the linked user through the CRUD layer so we work with
             # the UsersRead schema rather than reaching into the ORM
             # relationship (link.users) and crossing the module boundary.
-            user = users_crud.get_user_by_id(link.user_id, db)
+            user = jafaal_ports.get_user_repository().get_by_id(link.user_id, db)
             if user is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -1474,7 +1467,7 @@ class IdentityProviderService:
         email = mapped_data.get("email")
 
         if email:
-            user = users_crud.get_user_by_email(email, db)
+            user = jafaal_ports.get_user_repository().get_by_email(email, db)
             if user:
                 if not self._is_email_verified(userinfo):
                     logger.warning(
@@ -1507,7 +1500,7 @@ class IdentityProviderService:
                 detail="User account creation is disabled for this identity provider",
             )
 
-        user = await self._create_user_from_idp(idp, subject, mapped_data, password_hasher, db)
+        user = await self._create_user_from_idp(idp, subject, mapped_data, db)
 
         return user
 
@@ -1516,83 +1509,49 @@ class IdentityProviderService:
         idp: idp_models.IdentityProvider,
         subject: str,
         mapped_data: dict[str, Any],
-        password_hasher: jafaal_password_hasher.PasswordHasher,
         db: Session,
-    ) -> users_schema.UsersRead:
+    ) -> jafaal_ports.UserProtocol:
         """
-        Creates a new user in the database based on identity provider (IdP) information.
+        Create a new user from identity-provider claims via the host's UserRepository.
 
-        This method generates a unique username, creates a user with mapped data from the IdP
-        using the existing CRUD layer, and links the user to the IdP subject. SSO accounts get
-        no local password credential — ``create_signup_user`` is called with
-        ``persist_credential=False`` so no row is written to ``users_local_credentials`` and
-        ``has_local_password`` correctly reports ``False``. The user's email is marked as
-        verified since we trust the IdP's verification.
+        JAFAAL resolves a unique username and hands the host a minimal
+        :class:`~jafaal.ports.IdpIdentity`; the host provisions its own user row
+        (profile shape and defaults are the host's concern). SSO accounts have no
+        local password credential, and the email is treated as verified (we trust
+        the IdP). The IdP link is then recorded.
 
         Args:
             idp (idp_models.IdentityProvider): The identity provider instance.
             subject (str): The unique subject identifier from the IdP.
-            mapped_data (Dict[str, Any]): User data mapped from the IdP (e.g., username, email, name).
-            password_hasher (jafaal_password_hasher.PasswordHasher): The password hasher instance.
+            mapped_data (Dict[str, Any]): User data mapped from the IdP (username, email, name, ...).
             db (Session): The database session.
 
         Returns:
-            users_schema.UsersRead: The newly created user instance.
+            The newly created user.
 
         Raises:
-            HTTPException: If user creation fails (e.g., duplicate username/email).
+            HTTPException: If user creation fails (e.g. duplicate username/email).
         """
-        # Generate a random password solely to satisfy the required
-        # UsersSignup.password field. It is never validated, hashed, or
-        # stored because the user is created with persist_credential=False
-        # (SSO accounts have no local credential row).
-        random_password = password_hasher.generate_password(length=16)
+        repo = jafaal_ports.get_user_repository()
 
         # Ensure username is unique
         base_username = mapped_data.get("username", f"user_{subject[:8]}")
         username = base_username
-        while users_crud.get_user_by_username(username, db):
+        while repo.get_by_username(username, db):
             # secrets.randbelow is a CSPRNG; generate a 6-digit suffix
             username = f"{base_username}_{secrets_module.randbelow(900000) + 100000}"
 
-        # Create user signup schema
-        user_signup = users_schema.UsersSignup(
-            username=username,
-            email=mapped_data.get("email", f"{username}@sso.local"),
-            city=mapped_data.get("city"),
-            birthdate=mapped_data.get("birthdate"),
-            name=mapped_data.get("name", username),
-            password=random_password,
-            preferred_language=users_schema.Language.ENGLISH,
-            gender=users_schema.Gender.UNSPECIFIED,
-            units=server_settings_schema.Units.METRIC,
-            height=mapped_data.get("height"),
-            max_heart_rate=mapped_data.get("max_heart_rate"),
-            first_day_of_week=users_schema.WeekDay.MONDAY,
-            currency=server_settings_schema.Currency.EURO,
+        # Hand the host a minimal identity; it provisions its own row + defaults.
+        identity = jafaal_ports.IdpIdentity(
+            subject=subject,
+            idp_id=idp.id,
+            email=mapped_data.get("email") or f"{username}@sso.local",
+            email_verified=True,
+            suggested_username=username,
+            display_name=mapped_data.get("name", username),
+            claims=mapped_data,
         )
-
-        server_settings = server_settings_utils.get_server_settings_or_404(db)
-
-        # Build a real identity service to satisfy the create_signup_user
-        # signature. SSO accounts opt out of local-credential persistence
-        # (persist_credential=False) so no password hash is written.
-        identity_service = jafaal_identity_service.DefaultIdentityService(
-            db=db,
-            token_manager=jafaal_token_manager.get_token_manager(),
-            password_hasher=password_hasher,
-        )
-
-        created_user = users_crud.create_signup_user(
-            user_signup,
-            server_settings,
-            identity_service,
-            db,
-            persist_credential=False,
-        )
-
-        # Create default data for the user
-        users_utils.create_user_default_data(created_user.id, identity_service, db)
+        created_user = repo.provision_from_idp(identity, db)
 
         # Create the IdP link
         jafaal_identity_links_crud.create_user_identity_provider(created_user.id, idp.id, subject, db)
@@ -1603,64 +1562,31 @@ class IdentityProviderService:
 
     async def _update_user_from_idp(
         self,
-        user: users_schema.UsersRead,
+        user: jafaal_ports.UserProtocol,
         idp: idp_models.IdentityProvider,
         userinfo: dict[str, Any],
         db: Session,
-    ) -> users_schema.UsersRead:
+    ) -> jafaal_ports.UserProtocol:
         """
-        Updates the user's information based on claims received from an identity provider (IdP).
+        Sync host-owned profile fields from refreshed IdP claims.
 
-        This method syncs user profile information from the IdP to the local user account when
-        IdP sync is enabled. It performs the following steps:
-        1. Maps claims from IdP userinfo to standard user fields (email, name)
-        2. Validates email changes - checks if new email is already in use by another user
-        3. Skips email updates if conflict detected and logs the issue
-        4. Builds an updated copy of the user schema with the changed fields
-        5. Delegates persistence to the CRUD layer (edit_user)
+        JAFAAL maps the IdP claims and hands them to the host's
+        ``UserRepository.sync_from_idp``; the host decides which fields to update
+        and resolves any email conflicts. Returns the (possibly updated) user.
 
         Args:
-            user (users_schema.UsersRead): The user schema instance to update.
+            user: The user to update.
             idp (idp_models.IdentityProvider): The identity provider instance with user_mapping config.
             userinfo (Dict[str, Any]): The user information claims received from the IdP.
             db (Session): The SQLAlchemy database session.
 
         Returns:
-            users_schema.UsersRead: The updated user schema instance from database.
+            The updated user.
         """
         mapped_data = self._map_user_claims(idp, userinfo)
-
-        # Build updates
-        updates = {}
-
-        # Check email - verify not already in use
-        if "email" in mapped_data and mapped_data["email"] != user.email:
-            existing_user = users_crud.get_user_by_email(mapped_data["email"], db)
-            if existing_user and existing_user.id != user.id:
-                logger.warning(
-                    f"Cannot sync email from IdP {idp.name}: {mapped_data['email']} already in use by another user"
-                )
-            else:
-                logger.debug(
-                    f"Syncing email for user {user.username} from IdP {idp.name}: "
-                    f"{user.email} -> {mapped_data['email']}"
-                )
-                updates["email"] = mapped_data["email"].strip()
-
-        # Check name
-        if "name" in mapped_data and mapped_data["name"] != user.name:
-            logger.debug(
-                f"Syncing name for user {user.username} from IdP {idp.name}: {user.name} -> {mapped_data['name']}"
-            )
-            updates["name"] = mapped_data["name"].strip()
-
-        # Only call CRUD if there are updates
-        if updates:
-            logger.info(f"Applying updates to user {user.username}: {updates}")
-            updated_user = user.model_copy(update=updates)
-            user = await users_crud.edit_user(user.id, updated_user, db)
-
-        return user
+        repo = jafaal_ports.get_user_repository()
+        repo.sync_from_idp(user.id, mapped_data, db)
+        return repo.get_by_id(user.id, db) or user
 
     async def refresh_idp_session(
         self,

@@ -54,7 +54,6 @@ class UserProtocol(Protocol):
 
 
 @dataclass(frozen=True)
-@dataclass(frozen=True)
 class IdpIdentity:
     """An identity resolved from an external identity provider.
 
@@ -119,11 +118,12 @@ class UserRepository(Protocol):
         """
         ...
 
-    def sync_from_idp(self, user_id: Any, identity: IdpIdentity, db: Session) -> None:
+    def sync_from_idp(self, user_id: Any, claims: Mapping[str, Any], db: Session) -> None:
         """Optionally sync host-owned profile fields from refreshed IdP claims.
 
-        Called on subsequent logins when IdP→user sync is enabled. The host
-        decides which fields to update and resolves any email conflicts.
+        ``claims`` is the mapped IdP claim dict (e.g. ``email``, ``name``). Called
+        on subsequent logins when IdP→user sync is enabled; the host decides which
+        fields to update and resolves any email conflicts.
         """
         ...
 

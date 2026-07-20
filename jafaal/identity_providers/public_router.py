@@ -7,14 +7,13 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
 import core.rate_limit as core_rate_limit
-import modules.users.users.schema as users_schema
-import modules.users.users.utils as users_utils
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 import jafaal._internal.password_hasher as jafaal_password_hasher
 import jafaal._internal.token_manager as jafaal_token_manager
+import jafaal._internal.user_guards as jafaal_user_guards
 import jafaal.identity_providers.crud as idp_crud
 import jafaal.identity_providers.schema as idp_schema
 import jafaal.identity_providers.service as idp_service
@@ -64,8 +63,9 @@ def _build_link_result_url(redirect_path: str | None, idp_name: str | None, *, s
         params["idp_name"] = idp_name
     if redirect_path and idp_utils.is_custom_scheme_redirect(redirect_path):
         return _append_query_params(redirect_path, params)
-    base = redirect_path or "/settings/security"
-    return f"{jafaal_settings.get_settings().base_url}{_append_query_params(base, params)}"
+    settings = jafaal_settings.get_settings()
+    base = redirect_path or settings.sso_link_result_path
+    return f"{settings.base_url}{_append_query_params(base, params)}"
 
 
 @router.get(
@@ -341,10 +341,7 @@ async def handle_callback(
 
         # LOGIN MODE: Create session WITHOUT tokens (tokens created during exchange)
         # Validate that the user is active before creating a session
-        users_utils.check_user_is_active(user)
-
-        # Convert to UsersRead schema
-        user_read = users_schema.UsersRead.model_validate(user)
+        jafaal_user_guards.check_user_is_active(user)
 
         # Generate session ID
         session_id = str(uuid4())
@@ -358,7 +355,7 @@ async def handle_callback(
 
         jafaal_sessions_utils.create_session(
             session_id,
-            user_read,
+            user,
             request,
             None,
             password_hasher,
@@ -367,8 +364,9 @@ async def handle_callback(
         )
 
         # Redirect to frontend with session_id for token exchange
-        frontend_url = jafaal_settings.get_settings().base_url
-        redirect_url = f"{frontend_url}/login?sso=success&session_id={session_id}"
+        settings = jafaal_settings.get_settings()
+        frontend_url = settings.base_url
+        redirect_url = f"{frontend_url}{settings.sso_login_result_path}?sso=success&session_id={session_id}"
 
         redirect_path = result.get("redirect_path")
         if redirect_path:
@@ -398,7 +396,8 @@ async def handle_callback(
         if oauth_state is not None and oauth_state.user_id is not None:
             error_url = _build_link_result_url(oauth_state.redirect_path, None, success=False)
         else:
-            error_url = f"{jafaal_settings.get_settings().base_url}/login?error=sso_failed"
+            settings = jafaal_settings.get_settings()
+            error_url = f"{settings.base_url}{settings.sso_error_path}?error=sso_failed"
 
         return RedirectResponse(url=error_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
 
@@ -560,8 +559,7 @@ async def exchange_tokens_for_session(
         # PKCE verification successful - retrieve user and create tokens
         user = session_obj.users
         # Validate that the user is still active before minting tokens
-        users_utils.check_user_is_active(user)
-        user_read = users_schema.UsersRead.model_validate(user)
+        jafaal_user_guards.check_user_is_active(user)
 
         # Create JWT tokens (now that PKCE is verified)
         (
@@ -571,7 +569,7 @@ async def exchange_tokens_for_session(
             refresh_token_exp,
             refresh_token,
             csrf_token,
-        ) = jafaal_utils.create_tokens(user_read, token_manager, session_id)
+        ) = jafaal_utils.create_tokens(user, token_manager, session_id)
 
         # Calculate expires_in from access token expiration
         expires_in = int((access_token_exp - datetime.now(UTC)).total_seconds())
