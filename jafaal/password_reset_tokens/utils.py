@@ -4,12 +4,6 @@ import logging
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-import core.apprise as core_apprise
-import core.i18n as core_i18n
-import modules.server_settings.utils as server_settings_utils
-import modules.users.users.crud as users_crud
-import modules.users.users.schema as users_schema
-import modules.users.users.utils as users_utils
 from fastapi import (
     HTTPException,
     status,
@@ -18,17 +12,16 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 import jafaal._internal.security_stores as jafaal_security_stores
+import jafaal._internal.user_guards as jafaal_user_guards
 import jafaal.credentials.crud as jafaal_credentials_crud
 import jafaal.password_policy as jafaal_password_policy
 import jafaal.password_reset_tokens.crud as password_reset_tokens_crud
 import jafaal.password_reset_tokens.schema as password_reset_tokens_schema
+import jafaal.ports as jafaal_ports
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.token_hashing as token_hashing
 from jafaal.identity_service import IdentityService
 from jafaal.orm import session_scope
-from jafaal.password_reset_tokens import (
-    email_messages as password_reset_tokens_email_messages,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +39,7 @@ def create_password_reset_token(user_id: int, db: Session) -> str:
         Only the token hash is stored in the database.
     """
     # Generate token and hash
-    token, token_hash = core_apprise.generate_token_and_hash()
+    token, token_hash = token_hashing.generate_token_and_hash()
 
     # Create token object
     reset_token = password_reset_tokens_schema.PasswordResetToken(
@@ -65,59 +58,41 @@ def create_password_reset_token(user_id: int, db: Session) -> str:
     return token
 
 
-async def send_password_reset_email(email: str, email_service: core_apprise.AppriseService, db: Session) -> bool:
+async def request_password_reset(email: str, db: Session) -> None:
     """
-    Send a password reset email to the given address.
+    Handle a password-reset request for ``email``.
+
+    Enumeration-safe: when the address maps to an active account, a single-use
+    reset token is minted and a :class:`~jafaal.ports.PasswordResetRequested`
+    event is emitted for the host to deliver (email, SMS, ...). Otherwise nothing
+    happens. The function never reveals whether the account exists, and
+    event-delivery failures are swallowed (logged) so they cannot change the
+    caller's response.
 
     Args:
-        email: Recipient email address.
-        email_service: Configured AppriseService instance.
+        email: The email address supplied in the reset request.
         db: Active SQLAlchemy session.
-
-    Returns:
-        True if the operation is considered successful,
-        False if the email service failed to send.
-
-    Raises:
-        HTTPException: 503 if the email service is not configured.
     """
-    # Check if email service is configured
-    if not email_service.is_configured():
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Email service is not configured",
-        )
+    user = jafaal_ports.get_user_repository().get_by_email(email, db)
+    if user is None or not user.is_active:
+        # Don't reveal whether the address maps to an (active) account.
+        return
 
-    # Find user by email
-    user = users_crud.get_user_by_email(email, db)
-    if not user:
-        # Don't reveal if email exists or not for security
-        return True
-
-    # Check if user is active
-    if not user.active:
-        # Don't reveal if user is inactive for security
-        return True
-
-    # Generate password reset token
     token = create_password_reset_token(user.id, db)
-
-    # Generate reset link
-    reset_link = f"{email_service.frontend_host}/reset-password?token={token}"
-
-    # Build localized email using the user's preferred language
-    locale = core_i18n.normalize_locale(user.preferred_language)
-    subject, html_content, text_content = password_reset_tokens_email_messages.get_password_reset_email(
-        user.name, reset_link, email_service, locale
+    event = jafaal_ports.PasswordResetRequested(
+        user_id=user.id,
+        email=user.email,
+        display_name=user.username,
+        token=token,
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+        locale=None,
     )
-
-    # Send email
-    return await email_service.send_email(
-        to_emails=[email],
-        subject=subject,
-        html_content=html_content,
-        text_content=text_content,
-    )
+    try:
+        await jafaal_ports.get_event_sink().on_password_reset_requested(event)
+    except Exception:
+        # Best-effort delivery: never surface a failure — doing so would leak
+        # account existence and break the enumeration-safe contract.
+        logger.exception("Failed to deliver password-reset event for user %s", user.id)
 
 
 def use_password_reset_token(
@@ -153,14 +128,11 @@ def use_password_reset_token(
             detail="Invalid or expired password reset token",
         )
 
-    server_settings = server_settings_utils.get_server_settings_or_404(db)
-    db_user = users_utils.get_user_by_id_or_404(token_user_id, db)
-    access_type = users_schema.normalize_access_type(db_user.access_type)
+    db_user = jafaal_user_guards.get_user_by_id_or_404(token_user_id, db)
     try:
         hashed_password = jafaal_password_policy.validate_and_hash_for_user(
             identity_service,
-            server_settings,
-            access_type,
+            db_user.is_superuser,
             new_password,
         )
     except HTTPException as err:

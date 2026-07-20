@@ -5,13 +5,11 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-import modules.server_settings.utils as server_settings_utils
-import modules.users.users.schema as users_schema
-import modules.users.users.utils as users_utils
 from sqlalchemy.orm import Session
 
 import jafaal._internal.security_stores as jafaal_security_stores
 import jafaal._internal.services.step_up_service as step_up_service
+import jafaal._internal.user_guards as jafaal_user_guards
 import jafaal.password_policy as jafaal_password_policy
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.schema as jafaal_sessions_schema
@@ -117,13 +115,10 @@ def change_own_password(
         db,
     )
 
-    server_settings = server_settings_utils.get_server_settings_or_404(db)
-    db_user = users_utils.get_user_by_id_or_404(user_id, db)
-    access_type = users_schema.normalize_access_type(db_user.access_type)
+    db_user = jafaal_user_guards.get_user_by_id_or_404(user_id, db)
     hashed_password = jafaal_password_policy.validate_and_hash_for_user(
         identity_service,
-        server_settings,
-        access_type,
+        db_user.is_superuser,
         new_password,
     )
     identity_service.set_local_password_hash(user_id, hashed_password)
@@ -161,13 +156,10 @@ def change_managed_user_password(
     Raises:
         HTTPException: If password persistence fails.
     """
-    server_settings = server_settings_utils.get_server_settings_or_404(db)
-    db_user = users_utils.get_user_by_id_or_404(user_id, db)
-    access_type = users_schema.normalize_access_type(db_user.access_type)
+    db_user = jafaal_user_guards.get_user_by_id_or_404(user_id, db)
     hashed_password = jafaal_password_policy.validate_and_hash_for_user(
         identity_service,
-        server_settings,
-        access_type,
+        db_user.is_superuser,
         new_password,
     )
     identity_service.set_local_password_hash(user_id, hashed_password)

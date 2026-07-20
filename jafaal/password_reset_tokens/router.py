@@ -2,12 +2,10 @@
 
 from typing import Annotated
 
-import core.apprise as core_apprise
 import core.rate_limit as core_rate_limit
 from fastapi import (
     APIRouter,
     Depends,
-    HTTPException,
     Request,
     status,
 )
@@ -31,10 +29,6 @@ router = APIRouter()
 async def request_password_reset(
     request: Request,
     request_data: password_reset_tokens_schema.PasswordResetRequest,
-    email_service: Annotated[
-        core_apprise.AppriseService,
-        Depends(core_apprise.get_email_service),
-    ],
     db: Annotated[
         Session,
         Depends(jafaal_orm.get_db),
@@ -43,31 +37,22 @@ async def request_password_reset(
     """
     Handle a password reset request.
 
+    Mints a reset token for an active account and emits a
+    ``PasswordResetRequested`` event for the host to deliver. Always returns the
+    same generic message so the response cannot be used to enumerate accounts.
+
     Args:
         request: The HTTP request object.
         request_data: Pydantic model with the email address.
-        email_service: Dependency-injected email service.
         db: Dependency-injected database session.
 
     Returns:
         Generic success message to avoid user enumeration.
-
-    Raises:
-        HTTPException: 500 if sending the reset email fails.
-        HTTPException: 503 if email service is not configured.
     """
-    success = await password_reset_tokens_utils.send_password_reset_email(request_data.email, email_service, db)
+    await password_reset_tokens_utils.request_password_reset(request_data.email, db)
 
-    # if the email was sent successfully send a generic success message
-    if success:
-        return password_reset_tokens_schema.PasswordResetResponse(
-            message=("If the email exists in the system, a password reset link has been sent.")
-        )
-
-    # If the email sending failed, raise an error
-    raise HTTPException(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        detail="Unable to send password reset email",
+    return password_reset_tokens_schema.PasswordResetResponse(
+        message="If the email exists in the system, a password reset link has been sent."
     )
 
 

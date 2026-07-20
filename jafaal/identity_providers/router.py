@@ -3,7 +3,6 @@
 from collections.abc import Callable
 from typing import Annotated
 
-import modules.users.users.schema as users_schema
 from fastapi import APIRouter, Depends, Security, status
 from sqlalchemy.orm import Session
 
@@ -25,7 +24,7 @@ router = APIRouter()
 )
 async def list_identity_providers(
     _check_scopes: Annotated[
-        users_schema.UsersRead,
+        None,
         Security(jafaal_dependencies.check_scopes, scopes=["identity_providers:read"]),
     ],
     db: Annotated[Session, Depends(jafaal_orm.get_db)],
@@ -51,7 +50,7 @@ async def list_identity_providers(
 )
 async def list_idp_templates(
     _check_scopes: Annotated[
-        users_schema.UsersRead,
+        None,
         Security(jafaal_dependencies.check_scopes, scopes=["identity_providers:read"]),
     ],
 ) -> list[idp_schema.IdentityProviderTemplate]:
@@ -75,7 +74,7 @@ async def list_idp_templates(
 )
 async def create_identity_provider(
     _check_scopes: Annotated[
-        users_schema.UsersRead,
+        None,
         Security(jafaal_dependencies.check_scopes, scopes=["identity_providers:write"]),
     ],
     idp_data: idp_schema.IdentityProviderCreate,
@@ -109,7 +108,7 @@ async def update_identity_provider(
     idp_id: int,
     _validate_id: Annotated[Callable, Depends(idp_dependencies.validate_idp_id)],
     _check_scopes: Annotated[
-        users_schema.UsersRead,
+        None,
         Security(jafaal_dependencies.check_scopes, scopes=["identity_providers:write"]),
     ],
     idp_data: idp_schema.IdentityProviderUpdate,
@@ -140,7 +139,7 @@ async def delete_identity_provider(
     idp_id: int,
     _validate_id: Annotated[Callable, Depends(idp_dependencies.validate_idp_id)],
     _check_scopes: Annotated[
-        users_schema.UsersRead,
+        None,
         Security(jafaal_dependencies.check_scopes, scopes=["identity_providers:write"]),
     ],
     db: Annotated[Session, Depends(jafaal_orm.get_db)],

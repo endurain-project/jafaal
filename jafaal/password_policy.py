@@ -1,64 +1,40 @@
 """Auth-owned password policy helpers.
 
-Single source of truth for translating a user's access type
-into the correct minimum password length and for delegating
-validate+hash to IdentityService.
+Resolves the host's password policy (via the :class:`~jafaal.ports.SettingsProvider`
+port) into the correct minimum length for the account's tier and delegates
+validate+hash to the IdentityService.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import jafaal.ports as jafaal_ports
+
 if TYPE_CHECKING:
-    import modules.server_settings.models as server_settings_models
-    import modules.server_settings.schema as server_settings_schema
-
     import jafaal.identity_service as jafaal_identity_service
-
-
-def resolve_password_min_length(
-    server_settings: server_settings_models.ServerSettings | server_settings_schema.ServerSettingsRead,
-    access_type: str,
-) -> int:
-    """
-    Return minimum password length based on user access type.
-
-    Args:
-        server_settings: Settings containing password policy.
-        access_type: User access type string ("admin" or other).
-
-    Returns:
-        Minimum password length as an integer.
-    """
-    if access_type == "admin":
-        return server_settings.password_length_admin_users
-    return server_settings.password_length_regular_users
 
 
 def validate_and_hash_for_user(
     identity_service: jafaal_identity_service.IdentityService,
-    server_settings: server_settings_models.ServerSettings | server_settings_schema.ServerSettingsRead,
-    access_type: str,
+    is_superuser: bool,
     password: str,
 ) -> str:
     """
-    Validate and hash a password using the user's policy.
+    Validate and hash a password using the account's tier policy.
 
     Args:
         identity_service: Identity service for hashing.
-        server_settings: Settings containing password policy.
-        access_type: User access type string ("admin" or other).
+        is_superuser: Whether the account is an admin/superuser (selects the
+            admin minimum length rather than the regular one).
         password: Plaintext password to validate and hash.
 
     Returns:
         The hashed password string.
 
     Raises:
-        HTTPException: If password fails validation.
+        HTTPException: If the password fails validation.
     """
-    min_length = resolve_password_min_length(server_settings, access_type)
-    return identity_service.validate_and_hash_password(
-        password,
-        min_length,
-        str(server_settings.password_type),
-    )
+    policy = jafaal_ports.get_settings_provider().get_password_policy()
+    min_length = policy.min_length_for(is_superuser=is_superuser)
+    return identity_service.validate_and_hash_password(password, min_length, policy.password_type)

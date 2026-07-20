@@ -34,8 +34,6 @@ import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Annotated, Protocol, runtime_checkable
 
-import modules.users.users.schema as users_schema
-import modules.users.users.utils as users_utils
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -45,11 +43,14 @@ import jafaal._internal.services.account_security_service as jafaal_account_secu
 import jafaal._internal.services.identity_link_service as jafaal_identity_link_service
 import jafaal._internal.services.mfa_workflow as jafaal_mfa_workflow
 import jafaal._internal.token_manager as jafaal_token_manager
+import jafaal._internal.user_guards as jafaal_user_guards
 import jafaal.api_keys.crud as jafaal_api_keys_crud
 import jafaal.api_keys.utils as jafaal_api_keys_utils
 import jafaal.credentials.crud as jafaal_credentials_crud
 import jafaal.mfa.crud as jafaal_mfa_crud
 import jafaal.orm as jafaal_orm
+import jafaal.ports as jafaal_ports
+import jafaal.schema as jafaal_schema
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.utils as jafaal_utils
 from jafaal.principal import (
@@ -181,7 +182,7 @@ class IdentityService(Protocol):
 
     def issue_token_pair(
         self,
-        user: users_schema.UsersRead,
+        user: jafaal_ports.UserProtocol,
         session_id: str | None = None,
     ) -> tuple[str, datetime, str, datetime, str, str]:
         """Issue an access/refresh token pair for a user.
@@ -354,7 +355,7 @@ class IdentityService(Protocol):
     #
     # These are higher-level, route-facing workflows (sessions, password
     # change, MFA lifecycle, IdP linking) consumed by non-auth routers
-    # (e.g. ``modules.users.users_profile``). They are part of the public auth
+    # (e.g. a host user-profile router). They are part of the public auth
     # boundary: implementations live in ``jafaal._internal.services.*`` and are reached
     # only through this contract, never imported directly by non-auth code.
     # ------------------------------------------------------------------
@@ -539,7 +540,7 @@ class IdentityService(Protocol):
 
     def generate_backup_codes(
         self,
-        step_up: users_schema.StepUpVerification,
+        step_up: jafaal_schema.StepUpVerification,
         user_id: int,
         step_up_store: jafaal_security_stores.StepUpStore,
     ) -> jafaal_mfa_backup_codes_schema.MFABackupCodesResponse:
@@ -587,7 +588,7 @@ class IdentityService(Protocol):
     def delete_identity_provider_link(
         self,
         idp_id: int,
-        step_up: users_schema.StepUpVerification,
+        step_up: jafaal_schema.StepUpVerification,
         user_id: int,
         step_up_store: jafaal_security_stores.StepUpStore,
     ) -> None:
@@ -820,8 +821,8 @@ class DefaultIdentityService:
                 detail=("Invalid token: 'sid' claim must be a string"),
             )
 
-        user = users_utils.get_user_by_id_or_404(sub, self._db)
-        users_utils.check_user_is_active(user)
+        user = jafaal_user_guards.get_user_by_id_or_404(sub, self._db)
+        jafaal_user_guards.check_user_is_active(user)
 
         return self._build_principal(
             user,
@@ -867,8 +868,8 @@ class DefaultIdentityService:
                 headers={"WWW-Authenticate": "ApiKey"},
             )
 
-        user = users_utils.get_user_by_id_or_404(db_key.user_id, self._db)
-        users_utils.check_user_is_active(user)
+        user = jafaal_user_guards.get_user_by_id_or_404(db_key.user_id, self._db)
+        jafaal_user_guards.check_user_is_active(user)
 
         if not db_key.is_active:
             raise HTTPException(
@@ -936,8 +937,8 @@ class DefaultIdentityService:
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
-        user = users_utils.get_user_by_id_or_404(db_session.user_id, self._db)
-        users_utils.check_user_is_active(user)
+        user = jafaal_user_guards.get_user_by_id_or_404(db_session.user_id, self._db)
+        jafaal_user_guards.check_user_is_active(user)
 
         return self._build_principal(
             user,
@@ -947,7 +948,7 @@ class DefaultIdentityService:
 
     def issue_token_pair(
         self,
-        user: users_schema.UsersRead,
+        user: jafaal_ports.UserProtocol,
         session_id: str | None = None,
     ) -> tuple[str, datetime, str, datetime, str, str]:
         """Issue an access/refresh token pair for a user.
@@ -1232,7 +1233,7 @@ class DefaultIdentityService:
 
     def generate_backup_codes(
         self,
-        step_up: users_schema.StepUpVerification,
+        step_up: jafaal_schema.StepUpVerification,
         user_id: int,
         step_up_store: jafaal_security_stores.StepUpStore,
     ) -> jafaal_mfa_backup_codes_schema.MFABackupCodesResponse:
@@ -1261,7 +1262,7 @@ class DefaultIdentityService:
     def delete_identity_provider_link(
         self,
         idp_id: int,
-        step_up: users_schema.StepUpVerification,
+        step_up: jafaal_schema.StepUpVerification,
         user_id: int,
         step_up_store: jafaal_security_stores.StepUpStore,
     ) -> None:
