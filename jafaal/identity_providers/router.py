@@ -3,7 +3,6 @@
 from collections.abc import Callable
 from typing import Annotated
 
-import core.database as core_database
 import modules.users.users.schema as users_schema
 from fastapi import APIRouter, Depends, Security, status
 from sqlalchemy.orm import Session
@@ -13,6 +12,7 @@ import jafaal.identity_providers.crud as idp_crud
 import jafaal.identity_providers.dependencies as idp_dependencies
 import jafaal.identity_providers.schema as idp_schema
 import jafaal.identity_providers.utils as idp_utils
+import jafaal.orm as jafaal_orm
 
 # Define the API router
 router = APIRouter()
@@ -28,7 +28,7 @@ async def list_identity_providers(
         users_schema.UsersRead,
         Security(jafaal_dependencies.check_scopes, scopes=["identity_providers:read"]),
     ],
-    db: Annotated[Session, Depends(core_database.get_db)],
+    db: Annotated[Session, Depends(jafaal_orm.get_db)],
 ) -> list[idp_schema.IdentityProvider]:
     """
     Retrieve a list of all identity providers.
@@ -79,7 +79,7 @@ async def create_identity_provider(
         Security(jafaal_dependencies.check_scopes, scopes=["identity_providers:write"]),
     ],
     idp_data: idp_schema.IdentityProviderCreate,
-    db: Annotated[Session, Depends(core_database.get_db)],
+    db: Annotated[Session, Depends(jafaal_orm.get_db)],
 ) -> idp_schema.IdentityProvider:
     """
     Create a new identity provider.
@@ -113,7 +113,7 @@ async def update_identity_provider(
         Security(jafaal_dependencies.check_scopes, scopes=["identity_providers:write"]),
     ],
     idp_data: idp_schema.IdentityProviderUpdate,
-    db: Annotated[Session, Depends(core_database.get_db)],
+    db: Annotated[Session, Depends(jafaal_orm.get_db)],
 ) -> idp_schema.IdentityProvider:
     """
     Update an existing identity provider.
@@ -143,7 +143,7 @@ async def delete_identity_provider(
         users_schema.UsersRead,
         Security(jafaal_dependencies.check_scopes, scopes=["identity_providers:write"]),
     ],
-    db: Annotated[Session, Depends(core_database.get_db)],
+    db: Annotated[Session, Depends(jafaal_orm.get_db)],
 ) -> None:
     """
     Delete an identity provider by ID.

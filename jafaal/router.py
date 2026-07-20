@@ -3,7 +3,6 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Annotated
 
-import core.database as core_database
 import core.rate_limit as core_rate_limit
 import modules.users.users.crud as users_crud
 import modules.users.users.utils as users_utils
@@ -26,6 +25,7 @@ import jafaal._internal.token_manager as jafaal_token_manager
 import jafaal.identity_providers.utils as idp_utils
 import jafaal.identity_service as jafaal_identity_service
 import jafaal.mfa.service as mfa_service
+import jafaal.orm as jafaal_orm
 import jafaal.schema as jafaal_schema
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.rotated_refresh_tokens.utils as jafaal_sessions_rotated_tokens_utils
@@ -125,7 +125,7 @@ async def login_for_access_token(
     ],
     db: Annotated[
         Session,
-        Depends(core_database.get_db),
+        Depends(jafaal_orm.get_db),
     ],
     code_challenge: Annotated[str | None, Query()] = None,
     code_challenge_method: Annotated[str | None, Query()] = None,
@@ -292,7 +292,7 @@ async def verify_mfa_and_login(
     ],
     db: Annotated[
         Session,
-        Depends(core_database.get_db),
+        Depends(jafaal_orm.get_db),
     ],
     code_challenge: Annotated[str | None, Query()] = None,
     code_challenge_method: Annotated[str | None, Query()] = None,
@@ -461,7 +461,7 @@ async def refresh_token(
     ],
     db: Annotated[
         Session,
-        Depends(core_database.get_db),
+        Depends(jafaal_orm.get_db),
     ],
     client_type: Annotated[str, Depends(jafaal_internal_dependencies.header_client_type_scheme)],
     x_csrf_token: Annotated[str | None, Depends(jafaal_internal_dependencies.header_csrf_token_scheme)] = None,
@@ -739,7 +739,7 @@ async def logout(
     ],
     db: Annotated[
         Session,
-        Depends(core_database.get_db),
+        Depends(jafaal_orm.get_db),
     ],
 ):
     """

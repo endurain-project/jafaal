@@ -3,9 +3,10 @@
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from core.database import Base
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from jafaal.orm import Base
 
 if TYPE_CHECKING:
     from modules.users.users.models import Users

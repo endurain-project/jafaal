@@ -5,11 +5,11 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-import core.database as core_database
 from sqlalchemy.orm import Session
 
 import jafaal.identity_providers.link_tokens.crud as idp_link_token_crud
 import jafaal.identity_providers.link_tokens.schema as idp_link_token_schema
+import jafaal.orm as jafaal_orm
 import jafaal.token_hashing as token_hashing
 
 logger = logging.getLogger(__name__)
@@ -93,7 +93,7 @@ def delete_idp_link_expired_tokens_from_db() -> None:
         - The operation is idempotent: running it repeatedly when there
           are no expired tokens will have no further effect.
     """
-    with core_database.SessionLocal() as db:
+    with jafaal_orm.session_scope() as db:
         num_deleted = idp_link_token_crud.delete_expired_tokens(db)
 
         if num_deleted > 0:

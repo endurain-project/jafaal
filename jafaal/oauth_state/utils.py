@@ -3,9 +3,8 @@
 import logging
 import secrets
 
-from core.database import SessionLocal
-
 import jafaal.oauth_state.crud as oauth_state_crud
+from jafaal.orm import session_scope
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +32,7 @@ def delete_expired_oauth_states_from_db() -> None:
     Returns:
         None.
     """
-    with SessionLocal() as db:
+    with session_scope() as db:
         num_deleted = oauth_state_crud.delete_expired_oauth_states(db)
 
         if num_deleted > 0:

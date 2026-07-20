@@ -2,7 +2,6 @@
 
 from typing import Annotated
 
-import core.database as core_database
 import modules.users.users.crud as users_crud
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -14,6 +13,7 @@ import jafaal.api_keys.schema as api_keys_schema
 import jafaal.api_keys.utils as api_keys_utils
 import jafaal.dependencies as jafaal_dependencies
 import jafaal.identity_service as jafaal_identity_service
+import jafaal.orm as jafaal_orm
 
 # Define the API router
 router = APIRouter()
@@ -29,7 +29,7 @@ async def get_user_api_keys(
         int,
         Depends(jafaal_internal_dependencies.get_sub_from_access_token),
     ],
-    db: Annotated[Session, Depends(core_database.get_db)],
+    db: Annotated[Session, Depends(jafaal_orm.get_db)],
 ) -> list[api_keys_schema.UsersApiKeyRead]:
     """
     Retrieve all API keys for the authenticated user.
@@ -64,7 +64,7 @@ async def create_user_api_key(
         jafaal_dependencies.StepUpStore,
         Depends(jafaal_dependencies.get_step_up_attempts),
     ],
-    db: Annotated[Session, Depends(core_database.get_db)],
+    db: Annotated[Session, Depends(jafaal_orm.get_db)],
 ) -> api_keys_schema.UsersApiKeyCreated:
     """
     Create a new API key for the authenticated user.
@@ -143,7 +143,7 @@ async def revoke_user_api_key(
         int,
         Depends(jafaal_internal_dependencies.get_sub_from_access_token),
     ],
-    db: Annotated[Session, Depends(core_database.get_db)],
+    db: Annotated[Session, Depends(jafaal_orm.get_db)],
 ) -> None:
     """
     Revoke an API key (soft-disable).
@@ -176,7 +176,7 @@ async def delete_user_api_key(
         int,
         Depends(jafaal_internal_dependencies.get_sub_from_access_token),
     ],
-    db: Annotated[Session, Depends(core_database.get_db)],
+    db: Annotated[Session, Depends(jafaal_orm.get_db)],
 ) -> None:
     """
     Permanently delete an API key.

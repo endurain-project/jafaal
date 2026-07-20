@@ -5,27 +5,32 @@ SQLAlchemy *mixins* that carry only the columns the authentication layer needs,
 leaving the table name, the primary-key type, and every profile column to the
 host application.
 
-A host app composes a primary-key mixin with its own declarative ``Base`` and
-adds whatever extra columns and relationships it needs::
+A host app composes a primary-key mixin with JAFAAL's ``Base`` and adds
+whatever extra profile columns it needs::
 
     from sqlalchemy import String
     from sqlalchemy.orm import Mapped, mapped_column
 
-    from myapp.database import Base  # the app's own DeclarativeBase
-    from jafaal.user_model import IntPKUserMixin
+    from jafaal.orm import Base
+    from jafaal import IntPKUserMixin
 
 
-    class User(IntPKUserMixin, Base):
+    class Users(IntPKUserMixin, Base):
         __tablename__ = "users"
 
         # Application-specific profile columns:
         display_name: Mapped[str | None] = mapped_column(String(250))
         city: Mapped[str | None] = mapped_column(String(250))
 
-For a UUID primary key, subclass :class:`UUIDPKUserMixin` instead::
+For a UUID primary key, subclass :class:`UUIDPKUserMixin` instead.
 
-    class User(UUIDPKUserMixin, Base):
-        __tablename__ = "users"
+**Conventions (required).** JAFAAL's companion tables resolve their
+relationships and foreign keys by name, so the host model **must** be the class
+``Users`` mapped to the ``users`` table, built on :data:`jafaal.orm.Base` (so it
+shares JAFAAL's single registry — see :mod:`jafaal.orm`). The reverse
+relationships to JAFAAL's tables (``users_sessions``, ``local_credential``,
+``auth_mfa`` …) and the ``mfa_enabled`` property are supplied by the mixin; the
+host does not declare them.
 
 The mixins are deliberately minimal. Only these fields are consumed by the
 auth layer:
@@ -46,10 +51,23 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, String, Uuid
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, declared_attr, mapped_column, relationship
 from sqlalchemy.sql import func
+
+if TYPE_CHECKING:
+    from jafaal.api_keys.models import UsersApiKeys
+    from jafaal.credentials.models import LocalCredential
+    from jafaal.identity_providers.link_tokens.models import IdpLinkToken
+    from jafaal.identity_providers.links.models import IdentityLink
+    from jafaal.mfa.backup_codes.models import MFABackupCode
+    from jafaal.mfa.models import UsersMFA
+    from jafaal.oauth_state.models import OAuthState
+    from jafaal.password_reset_tokens.models import PasswordResetToken
+    from jafaal.sessions.models import UsersSessions
+    from jafaal.sign_up_tokens.models import SignUpToken
 
 __all__ = [
     "IntPKUserMixin",
@@ -111,6 +129,60 @@ class UserMixin:
         nullable=False,
         comment="Last-update timestamp (UTC)",
     )
+
+    # ------------------------------------------------------------------
+    # Reverse relationships to JAFAAL's auth-owned tables.
+    #
+    # Declared via ``declared_attr`` so any host user model composing this
+    # mixin automatically gets the counterparts that JAFAAL's models
+    # ``back_populates``. All resolve by class name within JAFAAL's single
+    # registry (:data:`jafaal.orm.Base`); the host declares none of them.
+    # ------------------------------------------------------------------
+
+    @declared_attr
+    def users_sessions(cls) -> Mapped[list[UsersSessions]]:
+        return relationship("UsersSessions", back_populates="users", cascade="all, delete-orphan")
+
+    @declared_attr
+    def users_api_keys(cls) -> Mapped[list[UsersApiKeys]]:
+        return relationship("UsersApiKeys", back_populates="users", cascade="all, delete-orphan")
+
+    @declared_attr
+    def password_reset_tokens(cls) -> Mapped[list[PasswordResetToken]]:
+        return relationship("PasswordResetToken", back_populates="users", cascade="all, delete-orphan")
+
+    @declared_attr
+    def sign_up_tokens(cls) -> Mapped[list[SignUpToken]]:
+        return relationship("SignUpToken", back_populates="users", cascade="all, delete-orphan")
+
+    @declared_attr
+    def user_identity_providers(cls) -> Mapped[list[IdentityLink]]:
+        return relationship("IdentityLink", back_populates="users", cascade="all, delete-orphan")
+
+    @declared_attr
+    def idp_link_tokens(cls) -> Mapped[list[IdpLinkToken]]:
+        return relationship("IdpLinkToken", back_populates="users", cascade="all, delete-orphan")
+
+    @declared_attr
+    def oauth_states(cls) -> Mapped[list[OAuthState]]:
+        return relationship("OAuthState", back_populates="users", cascade="all, delete-orphan")
+
+    @declared_attr
+    def mfa_backup_codes(cls) -> Mapped[list[MFABackupCode]]:
+        return relationship("MFABackupCode", back_populates="users", cascade="all, delete-orphan")
+
+    @declared_attr
+    def auth_mfa(cls) -> Mapped[UsersMFA | None]:
+        return relationship("UsersMFA", back_populates="users", uselist=False, cascade="all, delete-orphan")
+
+    @declared_attr
+    def local_credential(cls) -> Mapped[LocalCredential | None]:
+        return relationship("LocalCredential", back_populates="users", uselist=False, cascade="all, delete-orphan")
+
+    @property
+    def mfa_enabled(self) -> bool:
+        """Return ``True`` when MFA is active for this user."""
+        return bool(self.auth_mfa and self.auth_mfa.mfa_enabled)
 
 
 class IntPKUserMixin(UserMixin):

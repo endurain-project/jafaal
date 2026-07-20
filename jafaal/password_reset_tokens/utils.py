@@ -10,7 +10,6 @@ import modules.server_settings.utils as server_settings_utils
 import modules.users.users.crud as users_crud
 import modules.users.users.schema as users_schema
 import modules.users.users.utils as users_utils
-from core.database import SessionLocal
 from fastapi import (
     HTTPException,
     status,
@@ -26,6 +25,7 @@ import jafaal.password_reset_tokens.schema as password_reset_tokens_schema
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.token_hashing as token_hashing
 from jafaal.identity_service import IdentityService
+from jafaal.orm import session_scope
 from jafaal.password_reset_tokens import (
     email_messages as password_reset_tokens_email_messages,
 )
@@ -210,7 +210,7 @@ def delete_invalid_tokens_from_db() -> None:
         None
     """
     # Create a new database session using context manager
-    with SessionLocal() as db:
+    with session_scope() as db:
         # Get num tokens deleted
         num_deleted = password_reset_tokens_crud.delete_expired_password_reset_tokens(db)
 

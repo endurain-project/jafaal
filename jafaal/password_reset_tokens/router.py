@@ -3,7 +3,6 @@
 from typing import Annotated
 
 import core.apprise as core_apprise
-import core.database as core_database
 import core.rate_limit as core_rate_limit
 from fastapi import (
     APIRouter,
@@ -15,6 +14,7 @@ from fastapi import (
 from sqlalchemy.orm import Session
 
 import jafaal.identity_service as jafaal_identity_service
+import jafaal.orm as jafaal_orm
 import jafaal.password_reset_tokens.schema as password_reset_tokens_schema
 import jafaal.password_reset_tokens.utils as password_reset_tokens_utils
 
@@ -37,7 +37,7 @@ async def request_password_reset(
     ],
     db: Annotated[
         Session,
-        Depends(core_database.get_db),
+        Depends(jafaal_orm.get_db),
     ],
 ) -> password_reset_tokens_schema.PasswordResetResponse:
     """
@@ -86,7 +86,7 @@ async def confirm_password_reset(
     ],
     db: Annotated[
         Session,
-        Depends(core_database.get_db),
+        Depends(jafaal_orm.get_db),
     ],
 ) -> password_reset_tokens_schema.PasswordResetResponse:
     """

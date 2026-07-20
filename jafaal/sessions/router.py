@@ -3,7 +3,6 @@
 import logging
 from typing import Annotated
 
-import core.database as core_database
 from fastapi import (
     APIRouter,
     Depends,
@@ -14,6 +13,7 @@ from fastapi import (
 from sqlalchemy.orm import Session
 
 import jafaal.dependencies as jafaal_dependencies
+import jafaal.orm as jafaal_orm
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.schema as jafaal_sessions_schema
 import jafaal.settings as jafaal_settings
@@ -35,7 +35,7 @@ async def read_sessions_user(
         None,
         Security(jafaal_dependencies.check_scopes, scopes=["sessions:read"]),
     ],
-    db: Annotated[Session, Depends(core_database.get_db)],
+    db: Annotated[Session, Depends(jafaal_orm.get_db)],
 ) -> list[jafaal_sessions_schema.UsersSessionsRead]:
     """
     Retrieve all sessions associated with a specific user.
@@ -66,7 +66,7 @@ async def delete_session_user(
         None,
         Security(jafaal_dependencies.check_scopes, scopes=["sessions:write"]),
     ],
-    db: Annotated[Session, Depends(core_database.get_db)],
+    db: Annotated[Session, Depends(jafaal_orm.get_db)],
 ) -> None:
     """
     Delete a user session.
@@ -96,7 +96,7 @@ async def delete_sessions_user(
         None,
         Security(jafaal_dependencies.check_scopes, scopes=["sessions:write"]),
     ],
-    db: Annotated[Session, Depends(core_database.get_db)],
+    db: Annotated[Session, Depends(jafaal_orm.get_db)],
     exclude_session_id: Annotated[
         str | None,
         Query(description="Session to keep intact (e.g. the caller's current session)"),

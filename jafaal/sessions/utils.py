@@ -7,7 +7,6 @@ from datetime import UTC, datetime, timedelta
 from enum import Enum
 
 import modules.users.users.schema as users_schema
-from core.database import SessionLocal
 from fastapi import (
     HTTPException,
     Request,
@@ -23,6 +22,7 @@ import jafaal.sessions.schema as jafaal_sessions_schema
 import jafaal.settings as jafaal_settings
 import jafaal.token_hashing as token_hashing
 from jafaal._core import network
+from jafaal.orm import session_scope
 
 logger = logging.getLogger(__name__)
 
@@ -401,7 +401,7 @@ def cleanup_idle_sessions() -> None:
     if not settings.session_idle_timeout_enabled:
         return
 
-    with SessionLocal() as db:
+    with session_scope() as db:
         try:
             cutoff_time = datetime.now(UTC) - timedelta(hours=settings.session_idle_timeout_hours)
 

@@ -34,7 +34,6 @@ import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Annotated, Protocol, runtime_checkable
 
-import core.database as core_database
 import modules.users.users.schema as users_schema
 import modules.users.users.utils as users_utils
 from fastapi import Depends, HTTPException, Request, status
@@ -50,6 +49,7 @@ import jafaal.api_keys.crud as jafaal_api_keys_crud
 import jafaal.api_keys.utils as jafaal_api_keys_utils
 import jafaal.credentials.crud as jafaal_credentials_crud
 import jafaal.mfa.crud as jafaal_mfa_crud
+import jafaal.orm as jafaal_orm
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.utils as jafaal_utils
 from jafaal.principal import (
@@ -1321,7 +1321,7 @@ class DefaultIdentityService:
 
 
 def get_identity_service(
-    db: Annotated[Session, Depends(core_database.get_db)],
+    db: Annotated[Session, Depends(jafaal_orm.get_db)],
     token_manager: Annotated[
         jafaal_token_manager.TokenManager,
         Depends(jafaal_token_manager.get_token_manager),

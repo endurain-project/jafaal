@@ -3,7 +3,6 @@
 import logging
 from datetime import UTC, datetime, timedelta
 
-from core.database import SessionLocal
 from sqlalchemy.orm import Session
 
 import jafaal.sessions.crud as jafaal_sessions_crud
@@ -11,6 +10,7 @@ import jafaal.sessions.rotated_refresh_tokens.crud as rotated_token_crud
 import jafaal.sessions.rotated_refresh_tokens.schema as rotated_token_schema
 import jafaal.token_hashing as token_hashing
 from jafaal._core import crypto
+from jafaal.orm import session_scope
 
 logger = logging.getLogger(__name__)
 
@@ -236,7 +236,7 @@ def cleanup_expired_rotated_tokens() -> None:
     Returns:
         None.
     """
-    with SessionLocal() as db:
+    with session_scope() as db:
         try:
             # Retain rotated records a few seconds past their grace window so a
             # boundary retry can still be replayed and post-grace reuse is still

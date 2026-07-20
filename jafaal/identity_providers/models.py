@@ -3,10 +3,11 @@
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from core.database import Base
 from sqlalchemy import JSON, Boolean, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
+
+from jafaal.orm import Base
 
 if TYPE_CHECKING:
     from jafaal.identity_providers.links.models import IdentityLink

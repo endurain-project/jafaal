@@ -3,7 +3,6 @@
 from typing import Annotated
 
 import core.apprise as core_apprise
-import core.database as core_database
 import core.rate_limit as core_rate_limit
 import modules.notifications.utils as notifications_utils
 import modules.server_settings.utils as server_settings_utils
@@ -21,6 +20,7 @@ from fastapi import (
 from sqlalchemy.orm import Session
 
 import jafaal.identity_service as jafaal_identity_service
+import jafaal.orm as jafaal_orm
 import jafaal.sign_up_tokens.schema as sign_up_tokens_schema
 import jafaal.sign_up_tokens.utils as sign_up_tokens_utils
 
@@ -47,7 +47,7 @@ async def signup(
     ],
     db: Annotated[
         Session,
-        Depends(core_database.get_db),
+        Depends(jafaal_orm.get_db),
     ],
 ) -> sign_up_tokens_schema.SignUpResponse:
     """
@@ -125,7 +125,7 @@ async def verify_email(
     ],
     db: Annotated[
         Session,
-        Depends(core_database.get_db),
+        Depends(jafaal_orm.get_db),
     ],
 ) -> sign_up_tokens_schema.SignUpResponse:
     """

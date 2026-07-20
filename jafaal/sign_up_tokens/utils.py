@@ -9,7 +9,6 @@ import core.i18n as core_i18n
 import modules.users.users.crud as users_crud
 import modules.users.users.schema as users_schema
 import modules.users.users.utils as users_utils
-from core.database import SessionLocal
 from fastapi import (
     HTTPException,
     status,
@@ -20,6 +19,7 @@ import jafaal.sign_up_tokens.crud as sign_up_tokens_crud
 import jafaal.sign_up_tokens.email_messages as sign_up_tokens_email_messages
 import jafaal.sign_up_tokens.schema as sign_up_tokens_schema
 import jafaal.token_hashing as token_hashing
+from jafaal.orm import session_scope
 
 logger = logging.getLogger(__name__)
 
@@ -257,7 +257,7 @@ def delete_invalid_tokens_from_db() -> None:
         None
     """
     # Create a new database session using context manager
-    with SessionLocal() as db:
+    with session_scope() as db:
         # Get num tokens deleted
         num_deleted = sign_up_tokens_crud.delete_expired_sign_up_tokens(db)
 

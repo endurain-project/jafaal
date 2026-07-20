@@ -37,10 +37,10 @@ Exports:
       ``UUIDPKUserMixin`` (extensible base for the host app's user table)
 """
 
-# Ensure the auth-owned credential ORM model is registered with SQLAlchemy's
-# mapper registry whenever the auth package loads, so the
-# ``Users.local_credential`` relationship resolves at mapper configuration time.
-from . import credentials  # noqa: F401
+# Register every JAFAAL ORM model on ``jafaal.orm.Base`` at import time so that
+# their relationships — and the reverse relationships a host user model inherits
+# from ``UserMixin`` — all resolve at mapper-configuration time. Importing each
+# ``models`` module is what registers its mapped classes on the shared registry.
 from ._internal.internal_dependencies import (
     AuthContext,
     get_sid_from_access_token,
@@ -71,7 +71,17 @@ from ._internal.security_stores import (
     get_step_up_attempts,
 )
 from ._internal.token_manager import TokenManager, TokenType, get_token_manager
+from .api_keys import models as _api_keys_models  # noqa: F401
+from .credentials import models as _credentials_models  # noqa: F401
 from .dependencies import check_auth_scopes
+from .identity_providers import models as _idp_models  # noqa: F401
+from .identity_providers.link_tokens import models as _idp_link_token_models  # noqa: F401
+from .identity_providers.links import models as _idp_link_models  # noqa: F401
+from .mfa import models as _mfa_models  # noqa: F401
+from .mfa.backup_codes import models as _mfa_backup_codes_models  # noqa: F401
+from .oauth_state import models as _oauth_state_models  # noqa: F401
+from .orm import Base, configure_sessionmaker
+from .password_reset_tokens import models as _password_reset_tokens_models  # noqa: F401
 from .schema import (
     LoginRequest,
     LogoutResponse,
@@ -81,7 +91,10 @@ from .schema import (
     TokenResponseMobile,
     TokenResponseWeb,
 )
+from .sessions import models as _sessions_models  # noqa: F401
+from .sessions.rotated_refresh_tokens import models as _rotated_token_models  # noqa: F401
 from .settings import AuthSettings, configure, get_settings, reset
+from .sign_up_tokens import models as _sign_up_tokens_models  # noqa: F401
 from .user_model import IntPKUserMixin, UserMixin, UUIDPKUserMixin
 from .utils import (
     authenticate_user,
@@ -93,7 +106,9 @@ from .utils import (
 __all__ = [
     # Configuration
     "AuthSettings",
+    "Base",
     "configure",
+    "configure_sessionmaker",
     "get_settings",
     "reset",
     # Security dependencies

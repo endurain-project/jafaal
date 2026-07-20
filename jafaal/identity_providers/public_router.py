@@ -6,7 +6,6 @@ from typing import Annotated
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
-import core.database as core_database
 import core.rate_limit as core_rate_limit
 import modules.users.users.schema as users_schema
 import modules.users.users.utils as users_utils
@@ -22,6 +21,7 @@ import jafaal.identity_providers.service as idp_service
 import jafaal.identity_providers.utils as idp_utils
 import jafaal.oauth_state.crud as oauth_state_crud
 import jafaal.oauth_state.utils as oauth_state_utils
+import jafaal.orm as jafaal_orm
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.utils as jafaal_sessions_utils
 import jafaal.settings as jafaal_settings
@@ -73,7 +73,7 @@ def _build_link_result_url(redirect_path: str | None, idp_name: str | None, *, s
     response_model=list[idp_schema.IdentityProviderPublic],
     status_code=status.HTTP_200_OK,
 )
-async def get_enabled_identity_providers(db: Annotated[Session, Depends(core_database.get_db)]):
+async def get_enabled_identity_providers(db: Annotated[Session, Depends(jafaal_orm.get_db)]):
     """
     Retrieve a list of enabled identity providers from the database.
 
@@ -100,7 +100,7 @@ async def get_enabled_identity_providers(db: Annotated[Session, Depends(core_dat
 async def initiate_login(
     idp_slug: str,
     request: Request,
-    db: Annotated[Session, Depends(core_database.get_db)],
+    db: Annotated[Session, Depends(jafaal_orm.get_db)],
     code_challenge: Annotated[
         str,
         Query(
@@ -231,7 +231,7 @@ async def handle_callback(
         jafaal_token_manager.TokenManager,
         Depends(jafaal_token_manager.get_token_manager),
     ],
-    db: Annotated[Session, Depends(core_database.get_db)],
+    db: Annotated[Session, Depends(jafaal_orm.get_db)],
     code: str = Query(..., description="Authorization code from IdP"),
     state: str = Query(..., description="State parameter for CSRF protection"),
 ):
@@ -422,7 +422,7 @@ async def exchange_tokens_for_session(
         jafaal_token_manager.TokenManager,
         Depends(jafaal_token_manager.get_token_manager),
     ],
-    db: Annotated[Session, Depends(core_database.get_db)],
+    db: Annotated[Session, Depends(jafaal_orm.get_db)],
 ):
     """
     Exchange a PKCE code verifier for JWT tokens.
