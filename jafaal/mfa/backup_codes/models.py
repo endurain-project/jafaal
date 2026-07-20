@@ -9,7 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from jafaal.orm import Base
 
 if TYPE_CHECKING:
-    from modules.users.users.models import Users
+    from jafaal.user_model import UserMixin as Users
 
 
 class MFABackupCode(Base):

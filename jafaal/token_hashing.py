@@ -20,6 +20,7 @@ equality lookups.
 
 import hashlib
 import hmac
+import secrets
 
 import jafaal.settings as jafaal_settings
 from jafaal._core import hashing
@@ -60,3 +61,17 @@ def hmac_sha256(value: str) -> str:
         value.encode(),
         hashlib.sha256,
     ).hexdigest()
+
+
+def generate_token_and_hash() -> tuple[str, str]:
+    """Generate a high-entropy opaque token and its SHA-256 lookup hash.
+
+    Used to mint single-purpose tokens (password-reset, sign-up). Only the hash
+    is persisted; the plaintext token is delivered to the user and never stored.
+
+    Returns:
+        Tuple ``(token, token_hash)``: a 256-bit ``secrets.token_urlsafe(32)``
+        plaintext token and its :func:`sha256_hex` digest.
+    """
+    token = secrets.token_urlsafe(32)
+    return token, sha256_hex(token)

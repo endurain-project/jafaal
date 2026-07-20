@@ -10,7 +10,6 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 
-import modules.users.users.schema as users_schema
 from fastapi import HTTPException, status
 from joserfc import jwt
 from joserfc.errors import (
@@ -26,6 +25,7 @@ from joserfc.jwk import OctKey
 from joserfc.jwt import Token
 
 import jafaal.constants as jafaal_constants
+import jafaal.ports as jafaal_ports
 import jafaal.settings as jafaal_settings
 
 logger = logging.getLogger(__name__)
@@ -55,7 +55,7 @@ class TokenManager:
         get_token_claim(token: str, claim: str) -> str | list[str] | int:
         decode_token(token: str) -> dict:
         validate_token_expiration(token: str, expected_type: TokenType) -> None:
-        create_token(session_id: str, user: users_schema.UsersRead, token_type: TokenType) -> tuple[datetime, str]:
+        create_token(session_id: str, user: jafaal_ports.UserProtocol, token_type: TokenType) -> tuple[datetime, str]:
         create_csrf_token() -> str:
             Generates a secure random CSRF (Cross-Site Request Forgery) token.
         HTTPException: Raised for invalid, expired, or missing claims in JWT tokens.
@@ -326,7 +326,7 @@ class TokenManager:
     def create_token(
         self,
         session_id: str,
-        user: users_schema.UsersRead,
+        user: jafaal_ports.UserProtocol,
         token_type: TokenType,
     ) -> tuple[datetime, str]:
         """
@@ -335,7 +335,7 @@ class TokenManager:
 
         Args:
             session_id (str): The unique identifier for the session.
-            user (users_schema.UsersRead): The user object containing user
+            user (jafaal_ports.UserProtocol): The user object containing user
                 details.
             token_type (TokenType): The type of token to create (access or
                 refresh).
@@ -348,7 +348,7 @@ class TokenManager:
             ValueError: If required parameters are missing or invalid.
         """
         # Check user access level and set scope accordingly
-        if user.access_type == users_schema.UserAccessType.REGULAR.value:
+        if not user.is_superuser:
             scope = jafaal_constants.REGULAR_ACCESS_SCOPE
         else:
             scope = jafaal_constants.ADMIN_ACCESS_SCOPE

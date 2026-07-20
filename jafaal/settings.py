@@ -66,6 +66,12 @@ class AuthSettings:
             and error URLs and as the default JWT issuer/audience.
         allowed_redirect_schemes: URL schemes permitted for post-login
             redirects (SSO). Defaults to HTTPS only.
+        sso_login_result_path: Host frontend path the SSO callback redirects to
+            on a successful login, joined onto :attr:`base_url`.
+        sso_error_path: Host frontend path the SSO callback redirects to on a
+            login error, joined onto :attr:`base_url`.
+        sso_link_result_path: Host frontend path the SSO callback redirects to
+            after an account-link attempt, joined onto :attr:`base_url`.
         environment: Deployment environment string. ``production``/``demo`` are
             treated as deployed (drives the cookie ``Secure`` flag and demo-mode
             guards).
@@ -106,6 +112,9 @@ class AuthSettings:
     # --- URLs / redirects ---
     base_url: str = ""
     allowed_redirect_schemes: tuple[str, ...] = ("https",)
+    sso_login_result_path: str = "/login"
+    sso_error_path: str = "/login"
+    sso_link_result_path: str = "/settings/security"
 
     # --- environment ---
     environment: str = "production"

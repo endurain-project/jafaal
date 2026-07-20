@@ -16,7 +16,7 @@ from sqlalchemy.sql import func
 from jafaal.orm import Base
 
 if TYPE_CHECKING:
-    from modules.users.users.models import Users
+    from jafaal.user_model import UserMixin as Users
 
 
 class LocalCredential(Base):

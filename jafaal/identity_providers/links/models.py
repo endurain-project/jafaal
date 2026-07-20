@@ -10,9 +10,8 @@ from sqlalchemy.sql import func
 from jafaal.orm import Base
 
 if TYPE_CHECKING:
-    from modules.users.users.models import Users
-
     from jafaal.identity_providers.models import IdentityProvider
+    from jafaal.user_model import UserMixin as Users
 
 
 class IdentityLink(Base):

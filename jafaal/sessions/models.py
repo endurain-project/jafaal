@@ -9,12 +9,11 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from jafaal.orm import Base
 
 if TYPE_CHECKING:
-    from modules.users.users.models import Users
-
     from jafaal.oauth_state.models import OAuthState
     from jafaal.sessions.rotated_refresh_tokens.models import (
         RotatedRefreshToken,
     )
+    from jafaal.user_model import UserMixin as Users
 
 
 class UsersSessions(Base):

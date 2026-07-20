@@ -738,10 +738,8 @@ class DefaultIdentityService:
             user_id=user.id,  # type: ignore[attr-defined]
             username=user.username,  # type: ignore[attr-defined]
             email=user.email,  # type: ignore[attr-defined]
-            is_active=bool(user.active),  # type: ignore[attr-defined]
-            is_superuser=(
-                user.access_type == "admin"  # type: ignore[attr-defined]
-            ),
+            is_active=bool(user.is_active),  # type: ignore[attr-defined]
+            is_superuser=bool(user.is_superuser),  # type: ignore[attr-defined]
             scopes=frozenset(scopes),
             credential=credential,
         )

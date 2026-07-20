@@ -8,8 +8,6 @@ both password and PKCE login flows.
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-import modules.users.users.crud as users_crud
-import modules.users.users.schema as users_schema
 from fastapi import (
     HTTPException,
     Request,
@@ -25,6 +23,7 @@ import jafaal.credentials.crud as jafaal_credentials_crud
 import jafaal.identity_providers.utils as idp_utils
 import jafaal.oauth_state.crud as oauth_state_crud
 import jafaal.oauth_state.utils as oauth_state_utils
+import jafaal.ports as jafaal_ports
 import jafaal.schema as jafaal_schema
 import jafaal.sessions.utils as jafaal_sessions_utils
 import jafaal.settings as jafaal_settings
@@ -44,7 +43,7 @@ def authenticate_user(
     password: str,
     password_hasher: jafaal_password_hasher.PasswordHasher,
     db: Session,
-) -> users_schema.UsersRead:
+) -> jafaal_ports.UserProtocol:
     """
     Authenticates a user by verifying the provided username and password.
 
@@ -55,13 +54,13 @@ def authenticate_user(
         db (Session): The database session used for querying and updating user data.
 
     Returns:
-        users_schema.UsersRead: The authenticated user object if authentication is successful.
+        jafaal_ports.UserProtocol: The authenticated user object if authentication is successful.
 
     Raises:
         HTTPException: If the username does not exist or the password is invalid.
     """
     # Get the user from the database
-    user = users_crud.get_user_by_username(username, db)
+    user = jafaal_ports.get_user_repository().get_by_username(username, db)
 
     # Check if the user exists and if the password is correct
     if not user:
@@ -115,7 +114,7 @@ def authenticate_user(
 
 
 def create_tokens(
-    user: users_schema.UsersRead,
+    user: jafaal_ports.UserProtocol,
     token_manager: jafaal_token_manager.TokenManager,
     session_id: str | None = None,
 ) -> tuple[str, datetime, str, datetime, str, str]:
@@ -123,7 +122,7 @@ def create_tokens(
     Generates session tokens for a user, including access token, refresh token, and CSRF token.
 
     Args:
-        user (users_schema.UsersRead): The user object for whom the tokens are being created.
+        user (jafaal_ports.UserProtocol): The user object for whom the tokens are being created.
         token_manager (jafaal_token_manager.TokenManager): The token manager responsible for token creation.
         session_id (str | None, optional): An optional session ID. If not provided, a new unique session ID is generated.
 
@@ -161,7 +160,7 @@ def create_tokens(
 
 
 def mint_access_token(
-    user: users_schema.UsersRead,
+    user: jafaal_ports.UserProtocol,
     token_manager: jafaal_token_manager.TokenManager,
     session_id: str,
 ) -> tuple[datetime, str]:
@@ -336,7 +335,7 @@ async def clear_refresh_token_cookie_exception_handler(
 def complete_login(
     response: Response,
     request: Request,
-    user: users_schema.UsersRead,
+    user: jafaal_ports.UserProtocol,
     client_type: str,
     password_hasher: jafaal_password_hasher.PasswordHasher,
     token_manager: jafaal_token_manager.TokenManager,
@@ -355,7 +354,7 @@ def complete_login(
     Args:
         response (Response): The HTTP response object to set refresh cookie.
         request (Request): The HTTP request object containing client information.
-        user (users_schema.UsersRead): The authenticated user object.
+        user (jafaal_ports.UserProtocol): The authenticated user object.
         client_type (str): The type of client ("web" or "mobile").
         password_hasher (jafaal_password_hasher.PasswordHasher): Utility for password hashing.
         token_manager (jafaal_token_manager.TokenManager): Utility for token generation and management.
@@ -416,7 +415,7 @@ def complete_login(
 def create_mobile_pkce_session_response(
     response: Response,
     request: Request,
-    user: users_schema.UsersRead,
+    user: jafaal_ports.UserProtocol,
     code_challenge: str,
     code_challenge_method: str,
     password_hasher: jafaal_password_hasher.PasswordHasher,
