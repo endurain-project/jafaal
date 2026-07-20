@@ -2,7 +2,6 @@
 
 from typing import Annotated
 
-import core.rate_limit as core_rate_limit
 from fastapi import (
     APIRouter,
     Depends,
@@ -15,6 +14,7 @@ import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_service as jafaal_identity_service
 import jafaal.orm as jafaal_orm
 import jafaal.ports as jafaal_ports
+import jafaal.rate_limit as jafaal_rate_limit
 import jafaal.schema as jafaal_schema
 import jafaal.sign_up_tokens.schema as sign_up_tokens_schema
 import jafaal.sign_up_tokens.utils as sign_up_tokens_utils
@@ -28,7 +28,7 @@ router = APIRouter()
     status_code=201,
     response_model=sign_up_tokens_schema.SignUpResponse,
 )
-@core_rate_limit.limiter.limit(core_rate_limit.SENSITIVE)
+@jafaal_rate_limit.limit(jafaal_rate_limit.SENSITIVE)
 async def signup(
     request: Request,
     user: jafaal_schema.SignUpRequest,
@@ -90,7 +90,7 @@ async def signup(
     "/sign-up/confirm",
     response_model=sign_up_tokens_schema.SignUpResponse,
 )
-@core_rate_limit.limiter.limit(core_rate_limit.SENSITIVE)
+@jafaal_rate_limit.limit(jafaal_rate_limit.SENSITIVE)
 async def verify_email(
     request: Request,
     confirm_data: sign_up_tokens_schema.SignUpConfirm,

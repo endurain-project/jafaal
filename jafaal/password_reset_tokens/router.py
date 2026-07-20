@@ -2,7 +2,6 @@
 
 from typing import Annotated
 
-import core.rate_limit as core_rate_limit
 from fastapi import (
     APIRouter,
     Depends,
@@ -15,6 +14,7 @@ import jafaal.identity_service as jafaal_identity_service
 import jafaal.orm as jafaal_orm
 import jafaal.password_reset_tokens.schema as password_reset_tokens_schema
 import jafaal.password_reset_tokens.utils as password_reset_tokens_utils
+import jafaal.rate_limit as jafaal_rate_limit
 
 # Define the API router
 router = APIRouter()
@@ -25,7 +25,7 @@ router = APIRouter()
     response_model=password_reset_tokens_schema.PasswordResetResponse,
     status_code=status.HTTP_200_OK,
 )
-@core_rate_limit.limiter.limit(core_rate_limit.SENSITIVE)
+@jafaal_rate_limit.limit(jafaal_rate_limit.SENSITIVE)
 async def request_password_reset(
     request: Request,
     request_data: password_reset_tokens_schema.PasswordResetRequest,
@@ -61,7 +61,7 @@ async def request_password_reset(
     response_model=password_reset_tokens_schema.PasswordResetResponse,
     status_code=status.HTTP_200_OK,
 )
-@core_rate_limit.limiter.limit(core_rate_limit.SENSITIVE)
+@jafaal_rate_limit.limit(jafaal_rate_limit.SENSITIVE)
 async def confirm_password_reset(
     request: Request,
     confirm_data: password_reset_tokens_schema.PasswordResetConfirm,

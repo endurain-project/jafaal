@@ -23,9 +23,9 @@ from joserfc.errors import (
 from joserfc.jwk import OctKey
 from joserfc.jwt import Token
 
-import jafaal.constants as jafaal_constants
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.ports as jafaal_ports
+import jafaal.scopes as jafaal_scopes
 import jafaal.settings as jafaal_settings
 
 logger = logging.getLogger(__name__)
@@ -304,10 +304,8 @@ class TokenManager:
             ValueError: If required parameters are missing or invalid.
         """
         # Check user access level and set scope accordingly
-        if not user.is_superuser:
-            scope = jafaal_constants.REGULAR_ACCESS_SCOPE
-        else:
-            scope = jafaal_constants.ADMIN_ACCESS_SCOPE
+        catalog = jafaal_scopes.get_scope_catalog()
+        scope = catalog.regular if not user.is_superuser else catalog.admin
 
         exp = datetime.now(UTC) + timedelta(minutes=self.access_token_expire_minutes)
         if token_type == TokenType.REFRESH:

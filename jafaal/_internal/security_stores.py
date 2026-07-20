@@ -1,11 +1,11 @@
 """Authentication security stores for login and MFA lockout.
 
 Pending-login bookkeeping and progressive lockout counters are kept in the
-platform ``StateProvider`` (an in-process dict under ``local``, Redis under
-``distributed``). The atomic increment-and-lock step is delegated to
-``StateProvider.record_tiered_failure`` — a single call that both backends
-implement atomically — so this module no longer contains any Redis code or a
-memory-vs-Redis split.
+configured :class:`~jafaal.state_store.StateStore` (an in-process dict by
+default, a distributed backend when the host configures one). The atomic
+increment-and-lock step is delegated to
+:meth:`~jafaal.state_store.StateStore.record_tiered_failure`, so this module
+contains no backend-specific code or memory-vs-Redis split.
 """
 
 import logging
@@ -14,12 +14,10 @@ from datetime import UTC, datetime
 from typing import NoReturn, Protocol, runtime_checkable
 from urllib.parse import unquote
 
-import infra.runtime as platform_runtime
-from infra.providers import StateBackendUnavailableError, StateProvider
-
 import jafaal.settings as jafaal_settings
 from jafaal._core import hashing
 from jafaal.exceptions import StoreUnavailableError
+from jafaal.state_store import StateStore, StateStoreUnavailableError, get_state_store
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +36,7 @@ class AuthSecurityStoreUnavailableError(StoreUnavailableError):
     """
 
 
-def _raise_store_unavailable(operation: str, err: StateBackendUnavailableError) -> NoReturn:
+def _raise_store_unavailable(operation: str, err: StateStoreUnavailableError) -> NoReturn:
     """
     Log a storage outage and re-raise it as an auth-security-store error.
 
@@ -222,7 +220,7 @@ _STEP_UP_LOCKOUT_THRESHOLDS: tuple[tuple[int, int, str], ...] = (
 
 class _ProgressiveLockout:
     """
-    Progressive-lockout counter delegated to ``StateProvider.record_tiered_failure``.
+    Progressive-lockout counter delegated to ``StateStore.record_tiered_failure``.
 
     Shared by all three security stores; the memory-vs-Redis atomicity lives in
     the provider, so this class only holds the thresholds and key layout.
@@ -238,7 +236,7 @@ class _ProgressiveLockout:
 
     def __init__(
         self,
-        get_state: "Callable[[], StateProvider]",
+        get_state: "Callable[[], StateStore]",
         name: str,
         display_name: str,
         thresholds: tuple[tuple[int, int, str], ...],
@@ -274,7 +272,7 @@ class _ProgressiveLockout:
         gate_key = self._gate_key(key)
         try:
             raw_gate = self._get_state().get(gate_key)
-        except StateBackendUnavailableError as err:
+        except StateStoreUnavailableError as err:
             _raise_store_unavailable("get lockout time", err)
         if raw_gate is None:
             return None
@@ -297,7 +295,7 @@ class _ProgressiveLockout:
                 tiers,
                 self._attempts_ttl_seconds,
             )
-        except StateBackendUnavailableError as err:
+        except StateStoreUnavailableError as err:
             _raise_store_unavailable("record failed attempt", err)
         if outcome.newly_locked:
             _log_lockout(self._display_name, self._duration_label(outcome.count), self._normalize(key), outcome.count)
@@ -308,19 +306,19 @@ class _ProgressiveLockout:
         try:
             state.delete(self._counter_key(key))
             state.delete(self._gate_key(key))
-        except StateBackendUnavailableError as err:
+        except StateStoreUnavailableError as err:
             _raise_store_unavailable("reset attempts", err)
 
     def clear_all(self) -> None:
         try:
             self._get_state().delete_prefix(f"{_key_prefix()}:{self._name}:")
-        except StateBackendUnavailableError as err:
+        except StateStoreUnavailableError as err:
             _raise_store_unavailable("clear lockout store", err)
 
     def _delete(self, key: str, operation: str) -> None:
         try:
             self._get_state().delete(key)
-        except StateBackendUnavailableError as err:
+        except StateStoreUnavailableError as err:
             _raise_store_unavailable(operation, err)
 
 
@@ -334,7 +332,7 @@ class FailedLoginAttempts:
         _lockout: Shared progressive-lockout helper.
     """
 
-    def __init__(self, state: StateProvider | None = None) -> None:
+    def __init__(self, state: StateStore | None = None) -> None:
         self._state_override = state
         self._lockout = _ProgressiveLockout(
             self._get_state,
@@ -345,8 +343,8 @@ class FailedLoginAttempts:
             normalize_key=normalize_username_key,
         )
 
-    def _get_state(self) -> StateProvider:
-        return self._state_override if self._state_override is not None else platform_runtime.get_state()
+    def _get_state(self) -> StateStore:
+        return self._state_override if self._state_override is not None else get_state_store()
 
     def is_locked_out(self, username: str) -> bool:
         """Check if a username is locked out from failed logins."""
@@ -381,7 +379,7 @@ class PendingMFALogin:
 
     PENDING_MFA_TTL_SECONDS: int = 300
 
-    def __init__(self, state: StateProvider | None = None) -> None:
+    def __init__(self, state: StateStore | None = None) -> None:
         self._state_override = state
         self._lockout = _ProgressiveLockout(
             self._get_state,
@@ -392,8 +390,8 @@ class PendingMFALogin:
             normalize_key=normalize_username_key,
         )
 
-    def _get_state(self) -> StateProvider:
-        return self._state_override if self._state_override is not None else platform_runtime.get_state()
+    def _get_state(self) -> StateStore:
+        return self._state_override if self._state_override is not None else get_state_store()
 
     def _pending_key(self, username: str) -> str:
         return f"{_key_prefix()}:mfa:pending:{_username_digest(username)}"
@@ -406,7 +404,7 @@ class PendingMFALogin:
                 str(user_id).encode(),
                 ttl_seconds=self.PENDING_MFA_TTL_SECONDS,
             )
-        except StateBackendUnavailableError as err:
+        except StateStoreUnavailableError as err:
             _raise_store_unavailable("add pending MFA login", err)
 
     def get_pending_login(self, username: str) -> int | None:
@@ -414,7 +412,7 @@ class PendingMFALogin:
         pending_key = self._pending_key(username)
         try:
             raw_user_id = self._get_state().get(pending_key)
-        except StateBackendUnavailableError as err:
+        except StateStoreUnavailableError as err:
             _raise_store_unavailable("get pending MFA login", err)
         if raw_user_id is None:
             return None
@@ -423,7 +421,7 @@ class PendingMFALogin:
         except (TypeError, ValueError):
             try:
                 self._get_state().delete(pending_key)
-            except StateBackendUnavailableError as err:
+            except StateStoreUnavailableError as err:
                 _raise_store_unavailable("delete invalid pending MFA login", err)
             return None
 
@@ -431,7 +429,7 @@ class PendingMFALogin:
         """Atomically retrieve and remove a pending MFA login."""
         try:
             raw_user_id = self._get_state().get_and_delete(self._pending_key(username))
-        except StateBackendUnavailableError as err:
+        except StateStoreUnavailableError as err:
             _raise_store_unavailable("claim pending MFA login", err)
         if raw_user_id is None:
             return None
@@ -444,7 +442,7 @@ class PendingMFALogin:
         """Remove the pending MFA login entry for a username."""
         try:
             self._get_state().delete(self._pending_key(username))
-        except StateBackendUnavailableError as err:
+        except StateStoreUnavailableError as err:
             _raise_store_unavailable("delete pending MFA login", err)
 
     def clear_for_user(self, user_id: int) -> int:
@@ -457,7 +455,7 @@ class PendingMFALogin:
                 if state.get(pending_key) == target_value:
                     state.delete(pending_key)
                     removed += 1
-        except StateBackendUnavailableError as err:
+        except StateStoreUnavailableError as err:
             _raise_store_unavailable("clear pending MFA logins for user", err)
         return removed
 
@@ -489,7 +487,7 @@ class PendingMFALogin:
         """Clear all pending logins and MFA failure records."""
         try:
             self._get_state().delete_prefix(f"{_key_prefix()}:mfa:pending:")
-        except StateBackendUnavailableError as err:
+        except StateStoreUnavailableError as err:
             _raise_store_unavailable("clear pending MFA logins", err)
         self._lockout.clear_all()
 
@@ -505,7 +503,7 @@ class StepUpAttempts:
         _lockout: Shared progressive-lockout helper.
     """
 
-    def __init__(self, state: StateProvider | None = None) -> None:
+    def __init__(self, state: StateStore | None = None) -> None:
         self._state_override = state
         self._lockout = _ProgressiveLockout(
             self._get_state,
@@ -515,8 +513,8 @@ class StepUpAttempts:
             attempts_ttl_seconds=2 * 60 * 60,
         )
 
-    def _get_state(self) -> StateProvider:
-        return self._state_override if self._state_override is not None else platform_runtime.get_state()
+    def _get_state(self) -> StateStore:
+        return self._state_override if self._state_override is not None else get_state_store()
 
     def is_locked_out(self, key: str) -> bool:
         """Check if a user key is locked out from step-up."""

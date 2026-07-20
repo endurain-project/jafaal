@@ -32,18 +32,21 @@ from fastapi.security import (
 from joserfc.errors import MissingClaimError
 
 import jafaal._internal.token_manager as jafaal_token_manager
-import jafaal.constants as jafaal_constants
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_service as jafaal_identity_service
+import jafaal.scopes as jafaal_scopes
 import jafaal.settings as jafaal_settings
 from jafaal.principal import AccessTokenCred, Principal
 
 logger = logging.getLogger(__name__)
 
-# Define the OAuth2 scheme for handling bearer tokens
+# Define the OAuth2 scheme for handling bearer tokens. The advertised ``scopes``
+# feed the Swagger "Authorize" picker only; it is built once at import, so it
+# lists JAFAAL's own scopes (host application scopes are still minted and
+# enforced, just not shown in the picker).
 oauth2_scheme = OAuth2PasswordBearer(
     tokenUrl="/api/v1/auth/login",
-    scopes=jafaal_constants.SCOPE_DICT,
+    scopes=dict(jafaal_scopes.get_scope_catalog().descriptions),
     auto_error=False,
 )
 

@@ -101,6 +101,7 @@ from .exceptions import (
     UpstreamError,
     UpstreamTimeoutError,
 )
+from .factory import RouterPrefixes, create_auth_router
 from .identity_providers import models as _idp_models  # noqa: F401
 from .identity_providers.link_tokens import models as _idp_link_token_models  # noqa: F401
 from .identity_providers.links import models as _idp_link_models  # noqa: F401
@@ -130,6 +131,13 @@ from .ports import (
     get_user_repository,
     reset_ports,
 )
+from .rate_limit import (
+    NoOpRateLimiter,
+    RateLimiter,
+    configure_rate_limiter,
+    get_rate_limiter,
+    reset_rate_limiter,
+)
 from .schema import (
     LoginRequest,
     LogoutResponse,
@@ -141,10 +149,26 @@ from .schema import (
     TokenResponseMobile,
     TokenResponseWeb,
 )
+from .scopes import (
+    DEFAULT_SCOPE_CATALOG,
+    ScopeCatalog,
+    configure_scopes,
+    get_scope_catalog,
+    reset_scopes,
+)
 from .sessions import models as _sessions_models  # noqa: F401
 from .sessions.rotated_refresh_tokens import models as _rotated_token_models  # noqa: F401
 from .settings import AuthSettings, configure, get_settings, reset
 from .sign_up_tokens import models as _sign_up_tokens_models  # noqa: F401
+from .state_store import (
+    InMemoryStateStore,
+    StateStore,
+    StateStoreUnavailableError,
+    TieredFailureOutcome,
+    configure_state_store,
+    get_state_store,
+    reset_state_store,
+)
 from .user_model import IntPKUserMixin, UserMixin, UUIDPKUserMixin
 from .utils import (
     authenticate_user,
@@ -157,8 +181,10 @@ __all__ = [
     # Configuration
     "AuthSettings",
     "Base",
+    "RouterPrefixes",
     "configure",
     "configure_sessionmaker",
+    "create_auth_router",
     "get_settings",
     "reset",
     # Ports (host-implemented boundary)
@@ -226,6 +252,26 @@ __all__ = [
     "PendingMFALogin",
     "StepUpAttempts",
     "StepUpStore",
+    # State store (ephemeral lockout / MFA-secret backend)
+    "InMemoryStateStore",
+    "StateStore",
+    "StateStoreUnavailableError",
+    "TieredFailureOutcome",
+    "configure_state_store",
+    "get_state_store",
+    "reset_state_store",
+    # Rate limiting (host-injected enforcement)
+    "NoOpRateLimiter",
+    "RateLimiter",
+    "configure_rate_limiter",
+    "get_rate_limiter",
+    "reset_rate_limiter",
+    # Scopes (host-extensible catalog)
+    "DEFAULT_SCOPE_CATALOG",
+    "ScopeCatalog",
+    "configure_scopes",
+    "get_scope_catalog",
+    "reset_scopes",
     # JWT / token management
     "TokenManager",
     "TokenResponseMobile",

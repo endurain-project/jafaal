@@ -87,6 +87,11 @@ class AuthSettings:
         api_key_prefix: Prefix for generated API keys (``<prefix>_<token>``).
         store_key_prefix: Namespace prefix for security-store keys
             (lockout counters, MFA setup secrets, ...).
+        rate_limit_sensitive: Budget for sensitive endpoints (login, MFA,
+            password reset, sign-up, OAuth), consumed by the host's
+            :class:`~jafaal.rate_limit.RateLimiter`.
+        rate_limit_write: Budget for write endpoints (e.g. logout, session
+            revocation), consumed by the host's ``RateLimiter``.
         trusted_proxies: Peers whose ``X-Forwarded-For`` / ``X-Real-IP`` headers
             are honoured. ``("*",)`` trusts all peers (single-node default).
         ssrf_allowed_hosts: Hosts/CIDRs exempted from the SSRF private-address
@@ -121,6 +126,10 @@ class AuthSettings:
 
     # --- security toggles ---
     allow_api_key_query_param: bool = False
+
+    # --- rate limiting (canonical budgets for the host's RateLimiter) ---
+    rate_limit_sensitive: str = "10/minute"
+    rate_limit_write: str = "30/minute"
 
     # --- branding / identifiers ---
     app_name: str = "Jafaal"

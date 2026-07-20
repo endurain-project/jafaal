@@ -6,7 +6,6 @@ from typing import Annotated
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
-import core.rate_limit as core_rate_limit
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
@@ -22,6 +21,7 @@ import jafaal.identity_providers.utils as idp_utils
 import jafaal.oauth_state.crud as oauth_state_crud
 import jafaal.oauth_state.utils as oauth_state_utils
 import jafaal.orm as jafaal_orm
+import jafaal.rate_limit as jafaal_rate_limit
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.utils as jafaal_sessions_utils
 import jafaal.settings as jafaal_settings
@@ -97,7 +97,7 @@ async def get_enabled_identity_providers(db: Annotated[Session, Depends(jafaal_o
 
 
 @router.get("/login/{idp_slug}", status_code=status.HTTP_307_TEMPORARY_REDIRECT)
-@core_rate_limit.limiter.limit(core_rate_limit.SENSITIVE)
+@jafaal_rate_limit.limit(jafaal_rate_limit.SENSITIVE)
 async def initiate_login(
     idp_slug: str,
     request: Request,
@@ -207,7 +207,7 @@ async def initiate_login(
 
 
 @router.get("/callback/{idp_slug}", status_code=status.HTTP_307_TEMPORARY_REDIRECT)
-@core_rate_limit.limiter.limit(core_rate_limit.SENSITIVE)
+@jafaal_rate_limit.limit(jafaal_rate_limit.SENSITIVE)
 async def handle_callback(
     request: Request,
     response: Response,
@@ -381,7 +381,7 @@ async def handle_callback(
     response_model=idp_schema.TokenExchangeResponse,
     status_code=status.HTTP_200_OK,
 )
-@core_rate_limit.limiter.limit(core_rate_limit.SENSITIVE)
+@jafaal_rate_limit.limit(jafaal_rate_limit.SENSITIVE)
 async def exchange_tokens_for_session(
     session_id: str,
     request: Request,

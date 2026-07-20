@@ -3,7 +3,6 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Annotated
 
-import core.rate_limit as core_rate_limit
 from fastapi import (
     APIRouter,
     Depends,
@@ -26,6 +25,7 @@ import jafaal.identity_service as jafaal_identity_service
 import jafaal.mfa.service as mfa_service
 import jafaal.orm as jafaal_orm
 import jafaal.ports as jafaal_ports
+import jafaal.rate_limit as jafaal_rate_limit
 import jafaal.schema as jafaal_schema
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.rotated_refresh_tokens.utils as jafaal_sessions_rotated_tokens_utils
@@ -97,7 +97,7 @@ def _raise_auth_security_store_unavailable(
         | jafaal_schema.TokenResponseMobile
     ),
 )
-@core_rate_limit.limiter.limit(core_rate_limit.SENSITIVE)
+@jafaal_rate_limit.limit(jafaal_rate_limit.SENSITIVE)
 async def login_for_access_token(
     response: Response,
     request: Request,
@@ -260,7 +260,7 @@ async def login_for_access_token(
         jafaal_schema.MobileSessionResponse | jafaal_schema.TokenResponseWeb | jafaal_schema.TokenResponseMobile
     ),
 )
-@core_rate_limit.limiter.limit(core_rate_limit.SENSITIVE)
+@jafaal_rate_limit.limit(jafaal_rate_limit.SENSITIVE)
 async def verify_mfa_and_login(
     response: Response,
     request: Request,
@@ -417,7 +417,7 @@ async def verify_mfa_and_login(
     "/refresh",
     response_model=(jafaal_schema.TokenResponseWeb | jafaal_schema.TokenResponseMobile),
 )
-@core_rate_limit.limiter.limit(core_rate_limit.WRITE)
+@jafaal_rate_limit.limit(jafaal_rate_limit.WRITE)
 async def refresh_token(
     response: Response,
     request: Request,
@@ -668,7 +668,7 @@ async def refresh_token(
 
 
 @router.post("/logout", response_model=jafaal_schema.LogoutResponse)
-@core_rate_limit.limiter.limit(core_rate_limit.WRITE)
+@jafaal_rate_limit.limit(jafaal_rate_limit.WRITE)
 async def logout(
     response: Response,
     request: Request,

@@ -1,20 +1,18 @@
-"""Temporary MFA setup secret storage with TTL, backed by the platform state.
+"""Temporary MFA setup secret storage with TTL, backed by the configured state store.
 
 The plaintext TOTP secret is Fernet-encrypted in this module and only the
-ciphertext is handed to the ``StateProvider`` (an in-process dict under
-``local``, Redis under ``distributed``); this module no longer knows which
-backend is used.
+ciphertext is handed to the configured :class:`~jafaal.state_store.StateStore`
+(an in-process dict by default, a distributed backend when the host configures
+one); this module no longer knows which backend is used.
 """
 
 import logging
 from typing import NoReturn
 
-import infra.runtime as platform_runtime
-from infra.providers import StateBackendUnavailableError, StateProvider
-
 import jafaal.settings as jafaal_settings
 from jafaal._core import crypto, hashing
 from jafaal.exceptions import StoreUnavailableError
+from jafaal.state_store import StateStore, StateStoreUnavailableError, get_state_store
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +33,7 @@ class MFASecretStoreUnavailableError(StoreUnavailableError):
     """
 
 
-def _raise_store_unavailable(operation: str, err: StateBackendUnavailableError) -> NoReturn:
+def _raise_store_unavailable(operation: str, err: StateStoreUnavailableError) -> NoReturn:
     """
     Log a storage outage and re-raise it as an MFA-store error.
 
@@ -137,20 +135,20 @@ class MFASecretStore:
 
     DEFAULT_TTL_SECONDS: int = _DEFAULT_TTL_SECONDS
 
-    def __init__(self, state: StateProvider | None = None, ttl_seconds: int = _DEFAULT_TTL_SECONDS) -> None:
+    def __init__(self, state: StateStore | None = None, ttl_seconds: int = _DEFAULT_TTL_SECONDS) -> None:
         """
         Initialize the MFA secret store.
 
         Args:
-            state: Optional explicit state provider (defaults to the process-wide one).
+            state: Optional explicit state store (defaults to the configured one).
             ttl_seconds: Time-to-live for secrets in seconds.
         """
         self._state_override = state
         self._ttl_seconds = ttl_seconds
 
     @property
-    def _state(self) -> StateProvider:
-        return self._state_override if self._state_override is not None else platform_runtime.get_state()
+    def _state(self) -> StateStore:
+        return self._state_override if self._state_override is not None else get_state_store()
 
     def _key(self, user_id: int) -> str:
         """Build the storage key for a user's pending MFA secret."""
@@ -172,7 +170,7 @@ class MFASecretStore:
         encrypted_secret = _encrypt_secret(secret)
         try:
             self._state.set(self._key(user_id), encrypted_secret.encode(), ttl_seconds=self._ttl_seconds)
-        except StateBackendUnavailableError as err:
+        except StateStoreUnavailableError as err:
             _raise_store_unavailable("add MFA setup secret", err)
         _log_secret_stored(user_id, self._ttl_seconds)
 
@@ -191,7 +189,7 @@ class MFASecretStore:
         """
         try:
             encrypted_secret = self._state.get(self._key(user_id))
-        except StateBackendUnavailableError as err:
+        except StateStoreUnavailableError as err:
             _raise_store_unavailable("get MFA setup secret", err)
         if encrypted_secret is None:
             return None
@@ -211,7 +209,7 @@ class MFASecretStore:
         """
         try:
             self._state.delete(self._key(user_id))
-        except StateBackendUnavailableError as err:
+        except StateStoreUnavailableError as err:
             logger.warning("Failed to delete MFA setup secret; entry will expire naturally via TTL", exc_info=err)
 
     def has_secret(self, user_id: int) -> bool:
@@ -229,7 +227,7 @@ class MFASecretStore:
         """
         try:
             return self._state.get(self._key(user_id)) is not None
-        except StateBackendUnavailableError as err:
+        except StateStoreUnavailableError as err:
             _raise_store_unavailable("check MFA setup secret", err)
 
     def clear_all(self) -> None:
@@ -244,7 +242,7 @@ class MFASecretStore:
         """
         try:
             self._state.delete_prefix(f"{_mfa_secret_key_prefix()}:")
-        except StateBackendUnavailableError as err:
+        except StateStoreUnavailableError as err:
             _raise_store_unavailable("clear MFA setup secrets", err)
 
 
