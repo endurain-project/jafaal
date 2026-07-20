@@ -74,6 +74,33 @@ from ._internal.token_manager import TokenManager, TokenType, get_token_manager
 from .api_keys import models as _api_keys_models  # noqa: F401
 from .credentials import models as _credentials_models  # noqa: F401
 from .dependencies import check_auth_scopes
+from .error_handler import jafaal_exception_handler, register_exception_handlers
+from .exceptions import (
+    AuthenticationError,
+    AuthorizationError,
+    ConflictError,
+    IdentityProviderError,
+    IdentityProviderTimeoutError,
+    InternalError,
+    InvalidApiKeyError,
+    InvalidCredentialsError,
+    InvalidMFACodeError,
+    InvalidRequestError,
+    InvalidTokenError,
+    JafaalError,
+    MissingScopeError,
+    NotFoundError,
+    PreconditionFailedError,
+    RateLimitedError,
+    ServiceUnavailableError,
+    SessionExpiredError,
+    StaleRefreshTokenError,
+    StoreUnavailableError,
+    TokenExpiredError,
+    UnprocessableError,
+    UpstreamError,
+    UpstreamTimeoutError,
+)
 from .identity_providers import models as _idp_models  # noqa: F401
 from .identity_providers.link_tokens import models as _idp_link_token_models  # noqa: F401
 from .identity_providers.links import models as _idp_link_models  # noqa: F401
@@ -154,6 +181,33 @@ __all__ = [
     "get_settings_provider",
     "get_user_repository",
     "reset_ports",
+    # Exceptions + edge handler
+    "AuthenticationError",
+    "AuthorizationError",
+    "ConflictError",
+    "IdentityProviderError",
+    "IdentityProviderTimeoutError",
+    "InternalError",
+    "InvalidApiKeyError",
+    "InvalidCredentialsError",
+    "InvalidMFACodeError",
+    "InvalidRequestError",
+    "InvalidTokenError",
+    "JafaalError",
+    "MissingScopeError",
+    "NotFoundError",
+    "PreconditionFailedError",
+    "RateLimitedError",
+    "ServiceUnavailableError",
+    "SessionExpiredError",
+    "StaleRefreshTokenError",
+    "StoreUnavailableError",
+    "TokenExpiredError",
+    "UnprocessableError",
+    "UpstreamError",
+    "UpstreamTimeoutError",
+    "jafaal_exception_handler",
+    "register_exception_handlers",
     # Security dependencies
     "AuthContext",
     "FailedLoginAttempts",
