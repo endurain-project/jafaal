@@ -31,7 +31,10 @@ def get_user_sessions(
         logger.info("Session retrieval attempted in demo environment - returning empty list")
         return []
 
-    return jafaal_sessions_crud.get_user_sessions(token_user_id, db)
+    return [
+        jafaal_sessions_schema.UsersSessionsRead.model_validate(session)
+        for session in jafaal_sessions_crud.get_user_sessions(token_user_id, db)
+    ]
 
 
 def delete_user_session(

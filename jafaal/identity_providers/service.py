@@ -6,7 +6,7 @@ import logging
 import secrets as secrets_module
 from datetime import UTC, datetime, timedelta
 from enum import Enum
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from authlib.integrations.httpx_client import AsyncOAuth2Client
@@ -340,6 +340,7 @@ class IdentityProviderService:
             # Step 4: Import the key based on type
             key_type = matching_key.get("kty")
 
+            key: RSAKey | ECKey | OctKey
             if key_type == "RSA":
                 key = RSAKey.import_key(matching_key)
             elif key_type == "EC":
@@ -1092,7 +1093,7 @@ class IdentityProviderService:
                 # Use the access token to fetch userinfo
                 access_token = token_response.get("access_token")
                 if access_token:
-                    response = await client.get(
+                    response = await cast("httpx.AsyncClient", client).get(
                         userinfo_endpoint,
                         headers={"Authorization": f"Bearer {access_token}"},
                     )

@@ -40,7 +40,9 @@ async def list_identity_providers(
     Returns:
         A list of all configured identity providers.
     """
-    return idp_crud.get_all_identity_providers(db)
+    return [
+        idp_schema.IdentityProvider.model_validate(provider) for provider in idp_crud.get_all_identity_providers(db)
+    ]
 
 
 @router.get(
@@ -96,7 +98,7 @@ async def create_identity_provider(
         JafaalError: 409 if the slug already exists, 500 on
             database errors.
     """
-    return idp_crud.create_identity_provider(idp_data, db)
+    return idp_schema.IdentityProvider.model_validate(idp_crud.create_identity_provider(idp_data, db))
 
 
 @router.put(
@@ -131,7 +133,7 @@ async def update_identity_provider(
         JafaalError: 404 if the provider is not found, 409 on slug
             conflict, 500 on database errors.
     """
-    return idp_crud.update_identity_provider(idp_id, idp_data, db)
+    return idp_schema.IdentityProvider.model_validate(idp_crud.update_identity_provider(idp_id, idp_data, db))
 
 
 @router.delete("/{idp_id}", status_code=status.HTTP_204_NO_CONTENT)

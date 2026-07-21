@@ -170,7 +170,9 @@ def generate_qr_code(secret: str, username: str, app_name: str = "Jafaal") -> st
     img = qr.make_image(fill_color="black", back_color="white")
 
     buffer = BytesIO()
-    img.save(buffer, format="PNG")
+    # qrcode's default (PIL) image backend accepts ``format``; the bundled type
+    # stubs only model the pure-python PNG backend, whose ``save`` omits it.
+    img.save(buffer, format="PNG")  # type: ignore[call-arg]
     buffer.seek(0)
     img_base64 = base64.b64encode(buffer.getvalue()).decode()
 

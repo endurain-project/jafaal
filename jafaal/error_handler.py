@@ -44,4 +44,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     Call once at startup, before serving requests. Safe to install up-front: it
     is a no-op until the core raises a :class:`JafaalError`.
     """
-    app.add_exception_handler(JafaalError, jafaal_exception_handler)
+    # Starlette types handlers as ``Callable[[Request, Exception], ...]``; ours
+    # narrows ``exc`` to ``JafaalError`` (safe — it is only dispatched for that
+    # exception type), which Starlette's broad signature cannot express.
+    app.add_exception_handler(JafaalError, jafaal_exception_handler)  # type: ignore[arg-type]

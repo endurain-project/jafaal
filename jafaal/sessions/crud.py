@@ -2,7 +2,7 @@
 
 import logging
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import CursorResult, delete, select
 from sqlalchemy import update as sa_update
@@ -292,7 +292,7 @@ def claim_session_for_token_exchange(
             refresh_token=hashed_refresh_token,
         )
     )
-    result: CursorResult[Any] = db.execute(stmt)
+    result = cast(CursorResult[Any], db.execute(stmt))
     db.commit()
 
     claimed = result.rowcount == 1
@@ -421,11 +421,11 @@ def delete_session(
     jafaal_sessions_rotated_tokens_crud.delete_by_family(session.token_family_id, db)
 
     # Delete the session
-    stmt = delete(jafaal_sessions_models.UsersSessions).where(
+    delete_stmt = delete(jafaal_sessions_models.UsersSessions).where(
         jafaal_sessions_models.UsersSessions.id == session_id,
         jafaal_sessions_models.UsersSessions.user_id == user_id,
     )
-    db.execute(stmt)
+    db.execute(delete_stmt)
 
     # Delete OAuth state after session is deleted if exists
     if oauth_state_id_to_delete:
@@ -460,7 +460,7 @@ def delete_idle_sessions(
     stmt = delete(jafaal_sessions_models.UsersSessions).where(
         jafaal_sessions_models.UsersSessions.last_activity_at < cutoff_time
     )
-    result: CursorResult[Any] = db.execute(stmt)
+    result = cast(CursorResult[Any], db.execute(stmt))
     db.commit()
     return result.rowcount
 
@@ -489,7 +489,7 @@ def delete_sessions_by_family(
     stmt = delete(jafaal_sessions_models.UsersSessions).where(
         jafaal_sessions_models.UsersSessions.token_family_id == token_family_id
     )
-    result: CursorResult[Any] = db.execute(stmt)
+    result = cast(CursorResult[Any], db.execute(stmt))
     db.commit()
     return result.rowcount
 
@@ -522,7 +522,7 @@ def delete_sessions_by_user(
     stmt = delete(jafaal_sessions_models.UsersSessions).where(jafaal_sessions_models.UsersSessions.user_id == user_id)
     if exclude_session_id is not None:
         stmt = stmt.where(jafaal_sessions_models.UsersSessions.id != exclude_session_id)
-    result = db.execute(stmt)
+    result = cast(CursorResult[Any], db.execute(stmt))
     if commit:
         db.commit()
     return result.rowcount

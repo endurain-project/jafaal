@@ -234,7 +234,7 @@ def build_token_response(
     access_token_exp: datetime,
     refresh_token: str,
     refresh_token_exp: datetime,
-    csrf_token: str,
+    csrf_token: str | None,
 ) -> dict:
     """Build the OAuth 2.1 token-response body for login and refresh.
 

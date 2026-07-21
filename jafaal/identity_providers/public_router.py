@@ -2,7 +2,7 @@
 
 import logging
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, cast
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
@@ -21,6 +21,7 @@ import jafaal.identity_providers.utils as idp_utils
 import jafaal.oauth_state.crud as oauth_state_crud
 import jafaal.oauth_state.utils as oauth_state_utils
 import jafaal.orm as jafaal_orm
+import jafaal.ports as jafaal_ports
 import jafaal.rate_limit as jafaal_rate_limit
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.utils as jafaal_sessions_utils
@@ -516,7 +517,7 @@ async def exchange_tokens_for_session(
             client_type = header_client_type or "web"
 
         # PKCE verification successful - retrieve user and create tokens
-        user = session_obj.users
+        user = cast(jafaal_ports.UserProtocol, session_obj.users)
         # Validate that the user is still active before minting tokens
         jafaal_user_guards.check_user_is_active(user)
 

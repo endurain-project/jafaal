@@ -50,7 +50,9 @@ class UserProtocol(Protocol):
     is_active: bool
     is_superuser: bool
     is_verified: bool
-    mfa_enabled: bool
+
+    @property
+    def mfa_enabled(self) -> bool: ...
 
 
 @dataclass(frozen=True)

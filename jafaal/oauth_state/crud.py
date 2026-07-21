@@ -2,7 +2,7 @@
 
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import CursorResult, select
 from sqlalchemy import delete as sa_delete
@@ -208,7 +208,7 @@ def mark_oauth_state_used(state_id: str, db: Session) -> bool:
         # naive datetimes (e.g. SQLite). The DB does the comparison.
         .execution_options(synchronize_session=False)
     )
-    result: CursorResult[Any] = db.execute(stmt)
+    result = cast(CursorResult[Any], db.execute(stmt))
     db.commit()
 
     claimed = result.rowcount == 1
@@ -234,7 +234,7 @@ def delete_oauth_state(oauth_state_id: str, db: Session) -> int:
         JafaalError: 500 error if database operation fails.
     """
     stmt = sa_delete(oauth_state_models.OAuthState).where(oauth_state_models.OAuthState.id == oauth_state_id)
-    result: CursorResult[Any] = db.execute(stmt)
+    result = cast(CursorResult[Any], db.execute(stmt))
     db.commit()
     return result.rowcount
 
@@ -255,7 +255,7 @@ def delete_expired_oauth_states(db: Session) -> int:
         JafaalError: 500 error if database operation fails.
     """
     stmt = sa_delete(oauth_state_models.OAuthState).where(oauth_state_models.OAuthState.expires_at < datetime.now(UTC))
-    result: CursorResult[Any] = db.execute(stmt)
+    result = cast(CursorResult[Any], db.execute(stmt))
     db.commit()
 
     deleted_count = result.rowcount

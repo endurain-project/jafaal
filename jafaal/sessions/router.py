@@ -58,7 +58,10 @@ async def read_sessions_user(
     """
     jafaal_user_guards.assert_can_access_user(principal, user_id)
     if jafaal_settings.get_settings().environment != "demo":
-        return jafaal_sessions_crud.get_user_sessions(user_id, db)
+        return [
+            jafaal_sessions_schema.UsersSessionsRead.model_validate(session)
+            for session in jafaal_sessions_crud.get_user_sessions(user_id, db)
+        ]
     else:
         logger.info("Session retrieval in demo environment - returning empty")
         return []

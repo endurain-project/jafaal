@@ -2,7 +2,7 @@
 
 import logging
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import CursorResult, select
 from sqlalchemy import delete as sa_delete
@@ -96,7 +96,7 @@ def mark_token_as_used(token_hash: str, db: Session) -> bool:
         # that return naive datetimes (e.g. SQLite). The DB does the comparison.
         .execution_options(synchronize_session=False)
     )
-    result: CursorResult[Any] = db.execute(stmt)
+    result = cast(CursorResult[Any], db.execute(stmt))
     db.commit()
 
     claimed = result.rowcount == 1
@@ -121,7 +121,7 @@ def delete_expired_tokens(db: Session) -> int:
     stmt = sa_delete(idp_link_token_models.IdpLinkToken).where(
         idp_link_token_models.IdpLinkToken.expires_at < datetime.now(UTC)
     )
-    result: CursorResult[Any] = db.execute(stmt)
+    result = cast(CursorResult[Any], db.execute(stmt))
     db.commit()
 
     deleted_count = result.rowcount

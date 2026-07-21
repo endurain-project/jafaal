@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import CursorResult, delete, or_, select
 from sqlalchemy.orm import Session
@@ -162,7 +162,7 @@ def delete_user_backup_codes(user_id: UserId, db: Session) -> int:
         InternalError: If a database error occurs.
     """
     stmt = delete(mfa_backup_codes_models.MFABackupCode).where(mfa_backup_codes_models.MFABackupCode.user_id == user_id)
-    result: CursorResult[Any] = db.execute(stmt)
+    result = cast(CursorResult[Any], db.execute(stmt))
     db.commit()
 
     num_deleted = result.rowcount or 0

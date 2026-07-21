@@ -188,7 +188,7 @@ def edit_session_object(
     request: Request,
     hashed_refresh_token: str,
     refresh_token_exp: datetime,
-    session: jafaal_sessions_schema.UsersSessionsInternal,
+    session: jafaal_sessions_models.UsersSessions,
     csrf_token_hash: str | None = None,
 ) -> jafaal_sessions_schema.UsersSessionsInternal:
     """
@@ -280,7 +280,7 @@ def create_session(
 
 
 def edit_session(
-    session: jafaal_sessions_schema.UsersSessionsInternal,
+    session: jafaal_sessions_models.UsersSessions,
     request: Request,
     new_refresh_token: str,
     password_hasher: jafaal_password_hasher.PasswordHasher,

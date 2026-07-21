@@ -8,9 +8,10 @@ FastAPI dependency.
 import secrets
 import string
 from collections.abc import Iterable
-from typing import Protocol
+from typing import Protocol, cast
 
 from pwdlib import PasswordHash
+from pwdlib.hashers import HasherProtocol
 from pwdlib.hashers.argon2 import Argon2Hasher
 from pwdlib.hashers.bcrypt import BcryptHasher
 
@@ -108,7 +109,7 @@ class PasswordHasher:
             self._password_hash = PasswordHash([hasher])
         elif isinstance(hasher, Iterable):
             # Iterable of hashers
-            self._password_hash = PasswordHash(list(hasher))
+            self._password_hash = PasswordHash(cast(list[HasherProtocol], list(hasher)))
         else:
             raise TypeError(
                 f"Unsupported hasher type: {type(hasher).__name__}. Must be Argon2Hasher, BcryptHasher, Iterable, PasswordHash, or None."

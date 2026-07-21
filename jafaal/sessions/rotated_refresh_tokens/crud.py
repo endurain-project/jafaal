@@ -1,7 +1,7 @@
 """CRUD operations for rotated refresh tokens."""
 
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import CursorResult, delete, select
 from sqlalchemy.orm import Session
@@ -88,7 +88,7 @@ def delete_expired_tokens(cutoff_time: datetime, db: Session) -> int:
     stmt = delete(rotated_token_models.RotatedRefreshToken).where(
         rotated_token_models.RotatedRefreshToken.expires_at < cutoff_time
     )
-    result: CursorResult[Any] = db.execute(stmt)
+    result = cast(CursorResult[Any], db.execute(stmt))
     db.commit()
     return result.rowcount
 
@@ -111,6 +111,6 @@ def delete_by_family(token_family_id: str, db: Session) -> int:
     stmt = delete(rotated_token_models.RotatedRefreshToken).where(
         rotated_token_models.RotatedRefreshToken.token_family_id == token_family_id
     )
-    result: CursorResult[Any] = db.execute(stmt)
+    result = cast(CursorResult[Any], db.execute(stmt))
     db.commit()
     return result.rowcount

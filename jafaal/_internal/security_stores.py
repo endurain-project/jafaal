@@ -558,9 +558,13 @@ def get_step_up_attempts() -> StepUpStore:
     return step_up_attempts
 
 
-def cleanup_expired_pending_mfa_logins() -> None:
-    """Evict all expired pending MFA login entries (no-op; TTL-managed)."""
-    pending_mfa_store.cleanup_expired()
+def cleanup_expired_pending_mfa_logins() -> int:
+    """Evict all expired pending MFA login entries (no-op; TTL-managed).
+
+    Returns the number of entries evicted (always ``0`` — the backend expires
+    pending entries by TTL).
+    """
+    return pending_mfa_store.cleanup_expired()
 
 
 def clear_pending_mfa_for_user(user_id: UserId) -> int:

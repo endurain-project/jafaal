@@ -41,7 +41,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any
 
-from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Mapper, Session, sessionmaker
 
 __all__ = [
     "Base",
@@ -135,8 +135,8 @@ def session_scope() -> Generator[Session]:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_user_model() -> type:
-    """Return the host's mapped user class (the class mapped to ``users``).
+def _resolve_user_mapper() -> Mapper[Any]:
+    """Return the mapper of the host's user class (the class mapped to ``users``).
 
     JAFAAL requires the host user model to be mapped to the ``users`` table on
     this ``Base`` (see :mod:`jafaal.user_model`), so it is unambiguous within the
@@ -148,7 +148,7 @@ def _resolve_user_model() -> type:
     for mapper in Base.registry.mappers:
         table = mapper.local_table
         if table is not None and getattr(table, "name", None) == "users":
-            return mapper.class_
+            return mapper
     raise RuntimeError(
         "JAFAAL could not find a mapped class for the 'users' table. Build your "
         "user model on jafaal.orm.Base (see jafaal.user_model)."
@@ -157,7 +157,7 @@ def _resolve_user_model() -> type:
 
 def user_id_python_type() -> type:
     """Return the Python type of the host user table's primary key (``int``/``UUID``)."""
-    return _resolve_user_model().__mapper__.primary_key[0].type.python_type
+    return _resolve_user_mapper().primary_key[0].type.python_type
 
 
 def coerce_user_id(value: Any) -> Any:
