@@ -14,12 +14,13 @@ import jafaal.mfa.backup_codes.models as mfa_backup_codes_models
 import jafaal.mfa.backup_codes.utils as mfa_backup_codes_utils
 from jafaal._core import db_errors
 from jafaal._internal.password_hasher import SupportsHashPassword
+from jafaal.orm import UserId
 
 logger = logging.getLogger(__name__)
 
 
 @db_errors.handle_db_errors
-def get_user_backup_codes(user_id: int, db: Session) -> list[mfa_backup_codes_models.MFABackupCode]:
+def get_user_backup_codes(user_id: UserId, db: Session) -> list[mfa_backup_codes_models.MFABackupCode]:
     """Retrieve all MFA backup codes for a user.
 
     Args:
@@ -39,7 +40,7 @@ def get_user_backup_codes(user_id: int, db: Session) -> list[mfa_backup_codes_mo
 
 
 @db_errors.handle_db_errors
-def get_user_unused_backup_codes(user_id: int, db: Session) -> list[mfa_backup_codes_models.MFABackupCode]:
+def get_user_unused_backup_codes(user_id: UserId, db: Session) -> list[mfa_backup_codes_models.MFABackupCode]:
     """Retrieve all unused MFA backup codes for a user.
 
     Args:
@@ -66,7 +67,7 @@ def get_user_unused_backup_codes(user_id: int, db: Session) -> list[mfa_backup_c
 
 @db_errors.handle_db_errors
 def create_backup_codes(
-    user_id: int,
+    user_id: UserId,
     password_hasher: SupportsHashPassword,
     db: Session,
     count: int = 10,
@@ -118,7 +119,7 @@ def create_backup_codes(
 
 
 @db_errors.handle_db_errors
-def mark_backup_code_as_used(code_id: int, user_id: int, db: Session) -> None:
+def mark_backup_code_as_used(code_id: int, user_id: UserId, db: Session) -> None:
     """Mark a single backup code as used by primary key.
 
     Args:
@@ -147,7 +148,7 @@ def mark_backup_code_as_used(code_id: int, user_id: int, db: Session) -> None:
 
 
 @db_errors.handle_db_errors
-def delete_user_backup_codes(user_id: int, db: Session) -> int:
+def delete_user_backup_codes(user_id: UserId, db: Session) -> int:
     """Delete all MFA backup codes for a user.
 
     Args:

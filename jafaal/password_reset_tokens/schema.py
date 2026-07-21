@@ -2,7 +2,9 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, StrictBool, StrictInt, StrictStr
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, StrictBool, StrictStr
+
+from jafaal.orm import UserId
 
 
 class PasswordResetToken(BaseModel):
@@ -23,7 +25,7 @@ class PasswordResetToken(BaseModel):
         description="Unique identifier for the token",
         max_length=64,
     )
-    user_id: StrictInt = Field(
+    user_id: UserId = Field(
         ...,
         description="ID of the user who requested the reset",
     )

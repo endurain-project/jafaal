@@ -10,6 +10,7 @@ from sqlalchemy.sql import func
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_providers.links.models as jafaal_identity_links_models
 from jafaal._core import db_errors
+from jafaal.orm import UserId
 
 
 @db_errors.handle_db_errors
@@ -36,7 +37,7 @@ def check_user_identity_providers_by_idp_id(
 
 @db_errors.handle_db_errors
 def get_user_identity_providers_by_user_id(
-    user_id: int,
+    user_id: UserId,
     db: Session,
 ) -> list[jafaal_identity_links_models.IdentityLink]:
     """
@@ -60,7 +61,7 @@ def get_user_identity_providers_by_user_id(
 
 @db_errors.handle_db_errors
 def get_user_identity_provider_by_user_id_and_idp_id(
-    user_id: int,
+    user_id: UserId,
     idp_id: int,
     db: Session,
 ) -> jafaal_identity_links_models.IdentityLink | None:
@@ -116,7 +117,7 @@ def get_user_identity_provider_by_subject_and_idp_id(
 
 @db_errors.handle_db_errors
 def create_user_identity_provider(
-    user_id: int,
+    user_id: UserId,
     idp_id: int,
     idp_subject: str,
     db: Session,
@@ -155,7 +156,7 @@ def create_user_identity_provider(
 
 @db_errors.handle_db_errors
 def update_user_identity_provider_last_login(
-    user_id: int,
+    user_id: UserId,
     idp_id: int,
     db: Session,
 ) -> jafaal_identity_links_models.IdentityLink | None:
@@ -188,7 +189,7 @@ def update_user_identity_provider_last_login(
 
 @db_errors.handle_db_errors
 def store_user_identity_provider_tokens(
-    user_id: int,
+    user_id: UserId,
     idp_id: int,
     encrypted_refresh_token: str,
     access_token_expires_at: datetime,
@@ -229,7 +230,7 @@ def store_user_identity_provider_tokens(
 
 @db_errors.handle_db_errors
 def clear_user_identity_provider_refresh_token_by_user_id_and_idp_id(
-    user_id: int,
+    user_id: UserId,
     idp_id: int,
     db: Session,
 ) -> bool:
@@ -266,7 +267,7 @@ def clear_user_identity_provider_refresh_token_by_user_id_and_idp_id(
 
 @db_errors.handle_db_errors
 def delete_user_identity_provider(
-    user_id: int,
+    user_id: UserId,
     idp_id: int,
     db: Session,
 ) -> bool:

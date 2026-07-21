@@ -8,12 +8,13 @@ import jafaal.identity_providers.crud as idp_crud
 import jafaal.identity_providers.links.crud as jafaal_identity_links_crud
 import jafaal.identity_providers.links.models as jafaal_identity_links_models
 import jafaal.identity_providers.links.schema as jafaal_identity_links_schema
+from jafaal.orm import UserId
 
 logger = logging.getLogger(__name__)
 
 
 def get_user_identity_provider_refresh_token_by_user_id_and_idp_id(
-    user_id: int,
+    user_id: UserId,
     idp_id: int,
     db: Session,
 ) -> str | None:
@@ -46,7 +47,7 @@ def get_user_identity_provider_refresh_token_by_user_id_and_idp_id(
 
 def enrich_user_identity_providers(
     idp_links: list[jafaal_identity_links_models.IdentityLink],
-    user_id: int,
+    user_id: UserId,
     db: Session,
 ) -> list[jafaal_identity_links_schema.UsersIdentityProviderResponse]:
     """

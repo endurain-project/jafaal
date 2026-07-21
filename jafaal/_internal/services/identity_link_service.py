@@ -20,6 +20,7 @@ import jafaal.identity_providers.links.crud as jafaal_identity_links_crud
 import jafaal.identity_providers.links.schema as jafaal_identity_links_schema
 import jafaal.identity_providers.links.utils as jafaal_identity_links_utils
 import jafaal.schema as jafaal_schema
+from jafaal.orm import UserId
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ def generate_link_token(
     idp_id: int,
     link_request: idp_link_token_schema.IdpLinkTokenRequest,
     request: Request,
-    token_user_id: int,
+    token_user_id: UserId,
     identity_service: IdentityService,
     step_up_store: jafaal_security_stores.StepUpStore,
     db: Session,
@@ -74,7 +75,7 @@ def generate_link_token(
 def delete_identity_provider_link(
     idp_id: int,
     step_up: jafaal_schema.StepUpVerification,
-    token_user_id: int,
+    token_user_id: UserId,
     identity_service: IdentityService,
     step_up_store: jafaal_security_stores.StepUpStore,
     db: Session,
@@ -125,7 +126,7 @@ def delete_identity_provider_link(
 
 
 def admin_delete_identity_provider_link(
-    user_id: int,
+    user_id: UserId,
     idp_id: int,
     db: Session,
 ) -> None:
@@ -182,7 +183,7 @@ def admin_delete_identity_provider_link(
 
 
 def get_user_identity_provider_links(
-    user_id: int,
+    user_id: UserId,
     db: Session,
 ) -> list[jafaal_identity_links_schema.UsersIdentityProviderResponse]:
     """Return enriched identity provider links for the authenticated user."""
@@ -195,7 +196,7 @@ def validate_and_claim_browser_link_token(
     idp_id: int,
     client_ip: str | None,
     db: Session,
-) -> int:
+) -> UserId:
     """Validate, IP-check, and atomically claim a browser-redirect link token.
 
     Encapsulates all auth-owned CRUD operations (idp_link_token_crud and

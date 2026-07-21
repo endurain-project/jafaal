@@ -11,6 +11,8 @@ from pydantic import (
     StrictStr,
 )
 
+from jafaal.orm import UserId
+
 
 class IdpLinkTokenCreate(BaseModel):
     """Schema for creating an IdP link token."""
@@ -27,9 +29,8 @@ class IdpLinkTokenCreate(BaseModel):
         max_length=64,
         description="SHA-256 hash of the one-time link token",
     )
-    user_id: StrictInt = Field(
+    user_id: UserId = Field(
         ...,
-        gt=0,
         description="User ID linking the IdP",
     )
     idp_id: StrictInt = Field(

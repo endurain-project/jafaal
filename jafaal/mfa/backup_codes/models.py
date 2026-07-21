@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from jafaal.orm import Base
+from jafaal.orm import Base, UserId
 
 if TYPE_CHECKING:
     from jafaal.user_model import UserMixin as Users
@@ -41,7 +41,7 @@ class MFABackupCode(Base):
     __tablename__ = "mfa_backup_codes"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(
+    user_id: Mapped[UserId] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
         index=True,

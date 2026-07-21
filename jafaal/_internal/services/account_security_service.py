@@ -14,6 +14,7 @@ import jafaal.password_policy as jafaal_password_policy
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.schema as jafaal_sessions_schema
 import jafaal.settings as jafaal_settings
+from jafaal.orm import UserId
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
 
 
 def get_user_sessions(
-    token_user_id: int,
+    token_user_id: UserId,
     db: Session,
 ) -> list[jafaal_sessions_schema.UsersSessionsRead]:
     """Retrieve active sessions for the authenticated user."""
@@ -35,7 +36,7 @@ def get_user_sessions(
 
 def delete_user_session(
     session_id: str,
-    token_user_id: int,
+    token_user_id: UserId,
     db: Session,
 ) -> None:
     """Delete one authenticated user's session."""
@@ -43,7 +44,7 @@ def delete_user_session(
 
 
 def delete_other_user_sessions(
-    token_user_id: int,
+    token_user_id: UserId,
     current_session_id: str,
     db: Session,
 ) -> int:
@@ -72,7 +73,7 @@ def delete_other_user_sessions(
 
 
 def change_own_password(
-    user_id: int,
+    user_id: UserId,
     current_password: str,
     new_password: str,
     mfa_code: str | None,
@@ -136,7 +137,7 @@ def change_own_password(
 
 
 def change_managed_user_password(
-    user_id: int,
+    user_id: UserId,
     new_password: str,
     identity_service: IdentityService,
     db: Session,

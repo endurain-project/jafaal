@@ -12,6 +12,7 @@ from pydantic import (
 )
 
 import jafaal.api_keys.utils as api_keys_utils
+from jafaal.orm import UserId
 
 
 class UsersApiKeyCreate(BaseModel):
@@ -113,7 +114,7 @@ class UsersApiKeyRead(BaseModel):
     """
 
     id: StrictStr = Field(..., description="Unique key identifier (UUID)")
-    user_id: int = Field(..., ge=1, description="Owner's user ID")
+    user_id: UserId = Field(..., description="Owner's user ID")
     name: StrictStr = Field(..., description="User-friendly label")
     key_prefix: StrictStr = Field(..., description="First 8 chars of the random part")
     scopes: StrictStr = Field(..., description="JSON-encoded list of granted scopes")

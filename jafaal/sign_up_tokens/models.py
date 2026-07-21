@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import DateTime, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from jafaal.orm import Base
+from jafaal.orm import Base, UserId
 
 if TYPE_CHECKING:
     from jafaal.user_model import UserMixin as Users
@@ -29,7 +29,7 @@ class SignUpToken(Base):
     __tablename__ = "sign_up_tokens"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    user_id: Mapped[int] = mapped_column(
+    user_id: Mapped[UserId] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
         index=True,

@@ -30,6 +30,7 @@ import jafaal.mfa.service as mfa_service
 import jafaal.ports as jafaal_ports
 import jafaal.schema as jafaal_schema
 from jafaal.mfa.setup_store import MFASecretStoreBackend
+from jafaal.orm import UserId
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,7 @@ if TYPE_CHECKING:
 
 
 def get_mfa_status(
-    token_user_id: int,
+    token_user_id: UserId,
     db: Session,
 ) -> mfa_schema.MFAStatusResponse:
     """Return whether MFA is enabled for the user."""
@@ -47,7 +48,7 @@ def get_mfa_status(
 
 
 def get_backup_code_status(
-    token_user_id: int,
+    token_user_id: UserId,
     db: Session,
 ) -> mfa_backup_codes_schema.MFABackupCodeStatus:
     """Retrieve MFA backup code status for the authenticated user."""
@@ -76,7 +77,7 @@ def get_backup_code_status(
 
 
 def setup_mfa(
-    token_user_id: int,
+    token_user_id: UserId,
     db: Session,
     mfa_secret_store: MFASecretStoreBackend,
 ) -> mfa_schema.MFASetupResponse:
@@ -88,7 +89,7 @@ def setup_mfa(
 
 def enable_mfa(
     request: mfa_schema.MFASetupRequest,
-    token_user_id: int,
+    token_user_id: UserId,
     identity_service: IdentityService,
     step_up_store: jafaal_security_stores.StepUpStore,
     db: Session,
@@ -133,7 +134,7 @@ def enable_mfa(
 
 def disable_mfa(
     request: mfa_schema.MFADisableRequest,
-    token_user_id: int,
+    token_user_id: UserId,
     identity_service: IdentityService,
     step_up_store: jafaal_security_stores.StepUpStore,
     db: Session,
@@ -154,7 +155,7 @@ def disable_mfa(
 
 def verify_mfa(
     request: mfa_schema.MFARequest,
-    token_user_id: int,
+    token_user_id: UserId,
     identity_service: IdentityService,
     db: Session,
 ) -> dict:
@@ -173,7 +174,7 @@ def verify_mfa(
 
 def generate_backup_codes(
     step_up: jafaal_schema.StepUpVerification,
-    token_user_id: int,
+    token_user_id: UserId,
     identity_service: IdentityService,
     step_up_store: jafaal_security_stores.StepUpStore,
     db: Session,

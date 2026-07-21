@@ -55,6 +55,7 @@ import jafaal.schema as jafaal_schema
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.utils as jafaal_utils
 from jafaal._core import timeutils
+from jafaal.orm import UserId
 from jafaal.principal import (
     AccessTokenCred,
     ApiKeyCred,
@@ -205,7 +206,7 @@ class IdentityService(Protocol):
     def revoke_session(
         self,
         session_id: str,
-        user_id: int,
+        user_id: UserId,
     ) -> None:
         """Revoke and delete a session.
 
@@ -286,7 +287,7 @@ class IdentityService(Protocol):
         """
         ...
 
-    def get_password_hash(self, user_id: int) -> str | None:
+    def get_password_hash(self, user_id: UserId) -> str | None:
         """Return a user's stored local password hash, or ``None``.
 
         ``None`` means the account has no local password (for example an
@@ -300,7 +301,7 @@ class IdentityService(Protocol):
         """
         ...
 
-    def has_local_password(self, user_id: int) -> bool:
+    def has_local_password(self, user_id: UserId) -> bool:
         """Return whether a user has a local password credential.
 
         ``False`` means the account is SSO-only (no row in
@@ -315,7 +316,7 @@ class IdentityService(Protocol):
         """
         ...
 
-    def set_local_password_hash(self, user_id: int, password_hash: str) -> None:
+    def set_local_password_hash(self, user_id: UserId, password_hash: str) -> None:
         """Insert or update a user's local password hash.
 
         Args:
@@ -327,7 +328,7 @@ class IdentityService(Protocol):
         """
         ...
 
-    def clear_local_password(self, user_id: int) -> None:
+    def clear_local_password(self, user_id: UserId) -> None:
         """Remove a user's local password credential, if present.
 
         Args:
@@ -338,7 +339,7 @@ class IdentityService(Protocol):
         """
         ...
 
-    def initialize_user_mfa(self, user_id: int) -> None:
+    def initialize_user_mfa(self, user_id: UserId) -> None:
         """Create the default (disabled) MFA row for a new user.
 
         Establishes the 1:1 ``users``↔``users_mfa`` invariant so non-auth
@@ -362,7 +363,7 @@ class IdentityService(Protocol):
     # only through this contract, never imported directly by non-auth code.
     # ------------------------------------------------------------------
 
-    def get_user_sessions(self, user_id: int) -> list[jafaal_sessions_schema.UsersSessionsRead]:
+    def get_user_sessions(self, user_id: UserId) -> list[jafaal_sessions_schema.UsersSessionsRead]:
         """Return the authenticated user's active sessions.
 
         Args:
@@ -373,7 +374,7 @@ class IdentityService(Protocol):
         """
         ...
 
-    def delete_user_session(self, session_id: str, user_id: int) -> None:
+    def delete_user_session(self, session_id: str, user_id: UserId) -> None:
         """Delete one of the authenticated user's own sessions.
 
         Args:
@@ -385,7 +386,7 @@ class IdentityService(Protocol):
         """
         ...
 
-    def delete_other_user_sessions(self, user_id: int, current_session_id: str) -> None:
+    def delete_other_user_sessions(self, user_id: UserId, current_session_id: str) -> None:
         """Delete all of the authenticated user's sessions except the current one.
 
         Args:
@@ -399,7 +400,7 @@ class IdentityService(Protocol):
 
     def change_own_password(
         self,
-        user_id: int,
+        user_id: UserId,
         current_password: str,
         new_password: str,
         mfa_code: str | None,
@@ -428,7 +429,7 @@ class IdentityService(Protocol):
         """
         ...
 
-    def change_managed_user_password(self, user_id: int, new_password: str) -> None:
+    def change_managed_user_password(self, user_id: UserId, new_password: str) -> None:
         """Change a managed user's password and revoke their auth state.
 
         Args:
@@ -443,7 +444,7 @@ class IdentityService(Protocol):
         """
         ...
 
-    def get_mfa_status(self, user_id: int) -> jafaal_mfa_schema.MFAStatusResponse:
+    def get_mfa_status(self, user_id: UserId) -> jafaal_mfa_schema.MFAStatusResponse:
         """Return whether MFA is enabled for the user.
 
         Args:
@@ -454,7 +455,7 @@ class IdentityService(Protocol):
         """
         ...
 
-    def get_backup_code_status(self, user_id: int) -> jafaal_mfa_backup_codes_schema.MFABackupCodeStatus:
+    def get_backup_code_status(self, user_id: UserId) -> jafaal_mfa_backup_codes_schema.MFABackupCodeStatus:
         """Return the user's MFA backup-code status.
 
         Args:
@@ -467,7 +468,7 @@ class IdentityService(Protocol):
 
     def setup_mfa(
         self,
-        user_id: int,
+        user_id: UserId,
         mfa_secret_store: jafaal_mfa_setup_store.MFASecretStoreBackend,
     ) -> jafaal_mfa_schema.MFASetupResponse:
         """Create MFA setup material and store the pending setup secret.
@@ -484,7 +485,7 @@ class IdentityService(Protocol):
     def enable_mfa(
         self,
         request: jafaal_mfa_schema.MFASetupRequest,
-        user_id: int,
+        user_id: UserId,
         step_up_store: jafaal_security_stores.StepUpStore,
         mfa_secret_store: jafaal_mfa_setup_store.MFASecretStoreBackend,
     ) -> dict:
@@ -507,7 +508,7 @@ class IdentityService(Protocol):
     def disable_mfa(
         self,
         request: jafaal_mfa_schema.MFADisableRequest,
-        user_id: int,
+        user_id: UserId,
         step_up_store: jafaal_security_stores.StepUpStore,
     ) -> dict:
         """Disable MFA after step-up verification.
@@ -525,7 +526,7 @@ class IdentityService(Protocol):
         """
         ...
 
-    def verify_mfa(self, request: jafaal_mfa_schema.MFARequest, user_id: int) -> dict:
+    def verify_mfa(self, request: jafaal_mfa_schema.MFARequest, user_id: UserId) -> dict:
         """Verify an MFA code for the authenticated user.
 
         Args:
@@ -543,7 +544,7 @@ class IdentityService(Protocol):
     def generate_backup_codes(
         self,
         step_up: jafaal_schema.StepUpVerification,
-        user_id: int,
+        user_id: UserId,
         step_up_store: jafaal_security_stores.StepUpStore,
     ) -> jafaal_mfa_backup_codes_schema.MFABackupCodesResponse:
         """Generate new backup codes for an MFA-enabled account.
@@ -566,7 +567,7 @@ class IdentityService(Protocol):
         idp_id: int,
         link_request: jafaal_idp_link_tokens_schema.IdpLinkTokenRequest,
         request: Request,
-        user_id: int,
+        user_id: UserId,
         step_up_store: jafaal_security_stores.StepUpStore,
     ) -> jafaal_idp_link_tokens_schema.IdpLinkTokenResponse:
         """Generate a one-time IdP link token after step-up verification.
@@ -591,7 +592,7 @@ class IdentityService(Protocol):
         self,
         idp_id: int,
         step_up: jafaal_schema.StepUpVerification,
-        user_id: int,
+        user_id: UserId,
         step_up_store: jafaal_security_stores.StepUpStore,
     ) -> None:
         """Unlink an IdP while enforcing anti-lockout checks.
@@ -613,7 +614,7 @@ class IdentityService(Protocol):
 
     def get_user_identity_provider_links(
         self,
-        user_id: int,
+        user_id: UserId,
     ) -> list[jafaal_identity_links_schema.UsersIdentityProviderResponse]:
         """Return enriched identity-provider links for the user.
 
@@ -627,7 +628,7 @@ class IdentityService(Protocol):
 
     def admin_delete_identity_provider_link(
         self,
-        user_id: int,
+        user_id: UserId,
         idp_id: int,
     ) -> None:
         """Unlink an IdP from a user as an administrator (no step-up).
@@ -649,7 +650,7 @@ class IdentityService(Protocol):
         link_token: str,
         idp_id: int,
         client_ip: str | None,
-    ) -> int:
+    ) -> UserId:
         """Validate, IP-check, and atomically claim a browser-redirect link token.
 
         Args:
@@ -803,8 +804,12 @@ class DefaultIdentityService:
         self._token_manager.validate_access_expiration_logged(access_token)
 
         sub = self._token_manager.get_token_claim(access_token, "sub")
-        if not isinstance(sub, int):
-            raise jafaal_exceptions.InvalidTokenError("Invalid token: 'sub' claim must be an integer")
+        if not isinstance(sub, int | str) or sub == "":
+            raise jafaal_exceptions.InvalidTokenError("Invalid token: 'sub' claim is missing or malformed")
+        try:
+            user_id = jafaal_orm.coerce_user_id(sub)
+        except (ValueError, TypeError) as err:
+            raise jafaal_exceptions.InvalidTokenError("Invalid token: 'sub' claim is malformed") from err
 
         scope = self._token_manager.get_token_claim(access_token, "scope")
         if not isinstance(scope, list):
@@ -814,7 +819,7 @@ class DefaultIdentityService:
         if not isinstance(sid, str):
             raise jafaal_exceptions.InvalidTokenError("Invalid token: 'sid' claim must be a string")
 
-        user = jafaal_user_guards.get_user_by_id_or_404(sub, self._db)
+        user = jafaal_user_guards.get_user_by_id_or_404(user_id, self._db)
         jafaal_user_guards.check_user_is_active(user)
 
         return self._build_principal(
@@ -946,7 +951,7 @@ class DefaultIdentityService:
     def revoke_session(
         self,
         session_id: str,
-        user_id: int,
+        user_id: UserId,
     ) -> None:
         """Revoke and delete a session.
 
@@ -1037,7 +1042,7 @@ class DefaultIdentityService:
         """
         return self._password_hasher.verify_password(password, password_hash)
 
-    def get_password_hash(self, user_id: int) -> str | None:
+    def get_password_hash(self, user_id: UserId) -> str | None:
         """Return a user's stored local password hash, or ``None``.
 
         ``None`` means the account has no local password (for example an
@@ -1052,7 +1057,7 @@ class DefaultIdentityService:
         credential = jafaal_credentials_crud.get_credential(user_id, self._db)
         return credential.password_hash if credential is not None else None
 
-    def has_local_password(self, user_id: int) -> bool:
+    def has_local_password(self, user_id: UserId) -> bool:
         """Return whether a user has a local password credential.
 
         ``False`` means the account is SSO-only (no row in
@@ -1067,7 +1072,7 @@ class DefaultIdentityService:
         """
         return jafaal_credentials_crud.get_credential(user_id, self._db) is not None
 
-    def set_local_password_hash(self, user_id: int, password_hash: str) -> None:
+    def set_local_password_hash(self, user_id: UserId, password_hash: str) -> None:
         """Insert or update a user's local password hash.
 
         Args:
@@ -1079,7 +1084,7 @@ class DefaultIdentityService:
         """
         jafaal_credentials_crud.upsert_password_hash(user_id, password_hash, self._db)
 
-    def clear_local_password(self, user_id: int) -> None:
+    def clear_local_password(self, user_id: UserId) -> None:
         """Remove a user's local password credential, if present.
 
         Args:
@@ -1090,7 +1095,7 @@ class DefaultIdentityService:
         """
         jafaal_credentials_crud.delete_credential(user_id, self._db)
 
-    def initialize_user_mfa(self, user_id: int) -> None:
+    def initialize_user_mfa(self, user_id: UserId) -> None:
         """Create the default (disabled) MFA row for a new user.
 
         Establishes the 1:1 ``users``↔``users_mfa`` invariant so non-auth
@@ -1108,15 +1113,15 @@ class DefaultIdentityService:
     # Account-security workflows (delegate to auth._internal.services.*)
     # ------------------------------------------------------------------
 
-    def get_user_sessions(self, user_id: int) -> list[jafaal_sessions_schema.UsersSessionsRead]:
+    def get_user_sessions(self, user_id: UserId) -> list[jafaal_sessions_schema.UsersSessionsRead]:
         """Return the authenticated user's active sessions."""
         return jafaal_account_security_service.get_user_sessions(user_id, self._db)
 
-    def delete_user_session(self, session_id: str, user_id: int) -> None:
+    def delete_user_session(self, session_id: str, user_id: UserId) -> None:
         """Delete one of the authenticated user's own sessions."""
         jafaal_account_security_service.delete_user_session(session_id, user_id, self._db)
 
-    def delete_other_user_sessions(self, user_id: int, current_session_id: str) -> None:
+    def delete_other_user_sessions(self, user_id: UserId, current_session_id: str) -> None:
         """Delete all of the authenticated user's sessions except the current one."""
         jafaal_account_security_service.delete_other_user_sessions(
             user_id,
@@ -1126,7 +1131,7 @@ class DefaultIdentityService:
 
     def change_own_password(
         self,
-        user_id: int,
+        user_id: UserId,
         current_password: str,
         new_password: str,
         mfa_code: str | None,
@@ -1147,7 +1152,7 @@ class DefaultIdentityService:
             current_session_id=current_session_id,
         )
 
-    def change_managed_user_password(self, user_id: int, new_password: str) -> None:
+    def change_managed_user_password(self, user_id: UserId, new_password: str) -> None:
         """Change a managed user's password and revoke their auth state."""
         jafaal_account_security_service.change_managed_user_password(
             user_id,
@@ -1156,17 +1161,17 @@ class DefaultIdentityService:
             self._db,
         )
 
-    def get_mfa_status(self, user_id: int) -> jafaal_mfa_schema.MFAStatusResponse:
+    def get_mfa_status(self, user_id: UserId) -> jafaal_mfa_schema.MFAStatusResponse:
         """Return whether MFA is enabled for the user."""
         return jafaal_mfa_workflow.get_mfa_status(user_id, self._db)
 
-    def get_backup_code_status(self, user_id: int) -> jafaal_mfa_backup_codes_schema.MFABackupCodeStatus:
+    def get_backup_code_status(self, user_id: UserId) -> jafaal_mfa_backup_codes_schema.MFABackupCodeStatus:
         """Return the user's MFA backup-code status."""
         return jafaal_mfa_workflow.get_backup_code_status(user_id, self._db)
 
     def setup_mfa(
         self,
-        user_id: int,
+        user_id: UserId,
         mfa_secret_store: jafaal_mfa_setup_store.MFASecretStoreBackend,
     ) -> jafaal_mfa_schema.MFASetupResponse:
         """Create MFA setup material and store the pending setup secret."""
@@ -1175,7 +1180,7 @@ class DefaultIdentityService:
     def enable_mfa(
         self,
         request: jafaal_mfa_schema.MFASetupRequest,
-        user_id: int,
+        user_id: UserId,
         step_up_store: jafaal_security_stores.StepUpStore,
         mfa_secret_store: jafaal_mfa_setup_store.MFASecretStoreBackend,
     ) -> dict:
@@ -1192,20 +1197,20 @@ class DefaultIdentityService:
     def disable_mfa(
         self,
         request: jafaal_mfa_schema.MFADisableRequest,
-        user_id: int,
+        user_id: UserId,
         step_up_store: jafaal_security_stores.StepUpStore,
     ) -> dict:
         """Disable MFA after step-up verification."""
         return jafaal_mfa_workflow.disable_mfa(request, user_id, self, step_up_store, self._db)
 
-    def verify_mfa(self, request: jafaal_mfa_schema.MFARequest, user_id: int) -> dict:
+    def verify_mfa(self, request: jafaal_mfa_schema.MFARequest, user_id: UserId) -> dict:
         """Verify an MFA code for the authenticated user."""
         return jafaal_mfa_workflow.verify_mfa(request, user_id, self, self._db)
 
     def generate_backup_codes(
         self,
         step_up: jafaal_schema.StepUpVerification,
-        user_id: int,
+        user_id: UserId,
         step_up_store: jafaal_security_stores.StepUpStore,
     ) -> jafaal_mfa_backup_codes_schema.MFABackupCodesResponse:
         """Generate new backup codes for an MFA-enabled account."""
@@ -1216,7 +1221,7 @@ class DefaultIdentityService:
         idp_id: int,
         link_request: jafaal_idp_link_tokens_schema.IdpLinkTokenRequest,
         request: Request,
-        user_id: int,
+        user_id: UserId,
         step_up_store: jafaal_security_stores.StepUpStore,
     ) -> jafaal_idp_link_tokens_schema.IdpLinkTokenResponse:
         """Generate a one-time IdP link token after step-up verification."""
@@ -1234,7 +1239,7 @@ class DefaultIdentityService:
         self,
         idp_id: int,
         step_up: jafaal_schema.StepUpVerification,
-        user_id: int,
+        user_id: UserId,
         step_up_store: jafaal_security_stores.StepUpStore,
     ) -> None:
         """Unlink an IdP while enforcing anti-lockout checks."""
@@ -1249,14 +1254,14 @@ class DefaultIdentityService:
 
     def get_user_identity_provider_links(
         self,
-        user_id: int,
+        user_id: UserId,
     ) -> list[jafaal_identity_links_schema.UsersIdentityProviderResponse]:
         """Return enriched identity-provider links for the user."""
         return jafaal_identity_link_service.get_user_identity_provider_links(user_id, self._db)
 
     def admin_delete_identity_provider_link(
         self,
-        user_id: int,
+        user_id: UserId,
         idp_id: int,
     ) -> None:
         """Unlink an IdP from a user as an administrator (no step-up)."""
@@ -1271,7 +1276,7 @@ class DefaultIdentityService:
         link_token: str,
         idp_id: int,
         client_ip: str | None,
-    ) -> int:
+    ) -> UserId:
         """Validate, IP-check, and atomically claim a browser-redirect link token."""
         return jafaal_identity_link_service.validate_and_claim_browser_link_token(
             link_token,

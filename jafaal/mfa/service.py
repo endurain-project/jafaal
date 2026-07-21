@@ -36,6 +36,7 @@ import jafaal.mfa.crud as jafaal_mfa_crud
 import jafaal.mfa.schema as mfa_schema
 import jafaal.settings as jafaal_settings
 from jafaal._core import crypto
+from jafaal.orm import UserId
 from jafaal.state_store import StateStoreUnavailableError, get_state_store
 
 logger = logging.getLogger(__name__)
@@ -110,13 +111,13 @@ def _matched_totp_timestep(secret: str, token: str, valid_window: int = _TOTP_VA
     return None
 
 
-def _totp_used_key(user_id: int, timestep: int) -> str:
+def _totp_used_key(user_id: UserId, timestep: int) -> str:
     """Build the state-store key marking a consumed TOTP timestep for a user."""
     prefix = jafaal_settings.get_settings().store_key_prefix
     return f"{prefix}:mfa:totp_used:{user_id}:{timestep}"
 
 
-def _totp_timestep_already_used(user_id: int, timestep: int) -> bool:
+def _totp_timestep_already_used(user_id: UserId, timestep: int) -> bool:
     """Return ``True`` if this TOTP timestep was already consumed (a replay).
 
     Fails open on a state-store outage: replay protection is defense-in-depth
@@ -130,7 +131,7 @@ def _totp_timestep_already_used(user_id: int, timestep: int) -> bool:
         return False
 
 
-def _mark_totp_timestep_used(user_id: int, timestep: int) -> None:
+def _mark_totp_timestep_used(user_id: UserId, timestep: int) -> None:
     """Record that ``timestep`` has been consumed for ``user_id`` (with TTL)."""
     try:
         get_state_store().set(
@@ -181,7 +182,7 @@ def generate_qr_code(secret: str, username: str, app_name: str = "Jafaal") -> st
 # ---------------------------------------------------------------------------
 
 
-def setup_user_mfa(user_id: int, db: Session) -> mfa_schema.MFASetupResponse:
+def setup_user_mfa(user_id: UserId, db: Session) -> mfa_schema.MFASetupResponse:
     """
     Setup MFA for user.
 
@@ -209,7 +210,7 @@ def setup_user_mfa(user_id: int, db: Session) -> mfa_schema.MFASetupResponse:
 
 
 def enable_user_mfa(
-    user_id: int,
+    user_id: UserId,
     secret: str,
     mfa_code: str,
     identity_service: jafaal_identity_service.IdentityService,
@@ -254,7 +255,7 @@ def enable_user_mfa(
     return backup_codes
 
 
-def disable_user_mfa(user_id: int, db: Session) -> None:
+def disable_user_mfa(user_id: UserId, db: Session) -> None:
     """
     Clear MFA state for user.
 
@@ -284,7 +285,7 @@ def disable_user_mfa(user_id: int, db: Session) -> None:
 
 
 def verify_user_mfa(
-    user_id: int,
+    user_id: UserId,
     mfa_code: str,
     identity_service: jafaal_identity_service.IdentityService,
     db: Session,
@@ -363,7 +364,7 @@ def verify_user_mfa(
     return False
 
 
-def is_mfa_enabled_for_user(user_id: int, db: Session) -> bool:
+def is_mfa_enabled_for_user(user_id: UserId, db: Session) -> bool:
     """
     Check if MFA is enabled for user.
 

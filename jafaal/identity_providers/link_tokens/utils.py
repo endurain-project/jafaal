@@ -11,6 +11,7 @@ import jafaal.identity_providers.link_tokens.crud as idp_link_token_crud
 import jafaal.identity_providers.link_tokens.schema as idp_link_token_schema
 import jafaal.orm as jafaal_orm
 import jafaal.token_hashing as token_hashing
+from jafaal.orm import UserId
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,7 @@ def hash_idp_link_token(token: str) -> str:
 
 
 def generate_idp_link_token(
-    user_id: int, idp_id: int, ip_address: str | None, db: Session
+    user_id: UserId, idp_id: int, ip_address: str | None, db: Session
 ) -> idp_link_token_schema.IdpLinkTokenResponse:
     """
     Generate a one-time, short-lived token for IdP linking.

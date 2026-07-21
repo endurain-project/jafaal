@@ -34,6 +34,7 @@ import jafaal.oauth_state.models as oauth_state_models
 import jafaal.ports as jafaal_ports
 import jafaal.settings as jafaal_settings
 from jafaal._core import crypto, network, timeutils
+from jafaal.orm import UserId
 
 logger = logging.getLogger(__name__)
 
@@ -720,7 +721,7 @@ class IdentityProviderService:
         self,
         idp: idp_models.IdentityProvider,
         request: Request,
-        user_id: int,
+        user_id: UserId,
         db: Session,
         oauth_state_id: str | None = None,
     ) -> str:
@@ -1166,7 +1167,7 @@ class IdentityProviderService:
 
     async def _store_idp_tokens(
         self,
-        user_id: int,
+        user_id: UserId,
         idp_id: int,
         token_response: dict[str, Any],
         db: Session,
@@ -1485,7 +1486,7 @@ class IdentityProviderService:
 
     async def refresh_idp_session(
         self,
-        user_id: int,
+        user_id: UserId,
         idp_id: int,
         db: Session,
     ) -> dict[str, Any] | None:
@@ -1620,7 +1621,7 @@ class IdentityProviderService:
 
     async def revoke_idp_token(
         self,
-        user_id: int,
+        user_id: UserId,
         idp_id: int,
         db: Session,
     ) -> bool:
@@ -1911,7 +1912,7 @@ def create_link_oauth_state(
     nonce: str,
     client_type: str,
     ip_address: str | None,
-    user_id: int,
+    user_id: UserId,
     redirect_path: str | None,
 ) -> None:
     """Persist the OAuth-state row for a browser IdP-link flow (auth-boundary facade).

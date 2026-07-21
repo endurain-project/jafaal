@@ -7,7 +7,7 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
-from jafaal.orm import Base
+from jafaal.orm import Base, UserId
 
 if TYPE_CHECKING:
     from jafaal.identity_providers.models import IdentityProvider
@@ -58,8 +58,7 @@ class OAuthState(Base):
         comment="Identity provider ID (may be null if mobile logic)",
     )
 
-    user_id: Mapped[int | None] = mapped_column(
-        Integer,
+    user_id: Mapped[UserId | None] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=True,
         index=True,

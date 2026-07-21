@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import DateTime, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from jafaal.orm import Base
+from jafaal.orm import Base, UserId
 
 if TYPE_CHECKING:
     from jafaal.oauth_state.models import OAuthState
@@ -57,7 +57,7 @@ class UsersSessions(Base):
         primary_key=True,
         nullable=False,
     )
-    user_id: Mapped[int] = mapped_column(
+    user_id: Mapped[UserId] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
         index=True,

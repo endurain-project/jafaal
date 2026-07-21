@@ -2,7 +2,9 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr
+
+from jafaal.orm import UserId
 
 
 class SignUpToken(BaseModel):
@@ -23,7 +25,7 @@ class SignUpToken(BaseModel):
         description="Unique identifier for the token",
         max_length=64,
     )
-    user_id: StrictInt = Field(
+    user_id: UserId = Field(
         ...,
         description="ID of the user who signed up",
     )

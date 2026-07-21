@@ -17,6 +17,7 @@ from urllib.parse import unquote
 import jafaal.settings as jafaal_settings
 from jafaal._core import hashing
 from jafaal.exceptions import StoreUnavailableError
+from jafaal.orm import UserId
 from jafaal.state_store import StateStore, StateStoreUnavailableError, get_state_store
 
 logger = logging.getLogger(__name__)
@@ -158,7 +159,7 @@ class FailedLoginStore(Protocol):
 class PendingMFAStore(Protocol):
     """Contract for pending-MFA login stores (bookkeeping + MFA lockout)."""
 
-    def add_pending_login(self, username: str, user_id: int) -> None: ...
+    def add_pending_login(self, username: str, user_id: UserId) -> None: ...
 
     def get_pending_login(self, username: str) -> int | None: ...
 
@@ -168,7 +169,7 @@ class PendingMFAStore(Protocol):
 
     def has_pending_login(self, username: str) -> bool: ...
 
-    def clear_for_user(self, user_id: int) -> int: ...
+    def clear_for_user(self, user_id: UserId) -> int: ...
 
     def cleanup_expired(self) -> int: ...
 
@@ -396,7 +397,7 @@ class PendingMFALogin:
     def _pending_key(self, username: str) -> str:
         return f"{_key_prefix()}:mfa:pending:{_username_digest(username)}"
 
-    def add_pending_login(self, username: str, user_id: int) -> None:
+    def add_pending_login(self, username: str, user_id: UserId) -> None:
         """Add a pending MFA login entry for a user."""
         try:
             self._get_state().set(
@@ -445,7 +446,7 @@ class PendingMFALogin:
         except StateStoreUnavailableError as err:
             _raise_store_unavailable("delete pending MFA login", err)
 
-    def clear_for_user(self, user_id: int) -> int:
+    def clear_for_user(self, user_id: UserId) -> int:
         """Remove every pending MFA login entry tied to a user ID."""
         target_value = str(user_id).encode()
         removed = 0
@@ -562,7 +563,7 @@ def cleanup_expired_pending_mfa_logins() -> None:
     pending_mfa_store.cleanup_expired()
 
 
-def clear_pending_mfa_for_user(user_id: int) -> int:
+def clear_pending_mfa_for_user(user_id: UserId) -> int:
     """
     Remove pending MFA login entries for a user across credential changes.
 

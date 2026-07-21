@@ -12,6 +12,7 @@ from typing import NoReturn
 import jafaal.settings as jafaal_settings
 from jafaal._core import crypto, hashing
 from jafaal.exceptions import StoreUnavailableError
+from jafaal.orm import UserId
 from jafaal.state_store import StateStore, StateStoreUnavailableError, get_state_store
 
 logger = logging.getLogger(__name__)
@@ -48,7 +49,7 @@ def _raise_store_unavailable(operation: str, err: StateStoreUnavailableError) ->
     raise MFASecretStoreUnavailableError("MFA secret storage is unavailable") from err
 
 
-def _user_id_digest(user_id: int) -> str:
+def _user_id_digest(user_id: UserId) -> str:
     """
     Hash a user ID for storage key names.
 
@@ -84,7 +85,7 @@ def _encrypt_secret(secret: str) -> str:
     return encrypted_secret
 
 
-def _decrypt_secret(encrypted_secret: str, user_id: int) -> str | None:
+def _decrypt_secret(encrypted_secret: str, user_id: UserId) -> str | None:
     """
     Decrypt an encrypted MFA secret.
 
@@ -105,7 +106,7 @@ def _decrypt_secret(encrypted_secret: str, user_id: int) -> str | None:
         return None
 
 
-def _log_secret_stored(user_id: int, ttl_seconds: int) -> None:
+def _log_secret_stored(user_id: UserId, ttl_seconds: int) -> None:
     """
     Log MFA secret storage without exposing the secret.
 
@@ -150,11 +151,11 @@ class MFASecretStore:
     def _state(self) -> StateStore:
         return self._state_override if self._state_override is not None else get_state_store()
 
-    def _key(self, user_id: int) -> str:
+    def _key(self, user_id: UserId) -> str:
         """Build the storage key for a user's pending MFA secret."""
         return f"{_mfa_secret_key_prefix()}:{_user_id_digest(user_id)}"
 
-    def add_secret(self, user_id: int, secret: str) -> None:
+    def add_secret(self, user_id: UserId, secret: str) -> None:
         """
         Encrypt and store an MFA setup secret with TTL.
 
@@ -174,7 +175,7 @@ class MFASecretStore:
             _raise_store_unavailable("add MFA setup secret", err)
         _log_secret_stored(user_id, self._ttl_seconds)
 
-    def get_secret(self, user_id: int) -> str | None:
+    def get_secret(self, user_id: UserId) -> str | None:
         """
         Retrieve and decrypt an MFA secret if present.
 
@@ -195,7 +196,7 @@ class MFASecretStore:
             return None
         return _decrypt_secret(encrypted_secret.decode(), user_id)
 
-    def delete_secret(self, user_id: int) -> None:
+    def delete_secret(self, user_id: UserId) -> None:
         """
         Remove an MFA secret from storage.
 
@@ -212,7 +213,7 @@ class MFASecretStore:
         except StateStoreUnavailableError as err:
             logger.warning("Failed to delete MFA setup secret; entry will expire naturally via TTL", exc_info=err)
 
-    def has_secret(self, user_id: int) -> bool:
+    def has_secret(self, user_id: UserId) -> bool:
         """
         Check if a non-expired secret exists for a user.
 

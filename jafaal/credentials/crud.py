@@ -10,11 +10,12 @@ from sqlalchemy.orm import Session
 
 import jafaal.credentials.models as jafaal_credentials_models
 from jafaal._core import db_errors
+from jafaal.orm import UserId
 
 
 @db_errors.handle_db_errors
 def get_credential(
-    user_id: int,
+    user_id: UserId,
     db: Session,
 ) -> jafaal_credentials_models.LocalCredential | None:
     """
@@ -41,7 +42,7 @@ def get_credential(
 
 @db_errors.handle_db_errors
 def upsert_password_hash(
-    user_id: int,
+    user_id: UserId,
     password_hash: str,
     db: Session,
     commit: bool = True,
@@ -84,7 +85,7 @@ def upsert_password_hash(
 
 @db_errors.handle_db_errors
 def delete_credential(
-    user_id: int,
+    user_id: UserId,
     db: Session,
 ) -> None:
     """

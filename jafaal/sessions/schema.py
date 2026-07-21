@@ -11,6 +11,8 @@ from pydantic import (
     StrictStr,
 )
 
+from jafaal.orm import UserId
+
 
 class UsersSessionsBase(BaseModel):
     """
@@ -51,7 +53,7 @@ class UsersSessionsRead(UsersSessionsBase):
     like refresh_token and csrf_token_hash.
     """
 
-    user_id: StrictInt = Field(..., ge=1, description="User ID that owns this session")
+    user_id: UserId = Field(..., description="User ID that owns this session")
 
 
 class UsersSessionsInternal(UsersSessionsBase):
@@ -77,7 +79,7 @@ class UsersSessionsInternal(UsersSessionsBase):
             validation.
     """
 
-    user_id: StrictInt = Field(..., ge=1, description="User ID that owns this session")
+    user_id: UserId = Field(..., description="User ID that owns this session")
     refresh_token: StrictStr | None = Field(None, description="Hashed session refresh token")
     oauth_state_id: StrictStr | None = Field(
         None,

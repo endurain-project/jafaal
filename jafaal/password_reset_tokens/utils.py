@@ -18,12 +18,12 @@ import jafaal.ports as jafaal_ports
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.token_hashing as token_hashing
 from jafaal.identity_service import IdentityService
-from jafaal.orm import session_scope
+from jafaal.orm import UserId, session_scope
 
 logger = logging.getLogger(__name__)
 
 
-def create_password_reset_token(user_id: int, db: Session) -> str:
+def create_password_reset_token(user_id: UserId, db: Session) -> str:
     """
     Create and persist a password reset token for a user.
 

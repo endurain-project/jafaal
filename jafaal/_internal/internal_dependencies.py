@@ -34,6 +34,7 @@ from joserfc.errors import MissingClaimError
 import jafaal._internal.token_manager as jafaal_token_manager
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_service as jafaal_identity_service
+import jafaal.orm as jafaal_orm
 import jafaal.scopes as jafaal_scopes
 import jafaal.settings as jafaal_settings
 from jafaal.principal import AccessTokenCred, Principal
@@ -73,7 +74,7 @@ class AuthContext:
             (``"jwt"`` or ``"api_key"``).
     """
 
-    user_id: int
+    user_id: jafaal_orm.UserId
     scopes: list[str]
     auth_type: str
 
@@ -243,7 +244,7 @@ def get_sub_from_access_token(
         jafaal_identity_service.IdentityService,
         Depends(jafaal_identity_service.get_identity_service),
     ],
-) -> int:
+) -> jafaal_orm.UserId:
     """Retrieve the user ID from the access token.
 
     Resolves and caches the :class:`~auth.principal.Principal`
@@ -387,7 +388,7 @@ def get_sub_from_refresh_token(
         jafaal_token_manager.TokenManager,
         Depends(jafaal_token_manager.get_token_manager),
     ],
-) -> int:
+) -> jafaal_orm.UserId:
     """
     Retrieves the user ID ('sub' claim) from a given refresh token.
 
@@ -401,11 +402,15 @@ def get_sub_from_refresh_token(
     Raises:
         Exception: If the token is invalid or the 'sub' claim is not found.
     """
-    # Return the user ID associated with the token
+    # Return the user ID associated with the token, coerced to the host user
+    # table's primary-key type (int or UUID).
     sub = token_manager.get_token_claim(refresh_token, "sub")
-    if not isinstance(sub, int):
-        raise jafaal_exceptions.InvalidTokenError("Invalid token: 'sub' claim must be an integer")
-    return sub
+    if not isinstance(sub, int | str) or sub == "":
+        raise jafaal_exceptions.InvalidTokenError("Invalid token: 'sub' claim is missing or malformed")
+    try:
+        return jafaal_orm.coerce_user_id(sub)
+    except (ValueError, TypeError) as err:
+        raise jafaal_exceptions.InvalidTokenError("Invalid token: 'sub' claim is malformed") from err
 
 
 def get_sid_from_refresh_token(
@@ -586,7 +591,7 @@ def get_user_id_from_auth(
         "AuthContext",
         Depends(validate_access_token_or_api_key),
     ],
-) -> int:
+) -> jafaal_orm.UserId:
     """Extract the user ID from a unified AuthContext.
 
     Use this in place of ``get_sub_from_access_token``

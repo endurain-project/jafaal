@@ -13,13 +13,14 @@ import jafaal.api_keys.utils as api_keys_utils
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.settings as jafaal_settings
 from jafaal._core import db_errors
+from jafaal.orm import UserId
 
 logger = logging.getLogger(__name__)
 
 
 @db_errors.handle_db_errors
 def get_api_keys_by_user_id(
-    user_id: int,
+    user_id: UserId,
     db: Session,
 ) -> list[api_keys_models.UsersApiKeys]:
     """
@@ -47,7 +48,7 @@ def get_api_keys_by_user_id(
 @db_errors.handle_db_errors
 def get_api_key_by_id(
     api_key_id: str,
-    user_id: int,
+    user_id: UserId,
     db: Session,
 ) -> api_keys_models.UsersApiKeys | None:
     """
@@ -98,7 +99,7 @@ def get_api_key_by_hash(
 
 @db_errors.handle_db_errors
 def create_api_key(
-    user_id: int,
+    user_id: UserId,
     data: api_keys_schema.UsersApiKeyCreate,
     db: Session,
 ) -> tuple[
@@ -189,7 +190,7 @@ def update_last_used(
 @db_errors.handle_db_errors
 def revoke_api_key(
     api_key_id: str,
-    user_id: int,
+    user_id: UserId,
     db: Session,
 ) -> None:
     """
@@ -227,7 +228,7 @@ def revoke_api_key(
 @db_errors.handle_db_errors
 def delete_api_key(
     api_key_id: str,
-    user_id: int,
+    user_id: UserId,
     db: Session,
 ) -> None:
     """

@@ -5,10 +5,11 @@ from sqlalchemy.orm import Session
 
 import jafaal.mfa.models as jafaal_mfa_models
 from jafaal._core import db_errors
+from jafaal.orm import UserId
 
 
 @db_errors.handle_db_errors
-def get_user_mfa_row(user_id: int, db: Session) -> jafaal_mfa_models.UsersMFA | None:
+def get_user_mfa_row(user_id: UserId, db: Session) -> jafaal_mfa_models.UsersMFA | None:
     """
     Retrieve the ``users_mfa`` row for a user.
 
@@ -27,7 +28,7 @@ def get_user_mfa_row(user_id: int, db: Session) -> jafaal_mfa_models.UsersMFA | 
 
 
 @db_errors.handle_db_errors
-def update_user_mfa(user_id: int, db: Session, encrypted_secret: str | None = None) -> None:
+def update_user_mfa(user_id: UserId, db: Session, encrypted_secret: str | None = None) -> None:
     """
     Update a user's MFA settings in the ``users_mfa`` table.
 
@@ -66,7 +67,7 @@ def update_user_mfa(user_id: int, db: Session, encrypted_secret: str | None = No
 
 
 @db_errors.handle_db_errors
-def create_users_mfa_row(user_id: int, db: Session) -> jafaal_mfa_models.UsersMFA:
+def create_users_mfa_row(user_id: UserId, db: Session) -> jafaal_mfa_models.UsersMFA:
     """
     Create the default ``users_mfa`` row for a newly created user.
 

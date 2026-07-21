@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 import jafaal.password_reset_tokens.models as password_reset_tokens_models
 import jafaal.password_reset_tokens.schema as password_reset_tokens_schema
 from jafaal._core import db_errors
+from jafaal.orm import UserId
 
 
 @db_errors.handle_db_errors
@@ -73,7 +74,7 @@ def get_password_reset_token_by_hash(
 
 
 @db_errors.handle_db_errors
-def claim_password_reset_token(token_hash: str, db: Session) -> int | None:
+def claim_password_reset_token(token_hash: str, db: Session) -> UserId | None:
     """Atomically claim a valid password reset token.
 
     Args:
@@ -101,7 +102,7 @@ def claim_password_reset_token(token_hash: str, db: Session) -> int | None:
 
 
 @db_errors.handle_db_errors
-def mark_user_password_reset_tokens_used(user_id: int, db: Session) -> int:
+def mark_user_password_reset_tokens_used(user_id: UserId, db: Session) -> int:
     """Mark all unused password reset tokens for a user as used.
 
     Args:

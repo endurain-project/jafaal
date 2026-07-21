@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 import jafaal.sign_up_tokens.models as sign_up_tokens_models
 import jafaal.sign_up_tokens.schema as sign_up_tokens_schema
 from jafaal._core import db_errors
+from jafaal.orm import UserId
 
 
 @db_errors.handle_db_errors
@@ -68,7 +69,7 @@ def create_sign_up_token(
 
 
 @db_errors.handle_db_errors
-def claim_sign_up_token(token_hash: str, db: Session) -> int | None:
+def claim_sign_up_token(token_hash: str, db: Session) -> UserId | None:
     """Atomically claim a valid sign-up token.
 
     Marks the matching unused, unexpired token as used in a single statement

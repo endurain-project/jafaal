@@ -15,6 +15,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
+from jafaal.orm import UserId
+
 __all__ = [
     "AccessTokenCred",
     "AnyCredential",
@@ -64,12 +66,12 @@ class ApiKeyCred:
 
     Attributes:
         api_key_id: Database ID of the matching API
-            key row.
+            key row (a UUID string).
         key_prefix: Human-readable prefix used in
             audit logs.
     """
 
-    api_key_id: int
+    api_key_id: str
     key_prefix: str
 
 
@@ -136,7 +138,7 @@ class Principal:
             principal was authenticated.
     """
 
-    user_id: int
+    user_id: UserId
     username: str
     email: str
     is_active: bool
@@ -157,7 +159,7 @@ class Principal:
         """
         return isinstance(self.credential, ApiKeyCred)
 
-    def credential_id(self) -> str | int | None:
+    def credential_id(self) -> str | None:
         """Return a stable identifier for the active credential.
 
         The returned value is suitable for audit logging and
@@ -166,12 +168,12 @@ class Principal:
 
         - :class:`AccessTokenCred` → ``session_id`` (str)
         - :class:`SessionCookieCred` → ``session_id`` (str)
-        - :class:`ApiKeyCred` → ``api_key_id`` (int)
+        - :class:`ApiKeyCred` → ``api_key_id`` (str)
         - :class:`OAuthCred` → ``"<provider>:<external_id>"`` (str)
         - :class:`PasswordCred` → ``None``
 
         Returns:
-            str | int | None: The credential identifier, or
+            str | None: The credential identifier, or
                 ``None`` when not applicable.
         """
         if isinstance(self.credential, AccessTokenCred):

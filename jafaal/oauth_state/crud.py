@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 import jafaal.oauth_state.models as oauth_state_models
 import jafaal.sessions.models as jafaal_sessions_models
 from jafaal._core import db_errors
+from jafaal.orm import UserId
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +127,7 @@ def create_oauth_state(
     redirect_path: str | None = None,
     code_challenge: str | None = None,
     code_challenge_method: str | None = None,
-    user_id: int | None = None,
+    user_id: UserId | None = None,
 ) -> oauth_state_models.OAuthState:
     """Create and persist a new OAuth state with a 10-minute expiry.
 

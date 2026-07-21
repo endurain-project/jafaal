@@ -10,6 +10,8 @@ from pydantic import (
     StrictStr,
 )
 
+from jafaal.orm import UserId
+
 
 class UsersIdentityProviderBase(BaseModel):
     """
@@ -21,7 +23,7 @@ class UsersIdentityProviderBase(BaseModel):
         idp_subject: Subject/ID from the identity provider.
     """
 
-    user_id: StrictInt = Field(..., ge=1, description="User ID")
+    user_id: UserId = Field(..., description="User ID")
     idp_id: StrictInt = Field(..., ge=1, description="Identity Provider ID")
     idp_subject: StrictStr = Field(
         ...,

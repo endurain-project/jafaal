@@ -7,7 +7,7 @@ from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
-from jafaal.orm import Base
+from jafaal.orm import Base, UserId
 
 if TYPE_CHECKING:
     from jafaal.identity_providers.models import IdentityProvider
@@ -42,7 +42,7 @@ class IdentityLink(Base):
         autoincrement=True,
         index=True,
     )
-    user_id: Mapped[int] = mapped_column(
+    user_id: Mapped[UserId] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
         index=True,

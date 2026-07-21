@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 import jafaal.mfa.backup_codes.crud as mfa_backup_codes_crud
 from jafaal._internal.password_hasher import SupportsVerifyPassword
+from jafaal.orm import UserId
 
 # Backup-code alphabet: uppercase ASCII + digits with visually ambiguous
 # characters removed (0, O, 1, I) to reduce user transcription errors.
@@ -30,7 +31,7 @@ def generate_backup_code() -> str:
 
 
 def verify_and_consume_backup_code(
-    user_id: int,
+    user_id: UserId,
     code: str,
     password_verifier: SupportsVerifyPassword,
     db: Session,

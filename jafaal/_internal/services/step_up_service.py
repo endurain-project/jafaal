@@ -12,6 +12,7 @@ import jafaal._internal.user_guards as jafaal_user_guards
 import jafaal.credentials.crud as jafaal_credentials_crud
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.mfa.service as mfa_service
+from jafaal.orm import UserId
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,7 @@ if TYPE_CHECKING:
     from jafaal.identity_service import IdentityService
 
 
-def _step_up_key(user_id: int) -> str:
+def _step_up_key(user_id: UserId) -> str:
     """
     Build the lockout key for a user's step-up attempts.
 
@@ -36,7 +37,7 @@ def _step_up_key(user_id: int) -> str:
 
 
 def verify_step_up_credentials(
-    user_id: int,
+    user_id: UserId,
     current_password: str | None,
     mfa_code: str | None,
     identity_service: IdentityService,

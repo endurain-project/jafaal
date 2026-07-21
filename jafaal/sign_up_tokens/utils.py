@@ -15,7 +15,7 @@ import jafaal.schema as jafaal_schema
 import jafaal.sign_up_tokens.crud as sign_up_tokens_crud
 import jafaal.sign_up_tokens.schema as sign_up_tokens_schema
 import jafaal.token_hashing as token_hashing
-from jafaal.orm import session_scope
+from jafaal.orm import UserId, session_scope
 
 if TYPE_CHECKING:
     from jafaal.identity_service import IdentityService
@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def create_sign_up_token(user_id: int, db: Session) -> str:
+def create_sign_up_token(user_id: UserId, db: Session) -> str:
     """
     Create and persist a sign-up token for a user.
 
@@ -142,7 +142,7 @@ async def notify_pending_admin_approval(user: jafaal_ports.UserProtocol) -> None
         logger.exception("Failed to deliver signup-pending-approval event for user %s", user.id)
 
 
-async def notify_signup_approved(user_id: int, db: Session) -> None:
+async def notify_signup_approved(user_id: UserId, db: Session) -> None:
     """Emit ``SignupApproved`` for a user an admin has approved.
 
     A convenience for a host that runs its own approval endpoint and wants the
@@ -169,7 +169,7 @@ async def notify_signup_approved(user_id: int, db: Session) -> None:
         logger.exception("Failed to deliver signup-approved event for user %s", user.id)
 
 
-def use_sign_up_token(token: str, db: Session) -> int:
+def use_sign_up_token(token: str, db: Session) -> UserId:
     """
     Validate and consume a sign-up token.
 

@@ -15,13 +15,14 @@ import jafaal.sessions.models as jafaal_sessions_models
 import jafaal.sessions.rotated_refresh_tokens.crud as jafaal_sessions_rotated_tokens_crud
 import jafaal.sessions.schema as jafaal_sessions_schema
 from jafaal._core import db_errors
+from jafaal.orm import UserId
 
 logger = logging.getLogger(__name__)
 
 
 @db_errors.handle_db_errors
 def get_user_sessions(
-    user_id: int,
+    user_id: UserId,
     db: Session,
 ) -> list[jafaal_sessions_models.UsersSessions]:
     """
@@ -383,7 +384,7 @@ def update_session_csrf_hash(
 @db_errors.handle_db_errors
 def delete_session(
     session_id: str,
-    user_id: int,
+    user_id: UserId,
     db: Session,
 ) -> None:
     """
@@ -495,7 +496,7 @@ def delete_sessions_by_family(
 
 @db_errors.handle_db_errors
 def delete_sessions_by_user(
-    user_id: int,
+    user_id: UserId,
     db: Session,
     commit: bool = True,
     exclude_session_id: str | None = None,

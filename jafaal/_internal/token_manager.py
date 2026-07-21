@@ -314,11 +314,17 @@ class TokenManager:
         # Set now
         now = int(datetime.now(UTC).timestamp())
 
+        # The JWT ``sub`` is JSON: an integer PK is kept as an int (byte-identical
+        # to legacy tokens), while a UUID PK is serialised to its string form so
+        # it round-trips. ``resolve_from_access_token`` / ``get_sub_from_*`` coerce
+        # it back to the user table's PK type on the way in.
+        sub = user.id if isinstance(user.id, int) else str(user.id)
+
         scope_dict = {
             "sid": session_id,
             "iss": self.issuer,
             "aud": self.audience,
-            "sub": user.id,
+            "sub": sub,
             "scope": scope,
             "iat": now,
             "nbf": now,

@@ -19,6 +19,7 @@ import jafaal.principal as jafaal_principal
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.schema as jafaal_sessions_schema
 import jafaal.settings as jafaal_settings
+from jafaal.orm import UserId
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,7 @@ router = APIRouter()
     status_code=status.HTTP_200_OK,
 )
 async def read_sessions_user(
-    user_id: int,
+    user_id: UserId,
     _check_scope: Annotated[
         None,
         Security(jafaal_dependencies.check_scopes, scopes=["sessions:read"]),
@@ -69,7 +70,7 @@ async def read_sessions_user(
 )
 async def delete_session_user(
     session_id: str,
-    user_id: int,
+    user_id: UserId,
     _check_scope: Annotated[
         None,
         Security(jafaal_dependencies.check_scopes, scopes=["sessions:write"]),
@@ -105,7 +106,7 @@ async def delete_session_user(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_sessions_user(
-    user_id: int,
+    user_id: UserId,
     _check_scope: Annotated[
         None,
         Security(jafaal_dependencies.check_scopes, scopes=["sessions:write"]),

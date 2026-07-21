@@ -14,6 +14,7 @@ import jafaal.identity_providers.links.crud as jafaal_identity_links_crud
 import jafaal.identity_providers.schema as idp_schema
 import jafaal.identity_providers.service as idp_service
 import jafaal.settings as jafaal_settings
+from jafaal.orm import UserId
 
 logger = logging.getLogger(__name__)
 
@@ -274,7 +275,7 @@ def get_idp_template(template_id: str) -> dict[str, Any] | None:
     return IDP_TEMPLATES.get(template_id)
 
 
-async def refresh_idp_tokens_if_needed(user_id: int, db: Session) -> None:
+async def refresh_idp_tokens_if_needed(user_id: UserId, db: Session) -> None:
     """
     Refreshes identity provider (IdP) tokens for a user if needed based on token expiration policies.
 
@@ -367,7 +368,7 @@ async def refresh_idp_tokens_if_needed(user_id: int, db: Session) -> None:
         # Don't raise - IdP token refresh is opportunistic and non-blocking
 
 
-async def clear_all_idp_tokens(user_id: int, db: Session, revoke_at_idp: bool = False) -> None:
+async def clear_all_idp_tokens(user_id: UserId, db: Session, revoke_at_idp: bool = False) -> None:
     """
     Clear all IdP (Identity Provider) refresh tokens for a user.
 
