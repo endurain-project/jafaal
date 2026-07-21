@@ -3,6 +3,7 @@
 import dataclasses
 from contextlib import contextmanager
 
+import httpx
 import pytest
 from starlette.requests import Request
 
@@ -75,3 +76,41 @@ def test_refresh_trusted_proxy_hostnames_resolves_localhost():
         resolved = network.refresh_trusted_proxy_hostnames(force=True)
         assert "localhost" in resolved
         assert resolved["localhost"]  # at least one resolved IP
+
+
+async def test_ssrf_request_hook_blocks_redirect_to_private_address():
+    """A 302 from a public endpoint to the metadata IP is rejected mid-redirect."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "8.8.8.8":
+            # Public first hop tries to redirect into the cloud metadata service.
+            return httpx.Response(302, headers={"Location": "http://169.254.169.254/latest/meta-data/"})
+        # Must never be reached: the hook rejects the redirect target first.
+        return httpx.Response(200, json={"secret": "leaked"})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        follow_redirects=True,
+        event_hooks={"request": [network.ssrf_request_hook]},
+    ) as client:
+        with pytest.raises(exc.InvalidRequestError):
+            await client.get("http://8.8.8.8/.well-known/openid-configuration")
+
+
+async def test_ssrf_request_hook_allows_public_redirect():
+    """A redirect to another public address is still followed normally."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "8.8.8.8":
+            return httpx.Response(301, headers={"Location": "http://1.1.1.1/openid-configuration"})
+        return httpx.Response(200, json={"ok": True})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        follow_redirects=True,
+        event_hooks={"request": [network.ssrf_request_hook]},
+    ) as client:
+        resp = await client.get("http://8.8.8.8/.well-known/openid-configuration")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}

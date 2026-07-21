@@ -23,6 +23,7 @@ import threading
 import time
 from urllib.parse import urlparse
 
+import httpx
 from fastapi import Request
 
 import jafaal.exceptions as jafaal_exceptions
@@ -326,3 +327,23 @@ def reject_private_url(url: str, *, purpose: str | None = None) -> None:
                 )
                 continue
             raise jafaal_exceptions.InvalidRequestError("URL resolves to a non-public address")
+
+
+async def ssrf_request_hook(request: httpx.Request) -> None:
+    """``httpx`` request event hook that applies the SSRF guard to every request.
+
+    Attach this to an ``httpx.AsyncClient`` (``event_hooks={"request": [...]}``)
+    so :func:`reject_private_url` runs not just on the initial URL but on **every
+    request the client makes, including each redirect hop**. ``httpx`` invokes
+    request hooks once per hop inside its redirect loop, so this closes the
+    redirect-based SSRF bypass that ``follow_redirects=True`` would otherwise
+    open: a public endpoint answering ``302 Location: http://169.254.169.254/``
+    (cloud metadata) or any other private/internal target is rejected before the
+    connection is made.
+
+    Raises:
+        InvalidRequestError: If the request URL (or a redirect target) uses a
+            forbidden scheme or resolves to a non-public address not covered by
+            ``ssrf_allowed_hosts``.
+    """
+    reject_private_url(str(request.url), purpose="outbound_http")

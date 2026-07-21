@@ -130,6 +130,10 @@ class IdentityProviderService:
         If the HTTP client does not already exist, it initializes a new AsyncClient with a timeout of 10 seconds
         and connection limits (maximum 5 keep-alive connections and 10 total connections). Returns the client instance.
 
+        Redirects are followed, but an SSRF request hook re-validates every hop
+        (:func:`jafaal._core.network.ssrf_request_hook`) so a 3xx pointing at a
+        private/internal address cannot bypass the SSRF guard.
+
         Returns:
             httpx.AsyncClient: The HTTP client instance for asynchronous requests.
         """
@@ -138,6 +142,10 @@ class IdentityProviderService:
                 timeout=10.0,
                 limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
                 follow_redirects=True,
+                # Re-run the SSRF guard on every request, including each redirect
+                # hop, so ``follow_redirects=True`` cannot be abused to reach an
+                # internal address via a 3xx from an otherwise-public endpoint.
+                event_hooks={"request": [network.ssrf_request_hook]},
                 headers={
                     "User-Agent": jafaal_settings.get_settings().user_agent,
                     "Accept": "application/json",
@@ -640,6 +648,10 @@ class IdentityProviderService:
             client_id=client_id,
             client_secret=client_secret,
             redirect_uri=redirect_uri,
+            # Token/userinfo requests carry client credentials and/or bearer
+            # tokens; never follow a redirect that could replay them to an
+            # attacker-controlled or internal target (also authlib's default).
+            follow_redirects=False,
         )
 
     async def initiate_login(
