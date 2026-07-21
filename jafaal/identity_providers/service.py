@@ -232,6 +232,10 @@ class IdentityProviderService:
         except json.JSONDecodeError as err:
             logger.error(f"Invalid JSON in JWKS response from {jwks_uri}: {err}", exc_info=err)
             raise jafaal_exceptions.IdentityProviderError("Identity provider returned invalid JWKS JSON") from err
+        except jafaal_exceptions.JafaalError:
+            # Our own validation errors (e.g. invalid JWKS format, SSRF guard)
+            # already carry the right status/type — don't mask them as 500.
+            raise
         except Exception as err:
             logger.error(f"Unexpected error fetching JWKS from {jwks_uri}: {err}", exc_info=err)
             raise jafaal_exceptions.InternalError("Failed to retrieve signing keys from identity provider") from err

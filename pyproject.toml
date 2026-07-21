@@ -101,7 +101,7 @@ source = ["jafaal"]
 omit = ["*/tests/*", "*/__pycache__/*"]
 
 [tool.coverage.report]
-fail_under = 70
+fail_under = 75
 exclude_lines = [
     "pragma: no cover",
     "def __repr__",
