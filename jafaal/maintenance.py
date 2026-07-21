@@ -1,12 +1,12 @@
 """Auth-owned maintenance tasks for scheduler integration.
 
-This module is the single coherent surface the background scheduler uses to
+This module is the single coherent surface a background scheduler uses to
 run recurring auth cleanup jobs. Routing every scheduled auth cleanup through
-here keeps ``core.scheduler`` from importing a scatter of low-level auth
+here keeps the host's scheduler from importing a scatter of low-level auth
 ``*.utils`` modules directly and gives auth one place to own its maintenance
 contract.
 
-Each name below is the exact callable scheduled by ``core.scheduler``; they
+Each name below is a callable the host schedules on its own cadence; they
 are re-exported unchanged so their sync/async nature and arguments are
 preserved.
 """

@@ -15,7 +15,7 @@ must use or introduce CRUD helpers designed for that workflow.
 
 Request-state caching
 ---------------------
-The resolved :class:`~auth.principal.Principal` should be stored on
+The resolved :class:`~jafaal.principal.Principal` should be stored on
 ``request.state.principal`` after the first resolution so that
 multiple FastAPI dependencies in the same request do not trigger
 duplicate database lookups.
@@ -111,7 +111,7 @@ class IdentityService(Protocol):
 
         Returns:
             Principal: Resolved principal with a
-                :class:`~auth.principal.PasswordCred`.
+                :class:`~jafaal.principal.PasswordCred`.
 
         Raises:
             JafaalError: 401 if the credentials are
@@ -131,7 +131,7 @@ class IdentityService(Protocol):
 
         Returns:
             Principal: Resolved principal with an
-                :class:`~auth.principal.AccessTokenCred`.
+                :class:`~jafaal.principal.AccessTokenCred`.
 
         Raises:
             JafaalError: 401 if the token is expired,
@@ -155,7 +155,7 @@ class IdentityService(Protocol):
 
         Returns:
             Principal: Resolved principal with an
-                :class:`~auth.principal.ApiKeyCred`.
+                :class:`~jafaal.principal.ApiKeyCred`.
 
         Raises:
             JafaalError: 401 if the key is not found,
@@ -175,7 +175,7 @@ class IdentityService(Protocol):
 
         Returns:
             Principal: Resolved principal with a
-                :class:`~auth.principal.SessionCookieCred`.
+                :class:`~jafaal.principal.SessionCookieCred`.
 
         Raises:
             JafaalError: 401 if the session is not
@@ -765,7 +765,7 @@ class DefaultIdentityService:
 
         Returns:
             Principal: Resolved principal with a
-                :class:`~auth.principal.PasswordCred`.
+                :class:`~jafaal.principal.PasswordCred`.
 
         Raises:
             JafaalError: 401 if the credentials are
@@ -795,7 +795,7 @@ class DefaultIdentityService:
 
         Returns:
             Principal: Resolved principal with an
-                :class:`~auth.principal.AccessTokenCred`.
+                :class:`~jafaal.principal.AccessTokenCred`.
 
         Raises:
             JafaalError: 401 if the token is expired,
@@ -844,7 +844,7 @@ class DefaultIdentityService:
 
         Returns:
             Principal: Resolved principal with an
-                :class:`~auth.principal.ApiKeyCred`.
+                :class:`~jafaal.principal.ApiKeyCred`.
 
         Raises:
             JafaalError: 401 if the key is not found,
@@ -909,7 +909,7 @@ class DefaultIdentityService:
 
         Returns:
             Principal: Resolved principal with a
-                :class:`~auth.principal.SessionCookieCred`.
+                :class:`~jafaal.principal.SessionCookieCred`.
 
         Raises:
             JafaalError: 401 if the session is not
@@ -1311,7 +1311,7 @@ def get_identity_service(
     A new :class:`DefaultIdentityService` is constructed for every
     request.  Never use a module-level singleton.
 
-    The resolved :class:`~auth.principal.Principal` should be cached
+    The resolved :class:`~jafaal.principal.Principal` should be cached
     on ``request.state.principal`` by the caller so that downstream
     dependencies within the same request do not trigger extra database
     lookups.

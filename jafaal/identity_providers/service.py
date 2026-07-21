@@ -1,5 +1,7 @@
 """Service layer for identity provider OAuth2/OIDC flows."""
 
+from __future__ import annotations
+
 import base64
 import json
 import logging
@@ -9,7 +11,6 @@ from enum import Enum
 from typing import Any, cast
 
 import httpx
-from authlib.integrations.httpx_client import AsyncOAuth2Client
 from fastapi import Request
 from joserfc import jwt
 from joserfc.errors import (
@@ -33,8 +34,16 @@ import jafaal.oauth_state.crud as oauth_state_crud
 import jafaal.oauth_state.models as oauth_state_models
 import jafaal.ports as jafaal_ports
 import jafaal.settings as jafaal_settings
-from jafaal._core import crypto, network, timeutils
+from jafaal._core import crypto, network, optional_deps, timeutils
 from jafaal.orm import UserId
+
+# Single sign-on relies on authlib's OAuth2 client, shipped as the optional
+# ``jafaal[sso]`` extra. Import defensively so ``import jafaal`` works without it;
+# _oauth_client_cls() fails fast (with an install hint) when an SSO flow runs.
+try:
+    from authlib.integrations.httpx_client import AsyncOAuth2Client
+except ImportError:  # pragma: no cover - exercised via the missing-dep guard
+    AsyncOAuth2Client = None  # type: ignore[assignment,misc]
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +52,12 @@ MAX_IDP_TOKEN_AGE_DAYS = 90
 TOKEN_EXPIRY_THRESHOLD_MINUTES = 5
 TOKEN_REFRESH_RATE_LIMIT_MINUTES = 1
 DEFAULT_TOKEN_EXPIRY_SECONDS = 300
+
+
+def _oauth_client_cls() -> Any:
+    """Return authlib's ``AsyncOAuth2Client``, or fail fast if ``jafaal[sso]`` is missing."""
+    return optional_deps.require(AsyncOAuth2Client, package="authlib", extra="sso", feature="Single sign-on (OIDC)")
+
 
 # Allow-list of acceptable ID-token signature algorithms.
 #
@@ -644,7 +659,7 @@ class IdentityProviderService:
             - For authorization code flow: provide redirect_uri
             - For refresh token flow: redirect_uri can be None
         """
-        return AsyncOAuth2Client(
+        return _oauth_client_cls()(
             client_id=client_id,
             client_secret=client_secret,
             redirect_uri=redirect_uri,
@@ -718,7 +733,7 @@ class IdentityProviderService:
             redirect_uri = self._get_redirect_uri(idp.slug)
             scopes = idp.scopes or "openid profile email"
 
-            client = AsyncOAuth2Client(client_id=client_id, redirect_uri=redirect_uri, scope=scopes)
+            client = _oauth_client_cls()(client_id=client_id, redirect_uri=redirect_uri, scope=scopes)
 
             authorization_url, _ = client.create_authorization_url(authorization_endpoint, state=state, nonce=nonce)
 
@@ -807,7 +822,7 @@ class IdentityProviderService:
             redirect_uri = self._get_redirect_uri(idp.slug)
             scopes = idp.scopes or "openid profile email"
 
-            client = AsyncOAuth2Client(client_id=client_id, redirect_uri=redirect_uri, scope=scopes)
+            client = _oauth_client_cls()(client_id=client_id, redirect_uri=redirect_uri, scope=scopes)
 
             authorization_url, _ = client.create_authorization_url(authorization_endpoint, state=state, nonce=nonce)
 

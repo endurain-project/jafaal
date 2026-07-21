@@ -40,6 +40,21 @@ uv add jafaal
 
 Requires Python 3.13+.
 
+### Optional features
+
+A minimal "login + JWT + sessions" deployment needs no extras. Multi-factor
+authentication and single sign-on pull in additional packages, so they ship as
+optional extras. Install only what you use:
+
+```bash
+pip install 'jafaal[mfa]'   # TOTP MFA (pyotp) + QR provisioning (qrcode)
+pip install 'jafaal[sso]'   # OpenID Connect identity providers (authlib)
+pip install 'jafaal[all]'   # everything
+```
+
+If a feature is used without its extra installed, JAFAAL fails fast with a clear
+install hint (a `MissingDependencyError`) rather than an obscure error.
+
 ## Quickstart
 
 ### 1. Configure the library

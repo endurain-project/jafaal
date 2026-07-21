@@ -11,13 +11,31 @@ dependencies = [
     "sqlalchemy>=2.0.49",
     "pydantic[email]>=2.12.5",
     "joserfc>=1.6.4",
+    "cryptography>=45.0.1",
     "pwdlib[argon2,bcrypt]>=0.3.0",
-    "pyotp>=2.9.0",
-    "qrcode[pil]>=8.2",
-    "authlib>=1.6.11",
     "httpx>=0.28.1",
     "python-multipart>=0.0.9",
     "user-agents>=2.2.0",
+]
+
+# Optional features. A minimal "login + JWT + sessions" deployment needs none of
+# these; the feature modules import them defensively and fail fast (with an
+# install hint) if the feature is used without the extra installed.
+[project.optional-dependencies]
+# Multi-factor authentication (TOTP verification + QR-code provisioning).
+mfa = [
+    "pyotp>=2.9.0",
+    "qrcode[pil]>=8.2",
+]
+# Single sign-on / OpenID Connect identity providers.
+sso = [
+    "authlib>=1.6.11",
+]
+# Convenience: every optional feature at once.
+all = [
+    "pyotp>=2.9.0",
+    "qrcode[pil]>=8.2",
+    "authlib>=1.6.11",
 ]
 
 [dependency-groups]
@@ -37,6 +55,11 @@ test = [
     "pytest>=9.0.3",
     "pytest-asyncio>=1.3.0",
     "pytest-cov>=7.1.0",
+    # The MFA/SSO suites exercise the optional features, so their deps are
+    # required to run the full test matrix.
+    "pyotp>=2.9.0",
+    "qrcode[pil]>=8.2",
+    "authlib>=1.6.11",
 ]
 dev = [
     "hatch>=1.16.5",

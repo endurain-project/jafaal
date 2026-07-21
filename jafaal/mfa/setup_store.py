@@ -13,7 +13,12 @@ import jafaal.settings as jafaal_settings
 from jafaal._core import crypto, hashing
 from jafaal.exceptions import StoreUnavailableError
 from jafaal.orm import UserId
-from jafaal.state_store import StateStore, StateStoreUnavailableError, get_state_store
+from jafaal.state_store import (
+    StateStore,
+    StateStoreUnavailableError,
+    get_state_store,
+    raise_store_unavailable,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +50,14 @@ def _raise_store_unavailable(operation: str, err: StateStoreUnavailableError) ->
     Raises:
         MFASecretStoreUnavailableError: Always raised.
     """
-    logger.error(f"MFA secret storage failed: {operation}", exc_info=err)
-    raise MFASecretStoreUnavailableError("MFA secret storage is unavailable") from err
+    raise_store_unavailable(
+        err,
+        error_cls=MFASecretStoreUnavailableError,
+        label="MFA secret storage failed",
+        message="MFA secret storage is unavailable",
+        operation=operation,
+        logger=logger,
+    )
 
 
 def _user_id_digest(user_id: UserId) -> str:

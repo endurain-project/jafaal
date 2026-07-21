@@ -172,6 +172,20 @@ _UUID_E2E = textwrap.dedent(
     assert principal.user_id == uid
     assert principal.username == "alice"
 
+    # 3b. Pending-MFA login round-trips the UUID id. Regression: get/claim used
+    #     to int()-parse the stored value, which raised ValueError for a UUID and
+    #     permanently broke MFA login for UUID-PK hosts (202 then "no pending
+    #     login" forever).
+    from jafaal._internal.security_stores import PendingMFALogin
+
+    pending = PendingMFALogin()
+    pending.add_pending_login("alice", uid)
+    fetched = pending.get_pending_login("alice")
+    assert isinstance(fetched, uuid.UUID) and fetched == uid, (fetched, type(fetched))
+    claimed = pending.claim_pending_login("alice")
+    assert isinstance(claimed, uuid.UUID) and claimed == uid, (claimed, type(claimed))
+    assert pending.get_pending_login("alice") is None
+
     # 4. Cascade delete through the UUID FK.
     db.delete(user)
     db.commit()

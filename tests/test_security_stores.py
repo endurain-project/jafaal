@@ -78,6 +78,36 @@ def test_pending_mfa_add_get_claim():
     assert store.get_pending_login("alice") is None
 
 
+def test_pending_mfa_coerces_to_host_pk_type():
+    """The stored id round-trips as the host PK type (int here), not bytes/str.
+
+    Regression guard: it used to be ``int()``-parsed unconditionally, which
+    permanently broke MFA login for UUID-PK hosts (see the UUID e2e test for the
+    UUID side).
+    """
+    store = PendingMFALogin()
+    store.add_pending_login("alice", 42)
+    got = store.get_pending_login("alice")
+    assert got == 42
+    assert isinstance(got, int)
+    claimed = store.claim_pending_login("alice")
+    assert claimed == 42
+    assert isinstance(claimed, int)
+
+
+def test_pending_mfa_evicts_corrupt_entry():
+    """A stored value that cannot be coerced to the PK type is treated as absent."""
+    from jafaal._internal.security_stores import _key_prefix, _username_digest
+    from jafaal.state_store import get_state_store
+
+    store = PendingMFALogin()
+    key = f"{_key_prefix()}:mfa:pending:{_username_digest('mallory')}"
+    get_state_store().set(key, b"not-a-valid-id", ttl_seconds=300)
+    assert store.get_pending_login("mallory") is None
+    # The corrupt entry was evicted on read.
+    assert get_state_store().get(key) is None
+
+
 def test_pending_mfa_clear_for_user():
     store = PendingMFALogin()
     store.add_pending_login("alice", 1)

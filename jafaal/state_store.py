@@ -17,11 +17,12 @@ working default, so :func:`get_state_store` never raises.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import NoReturn, Protocol, runtime_checkable
 
 from jafaal._core.registry import ConfigSlot
 from jafaal.exceptions import StoreUnavailableError
@@ -34,6 +35,37 @@ class StateStoreUnavailableError(StoreUnavailableError):
     or swallow a best-effort cleanup) without importing anything about the
     concrete backend. :class:`InMemoryStateStore` never raises it.
     """
+
+
+def raise_store_unavailable(
+    err: StateStoreUnavailableError,
+    *,
+    error_cls: type[StoreUnavailableError],
+    label: str,
+    message: str,
+    operation: str,
+    logger: logging.Logger,
+) -> NoReturn:
+    """Log a state-store outage and re-raise it as ``error_cls``.
+
+    Shared by the auth-security and MFA-secret stores so the "log the failing
+    operation, then wrap the backend outage in a store-specific 503" policy
+    lives in exactly one place.
+
+    Args:
+        err: The originating :class:`StateStoreUnavailableError`.
+        error_cls: The store-specific
+            :class:`~jafaal.exceptions.StoreUnavailableError` subclass to raise.
+        label: Human-readable failure label for the log line.
+        message: Detail message for the raised error.
+        operation: The store operation that failed (for the log line).
+        logger: The calling module's logger, so records attribute to it.
+
+    Raises:
+        StoreUnavailableError: Always (an instance of ``error_cls``).
+    """
+    logger.error(f"{label}: {operation}", exc_info=err)
+    raise error_cls(message) from err
 
 
 @dataclass(frozen=True)

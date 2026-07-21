@@ -13,9 +13,9 @@ matching ``get_*`` accessor. This mirrors the :class:`~jafaal.settings.AuthSetti
 config-delivery pattern (``jafaal.configure`` / ``get_settings``): the library
 depends only on these interfaces, never on a specific application.
 
-Value types that cross the boundary (:class:`SignupData`, :class:`IdpIdentity`
-and the event dataclasses) are plain frozen dataclasses — framework-agnostic,
-like :class:`jafaal.principal.Principal`.
+Value types that cross the boundary (:class:`IdpIdentity`, :class:`SignupConfig`,
+:class:`PasswordPolicy`, and the event dataclasses) are plain frozen dataclasses
+— framework-agnostic, like :class:`jafaal.principal.Principal`.
 """
 
 from __future__ import annotations

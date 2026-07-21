@@ -202,6 +202,7 @@ def make_user():
         email=None,
         password="Str0ng!Pass",
         *,
+        user_id=None,
         is_active=True,
         is_superuser=False,
         is_verified=True,
@@ -215,6 +216,8 @@ def make_user():
                 is_superuser=is_superuser,
                 is_verified=is_verified,
             )
+            if user_id is not None:
+                user.id = user_id
             session.add(user)
             session.commit()
             session.refresh(user)

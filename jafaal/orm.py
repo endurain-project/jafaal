@@ -43,6 +43,8 @@ from typing import Any
 
 from sqlalchemy.orm import DeclarativeBase, Mapper, Session, sessionmaker
 
+from jafaal._core.registry import ConfigSlot
+
 __all__ = [
     "Base",
     "UserId",
@@ -69,7 +71,11 @@ class Base(DeclarativeBase):
 # Session factory (host-provided)
 # ---------------------------------------------------------------------------
 
-_session_factory: sessionmaker[Session] | None = None
+_session_factory: ConfigSlot[sessionmaker[Session]] = ConfigSlot(
+    missing_message=(
+        "JAFAAL has no session factory. Call jafaal.configure_sessionmaker(sessionmaker(bind=engine)) at startup."
+    )
+)
 
 
 def configure_sessionmaker(factory: sessionmaker[Session]) -> None:
@@ -82,8 +88,7 @@ def configure_sessionmaker(factory: sessionmaker[Session]) -> None:
     Args:
         factory: A configured ``sessionmaker``.
     """
-    global _session_factory
-    _session_factory = factory
+    _session_factory.configure(factory)
 
 
 def get_sessionmaker() -> sessionmaker[Session]:
@@ -92,11 +97,7 @@ def get_sessionmaker() -> sessionmaker[Session]:
     Raises:
         RuntimeError: If :func:`configure_sessionmaker` has not been called.
     """
-    if _session_factory is None:
-        raise RuntimeError(
-            "JAFAAL has no session factory. Call jafaal.configure_sessionmaker(sessionmaker(bind=engine)) at startup."
-        )
-    return _session_factory
+    return _session_factory.get()
 
 
 def get_db() -> Generator[Session]:

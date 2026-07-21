@@ -22,10 +22,8 @@ import hmac
 import logging
 import time
 from io import BytesIO
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-import pyotp
-import qrcode
 from sqlalchemy.orm import Session
 
 import jafaal._internal.user_guards as jafaal_user_guards
@@ -35,11 +33,35 @@ import jafaal.mfa.backup_codes.utils as mfa_backup_codes_utils
 import jafaal.mfa.crud as jafaal_mfa_crud
 import jafaal.mfa.schema as mfa_schema
 import jafaal.settings as jafaal_settings
-from jafaal._core import crypto
+from jafaal._core import crypto, optional_deps
 from jafaal.orm import UserId
 from jafaal.state_store import StateStoreUnavailableError, get_state_store
 
 logger = logging.getLogger(__name__)
+
+# MFA depends on TOTP + QR generation, shipped as the optional ``jafaal[mfa]``
+# extra. Import defensively so ``import jafaal`` still works without them; the
+# accessors below fail fast (with an install hint) when an MFA entry point is
+# actually used.
+try:
+    import pyotp
+except ImportError:  # pragma: no cover - exercised via the missing-dep guard
+    pyotp = None  # type: ignore[assignment]
+try:
+    import qrcode
+except ImportError:  # pragma: no cover - exercised via the missing-dep guard
+    qrcode = None  # type: ignore[assignment]
+
+
+def _pyotp() -> Any:
+    """Return the ``pyotp`` module, or fail fast if ``jafaal[mfa]`` is missing."""
+    return optional_deps.require(pyotp, package="pyotp", extra="mfa", feature="Multi-factor authentication")
+
+
+def _qrcode() -> Any:
+    """Return the ``qrcode`` module, or fail fast if ``jafaal[mfa]`` is missing."""
+    return optional_deps.require(qrcode, package="qrcode", extra="mfa", feature="Multi-factor authentication")
+
 
 if TYPE_CHECKING:
     import jafaal.identity_service as jafaal_identity_service
@@ -56,7 +78,7 @@ def generate_totp_secret() -> str:
     Returns:
         Base32-encoded secret string.
     """
-    return pyotp.random_base32()
+    return _pyotp().random_base32()
 
 
 def verify_totp(secret: str, token: str) -> bool:
@@ -70,7 +92,7 @@ def verify_totp(secret: str, token: str) -> bool:
     Returns:
         True if token is valid, False otherwise.
     """
-    totp = pyotp.TOTP(secret)
+    totp = _pyotp().TOTP(secret)
     return totp.verify(token, valid_window=1)  # Allow 1 window tolerance
 
 
@@ -102,7 +124,7 @@ def _matched_totp_timestep(secret: str, token: str, valid_window: int = _TOTP_VA
         The matched timestep (``unix_time // interval``), or ``None`` if the
         code does not match any step in the window.
     """
-    totp = pyotp.TOTP(secret)
+    totp = _pyotp().TOTP(secret)
     current_timestep = int(time.time()) // totp.interval
     for offset in range(-valid_window, valid_window + 1):
         candidate = current_timestep + offset
@@ -155,12 +177,13 @@ def generate_qr_code(secret: str, username: str, app_name: str = "Jafaal") -> st
     Returns:
         Base64-encoded PNG QR code as data URI.
     """
-    totp = pyotp.TOTP(secret)
+    totp = _pyotp().TOTP(secret)
     provisioning_uri = totp.provisioning_uri(name=username, issuer_name=app_name)
 
-    qr = qrcode.QRCode(
+    qrcode_mod = _qrcode()
+    qr = qrcode_mod.QRCode(
         version=1,
-        error_correction=qrcode.constants.ERROR_CORRECT_L,
+        error_correction=qrcode_mod.constants.ERROR_CORRECT_L,
         box_size=10,
         border=4,
     )

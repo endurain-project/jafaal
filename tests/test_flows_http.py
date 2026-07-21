@@ -174,3 +174,28 @@ def test_mfa_verify_rejects_wrong_code(client, make_user):
         headers=WEB,
     )
     assert verify.status_code == 400
+
+
+def test_mfa_verify_login_flow_with_zero_user_id(client, make_user):
+    """A user whose integer id is the falsy value ``0`` can still complete MFA login.
+
+    Regression for the ``if not user_id`` check (now ``if user_id is None``):
+    ``get_pending_login`` returns ``0`` for such a user, which the old truthiness
+    test wrongly treated as "no pending login".
+    """
+    user = make_user(username="zerouser", user_id=0, password="Str0ng!Pass")
+    assert user.id == 0
+
+    secret = pyotp.random_base32()
+    _enable_mfa(user.id, secret)
+
+    assert _login(client, "zerouser", "Str0ng!Pass").status_code == 202
+
+    code = pyotp.TOTP(secret).now()
+    verify = client.post(
+        "/api/v1/auth/mfa/verify",
+        json={"username": "zerouser", "mfa_code": code},
+        headers=WEB,
+    )
+    assert verify.status_code == 200
+    assert verify.json()["access_token"]

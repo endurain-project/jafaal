@@ -17,8 +17,13 @@ from urllib.parse import unquote
 import jafaal.settings as jafaal_settings
 from jafaal._core import hashing
 from jafaal.exceptions import StoreUnavailableError
-from jafaal.orm import UserId
-from jafaal.state_store import StateStore, StateStoreUnavailableError, get_state_store
+from jafaal.orm import UserId, coerce_user_id
+from jafaal.state_store import (
+    StateStore,
+    StateStoreUnavailableError,
+    get_state_store,
+    raise_store_unavailable,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +53,14 @@ def _raise_store_unavailable(operation: str, err: StateStoreUnavailableError) ->
     Raises:
         AuthSecurityStoreUnavailableError: Always raised.
     """
-    logger.error(f"Auth security storage failed: {operation}", exc_info=err)
-    raise AuthSecurityStoreUnavailableError("auth security storage is unavailable") from err
+    raise_store_unavailable(
+        err,
+        error_cls=AuthSecurityStoreUnavailableError,
+        label="Auth security storage failed",
+        message="auth security storage is unavailable",
+        operation=operation,
+        logger=logger,
+    )
 
 
 def normalize_username_key(username: str) -> str:
@@ -161,9 +172,9 @@ class PendingMFAStore(Protocol):
 
     def add_pending_login(self, username: str, user_id: UserId) -> None: ...
 
-    def get_pending_login(self, username: str) -> int | None: ...
+    def get_pending_login(self, username: str) -> UserId | None: ...
 
-    def claim_pending_login(self, username: str) -> int | None: ...
+    def claim_pending_login(self, username: str) -> UserId | None: ...
 
     def delete_pending_login(self, username: str) -> None: ...
 
@@ -408,8 +419,13 @@ class PendingMFALogin:
         except StateStoreUnavailableError as err:
             _raise_store_unavailable("add pending MFA login", err)
 
-    def get_pending_login(self, username: str) -> int | None:
-        """Retrieve the user ID for a pending MFA login, evicting corrupt entries."""
+    def get_pending_login(self, username: str) -> UserId | None:
+        """Retrieve the user ID for a pending MFA login, evicting corrupt entries.
+
+        The id is stored as its string form and coerced back to the host user
+        table's primary-key type (``int`` or :class:`uuid.UUID`) on read, so the
+        store works for both integer- and UUID-keyed hosts.
+        """
         pending_key = self._pending_key(username)
         try:
             raw_user_id = self._get_state().get(pending_key)
@@ -418,7 +434,7 @@ class PendingMFALogin:
         if raw_user_id is None:
             return None
         try:
-            return int(raw_user_id.decode())
+            return coerce_user_id(raw_user_id.decode())
         except (TypeError, ValueError):
             try:
                 self._get_state().delete(pending_key)
@@ -426,8 +442,12 @@ class PendingMFALogin:
                 _raise_store_unavailable("delete invalid pending MFA login", err)
             return None
 
-    def claim_pending_login(self, username: str) -> int | None:
-        """Atomically retrieve and remove a pending MFA login."""
+    def claim_pending_login(self, username: str) -> UserId | None:
+        """Atomically retrieve and remove a pending MFA login.
+
+        Like :meth:`get_pending_login`, the id is coerced back to the host user
+        table's primary-key type so both integer- and UUID-keyed hosts work.
+        """
         try:
             raw_user_id = self._get_state().get_and_delete(self._pending_key(username))
         except StateStoreUnavailableError as err:
@@ -435,7 +455,7 @@ class PendingMFALogin:
         if raw_user_id is None:
             return None
         try:
-            return int(raw_user_id.decode())
+            return coerce_user_id(raw_user_id.decode())
         except (TypeError, ValueError):
             return None
 

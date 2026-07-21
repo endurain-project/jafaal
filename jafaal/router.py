@@ -351,7 +351,7 @@ async def verify_mfa_and_login(
         user_id = pending_mfa_store.get_pending_login(mfa_request.username)
     except jafaal_security_stores.AuthSecurityStoreUnavailableError as err:
         _raise_auth_security_store_unavailable(err)
-    if not user_id:
+    if user_id is None:
         # Run a dummy Argon2 verify so the wall-clock latency of the
         # "no pending MFA login" branch matches the "pending login,
         # wrong code" branch (where backup-code verification performs
@@ -423,7 +423,7 @@ async def refresh_token(
     request: Request,
     _validate_refresh_token: Annotated[Callable, Depends(jafaal_internal_dependencies.validate_refresh_token)],
     token_user_id: Annotated[
-        int,
+        jafaal_orm.UserId,
         Depends(jafaal_internal_dependencies.get_sub_from_refresh_token),
     ],
     token_session_id: Annotated[

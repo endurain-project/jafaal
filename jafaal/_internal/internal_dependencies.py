@@ -93,7 +93,7 @@ def _resolve_and_cache_principal(
     Checks ``request.state.principal`` first so that multiple
     dependencies in the same request share a single DB lookup.
     On cache miss, delegates to
-    :meth:`~auth.identity_service.IdentityService.resolve_from_access_token`
+    :meth:`~jafaal.identity_service.IdentityService.resolve_from_access_token`
     and stores the result on ``request.state``.
 
     Args:
@@ -247,7 +247,7 @@ def get_sub_from_access_token(
 ) -> jafaal_orm.UserId:
     """Retrieve the user ID from the access token.
 
-    Resolves and caches the :class:`~auth.principal.Principal`
+    Resolves and caches the :class:`~jafaal.principal.Principal`
     on ``request.state`` then returns ``principal.user_id``.
     Subsequent calls within the same request hit the cache
     instead of issuing another DB lookup.
@@ -278,9 +278,9 @@ def get_sid_from_access_token(
 ) -> str:
     """Retrieve the session ID from the access token.
 
-    Resolves and caches the :class:`~auth.principal.Principal`
+    Resolves and caches the :class:`~jafaal.principal.Principal`
     on ``request.state`` then extracts the session ID from the
-    :class:`~auth.principal.AccessTokenCred`.
+    :class:`~jafaal.principal.AccessTokenCred`.
 
     Args:
         request: Current HTTP request for state caching.
@@ -465,9 +465,9 @@ async def validate_api_key(
     """Validate a raw API key and return an AuthContext.
 
     Delegates to
-    :meth:`~auth.identity_service.IdentityService.resolve_from_api_key`
+    :meth:`~jafaal.identity_service.IdentityService.resolve_from_api_key`
     and wraps the returned
-    :class:`~auth.principal.Principal` in an
+    :class:`~jafaal.principal.Principal` in an
     :class:`AuthContext` for backward compatibility.
 
     Args:
@@ -519,9 +519,9 @@ async def validate_access_token_or_api_key(
     ``?api_key=`` query parameter if allowed. Raises 401 if none
     is supplied.
 
-    Delegates to :class:`~auth.identity_service.IdentityService`
+    Delegates to :class:`~jafaal.identity_service.IdentityService`
     for credential resolution and caches the resolved
-    :class:`~auth.principal.Principal` on
+    :class:`~jafaal.principal.Principal` on
     ``request.state.principal`` so that other dependencies in
     the same request can share the result without a second DB
     lookup.

@@ -27,8 +27,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from cryptography.fernet import Fernet
+
 __all__ = [
     "ALLOWED_ALGORITHMS",
+    "MIN_SECRET_KEY_LENGTH",
     "AuthSettings",
     "configure",
     "get_settings",
@@ -41,6 +44,12 @@ __all__ = [
 # is a symmetric secret, so asymmetric algorithms and ``alg=none`` must never be
 # honoured. (joserfc additionally refuses HS384/HS512 by default.)
 ALLOWED_ALGORITHMS: frozenset[str] = frozenset({"HS256"})
+
+# Minimum length (characters) for the HS256 signing key. HMAC-SHA256 security
+# assumes a high-entropy key of at least 256 bits (32 bytes); a shorter secret
+# is brute-forceable, so it is rejected at construction rather than silently
+# accepted.
+MIN_SECRET_KEY_LENGTH: int = 32
 
 
 @dataclass(frozen=True)
@@ -147,8 +156,21 @@ class AuthSettings:
     def __post_init__(self) -> None:
         if not self.secret_key:
             raise ValueError("AuthSettings.secret_key is required")
+        if len(self.secret_key) < MIN_SECRET_KEY_LENGTH:
+            raise ValueError(
+                f"AuthSettings.secret_key is too short (got {len(self.secret_key)} characters, "
+                f"need at least {MIN_SECRET_KEY_LENGTH}). HS256 requires a high-entropy key; "
+                "generate one with e.g. secrets.token_urlsafe(32)."
+            )
         if not self.fernet_key:
             raise ValueError("AuthSettings.fernet_key is required")
+        try:
+            Fernet(self.fernet_key.encode())
+        except Exception as err:
+            raise ValueError(
+                "AuthSettings.fernet_key is not a valid Fernet key. Expected a url-safe "
+                "base64-encoded 32-byte key, e.g. cryptography.fernet.Fernet.generate_key()."
+            ) from err
         if self.algorithm not in ALLOWED_ALGORITHMS:
             raise ValueError(
                 f"AuthSettings.algorithm={self.algorithm!r} is not in the allow-list {sorted(ALLOWED_ALGORITHMS)}"

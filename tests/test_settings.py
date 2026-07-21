@@ -29,6 +29,20 @@ def test_requires_fernet_key():
         _valid(fernet_key="")
 
 
+def test_rejects_short_secret_key():
+    # A non-empty but too-short HS256 key is brute-forceable → rejected up front.
+    with pytest.raises(ValueError, match="secret_key"):
+        _valid(secret_key="tooshort")
+    # Exactly the minimum length is accepted.
+    assert _valid(secret_key="k" * settings_mod.MIN_SECRET_KEY_LENGTH) is not None
+
+
+def test_rejects_invalid_fernet_key():
+    # A malformed Fernet key fails at construction, not later at first encrypt.
+    with pytest.raises(ValueError, match="fernet_key"):
+        _valid(fernet_key="not-a-valid-fernet-key")
+
+
 def test_algorithm_must_be_allow_listed():
     with pytest.raises(ValueError, match="algorithm"):
         _valid(algorithm="none")
