@@ -199,6 +199,13 @@ def mark_oauth_state_used(state_id: str, db: Session) -> bool:
             oauth_state_models.OAuthState.expires_at > datetime.now(UTC),
         )
         .values(used=True)
+        # Skip in-session synchronization: callers pre-load the state row (via
+        # get_oauth_state_by_id_and_not_used) and only need the DB row marked
+        # used + the rowcount. Evaluating the WHERE criteria in Python (the
+        # default "evaluate" strategy) would compare the loaded ``expires_at``
+        # against ``datetime.now(UTC)``, which raises on backends returning
+        # naive datetimes (e.g. SQLite). The DB does the comparison.
+        .execution_options(synchronize_session=False)
     )
     result: CursorResult[Any] = db.execute(stmt)
     db.commit()
