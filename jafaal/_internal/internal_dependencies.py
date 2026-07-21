@@ -1,9 +1,9 @@
 """Auth-internal FastAPI dependencies and credential-extraction helpers.
 
-This is the low-level, auth-internal dependency layer. Non-auth modules must
-**not** import it directly (enforced by the ``auth-boundary`` import-linter
-contract); they consume identity through :mod:`jafaal.dependencies` and
-:class:`~auth.identity_service.IdentityService` instead.
+This is the low-level, auth-internal dependency layer. By convention, higher-level
+code does **not** import it directly; it consumes identity through
+:mod:`jafaal.dependencies` and :class:`~jafaal.identity_service.IdentityService`
+instead.
 
 Provides FastAPI dependencies that resolve and validate JWT access/refresh
 tokens (cookie or Authorization header) and accept API keys as an alternative
@@ -12,7 +12,7 @@ passed to endpoints that accept either auth method.
 
 Scope enforcement is intentionally not provided here: the canonical,
 principal-resolving ``check_scopes`` lives in :mod:`jafaal.dependencies` (it goes
-through :class:`~auth.identity_service.IdentityService`, which also asserts the
+through :class:`~jafaal.identity_service.IdentityService`, which also asserts the
 user exists and is active). Use that instead.
 """
 
@@ -509,9 +509,10 @@ async def validate_access_token_or_api_key(
     Query-string delivery (``?api_key=``) is disabled by default because
     credentials in query strings appear in access logs, proxy histories,
     and browser history. It can be enabled via the
-    ``ALLOW_API_KEY_QUERY_PARAM`` environment variable for self-hosted
-    deployments that require it (e.g. webhook integrations that cannot
-    set custom headers).
+    ``allow_api_key_query_param`` setting on
+    :class:`~jafaal.settings.AuthSettings` for self-hosted deployments
+    that require it (e.g. webhook integrations that cannot set custom
+    headers).
 
     Tries JWT first (Authorization: Bearer header). If none is
     present, falls back to the ``X-API-Key`` header, then the
@@ -534,7 +535,7 @@ async def validate_access_token_or_api_key(
             ``X-API-Key`` header.
         api_key_query: Optional API key from the
             ``?api_key=`` query parameter (only honoured
-            when ``ALLOW_API_KEY_QUERY_PARAM`` is ``true``).
+            when ``AuthSettings.allow_api_key_query_param`` is ``True``).
 
     Returns:
         AuthContext with resolved user_id, scopes, and

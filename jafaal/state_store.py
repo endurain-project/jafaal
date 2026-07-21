@@ -23,6 +23,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
+from jafaal._core.registry import ConfigSlot
 from jafaal.exceptions import StoreUnavailableError
 
 
@@ -186,7 +187,7 @@ class InMemoryStateStore:
 # working default (in-memory), so ``get_state_store`` never raises — JAFAAL runs
 # out of the box in a single process and the host swaps in a distributed backend
 # only when it needs one.
-_state_store: StateStore = InMemoryStateStore()
+_state_store: ConfigSlot[StateStore] = ConfigSlot(default_factory=InMemoryStateStore)
 
 
 def configure_state_store(store: StateStore) -> None:
@@ -195,16 +196,14 @@ def configure_state_store(store: StateStore) -> None:
     Args:
         store: A :class:`StateStore` implementation.
     """
-    global _state_store
-    _state_store = store
+    _state_store.configure(store)
 
 
 def get_state_store() -> StateStore:
     """Return the configured state store (the in-memory default until configured)."""
-    return _state_store
+    return _state_store.get()
 
 
 def reset_state_store() -> None:
     """Reset to a fresh in-memory store. Intended for tests."""
-    global _state_store
-    _state_store = InMemoryStateStore()
+    _state_store.reset()

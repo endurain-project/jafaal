@@ -168,14 +168,14 @@ def _is_secure_cookie_environment() -> bool:
     """Return ``True`` when refresh cookies must be served with ``Secure``.
 
     Single source of truth for the cookie ``Secure`` flag used by the
-    password login, refresh, and SSO token-exchange flows. Basing the
-    decision on ``ENVIRONMENT`` (``production``/``demo``) keeps the
-    behaviour identical across all three flows and avoids the prior
+    password login, refresh, and SSO token-exchange flows. Delegates to
+    :attr:`AuthSettings.is_deployed` (``production``/``demo``) so the
+    behaviour stays identical across all three flows and avoids the prior
     bug where the SSO path used ``FRONTEND_PROTOCOL`` and could issue
     a non-Secure refresh cookie when that env var was missing or
     mis-set in production.
     """
-    return jafaal_settings.get_settings().environment in {"production", "demo"}
+    return jafaal_settings.get_settings().is_deployed
 
 
 def set_refresh_token_cookie(

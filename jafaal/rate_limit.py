@@ -20,6 +20,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Protocol, TypeVar, runtime_checkable
 
+from jafaal._core.registry import ConfigSlot
+
 F = TypeVar("F", bound=Callable[..., object])
 
 #: Sensitive operations — login, MFA, password reset, sign-up, OAuth flows.
@@ -51,7 +53,7 @@ class NoOpRateLimiter:
         return decorator
 
 
-_rate_limiter: RateLimiter = NoOpRateLimiter()
+_rate_limiter: ConfigSlot[RateLimiter] = ConfigSlot(default_factory=NoOpRateLimiter)
 
 
 def configure_rate_limiter(limiter: RateLimiter) -> None:
@@ -63,19 +65,17 @@ def configure_rate_limiter(limiter: RateLimiter) -> None:
     Args:
         limiter: A :class:`RateLimiter` implementation.
     """
-    global _rate_limiter
-    _rate_limiter = limiter
+    _rate_limiter.configure(limiter)
 
 
 def get_rate_limiter() -> RateLimiter:
     """Return the configured rate limiter (the no-op default until configured)."""
-    return _rate_limiter
+    return _rate_limiter.get()
 
 
 def reset_rate_limiter() -> None:
     """Reset to the no-op limiter. Intended for tests."""
-    global _rate_limiter
-    _rate_limiter = NoOpRateLimiter()
+    _rate_limiter.reset()
 
 
 def limit(category: str) -> Callable[[F], F]:

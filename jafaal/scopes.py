@@ -17,6 +17,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from jafaal._core.registry import ConfigSlot
+
 # --- JAFAAL's own auth/identity scopes ---
 PROFILE = "profile"
 USERS_READ = "users:read"
@@ -118,7 +120,7 @@ class ScopeCatalog:
 DEFAULT_SCOPE_CATALOG = ScopeCatalog(_JAFAAL_REGULAR, _JAFAAL_ADMIN, _JAFAAL_DESCRIPTIONS)
 DEFAULT_SCOPE_CATALOG.validate()
 
-_scope_catalog: ScopeCatalog = DEFAULT_SCOPE_CATALOG
+_scope_catalog: ConfigSlot[ScopeCatalog] = ConfigSlot(default_factory=lambda: DEFAULT_SCOPE_CATALOG)
 
 
 def configure_scopes(catalog: ScopeCatalog) -> None:
@@ -131,16 +133,14 @@ def configure_scopes(catalog: ScopeCatalog) -> None:
         ValueError: If the catalog is inconsistent (see :meth:`ScopeCatalog.validate`).
     """
     catalog.validate()
-    global _scope_catalog
-    _scope_catalog = catalog
+    _scope_catalog.configure(catalog)
 
 
 def get_scope_catalog() -> ScopeCatalog:
     """Return the configured scope catalog (JAFAAL's own until configured)."""
-    return _scope_catalog
+    return _scope_catalog.get()
 
 
 def reset_scopes() -> None:
     """Reset to JAFAAL's own catalog. Intended for tests."""
-    global _scope_catalog
-    _scope_catalog = DEFAULT_SCOPE_CATALOG
+    _scope_catalog.reset()

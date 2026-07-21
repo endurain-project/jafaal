@@ -43,7 +43,8 @@ class TokenManager:
 
     This class provides methods for creating, decoding, validating, and
     extracting claims from JWTs, as well as generating secure CSRF tokens. It
-    supports configurable encryption algorithms and integrates with application
+    signs tokens with HMAC-SHA256 (``HS256`` only — the algorithm is pinned via
+    :data:`jafaal.settings.ALLOWED_ALGORITHMS`) and integrates with application
     logging and exception handling for robust security and error reporting.
 
     Attributes:

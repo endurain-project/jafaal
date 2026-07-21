@@ -25,6 +25,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
+from jafaal._core.registry import ConfigSlot
+
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
@@ -276,15 +278,23 @@ class NullAuthEventSink:
 # Installed-adapter accessors (mirror jafaal.settings.configure/get_settings)
 # ===========================================================================
 
-_user_repository: UserRepository | None = None
-_settings_provider: SettingsProvider | None = None
-_event_sink: AuthEventSink = NullAuthEventSink()
+_user_repository: ConfigSlot[UserRepository] = ConfigSlot(
+    missing_message=(
+        "JAFAAL has no UserRepository configured. Call jafaal.configure_user_repository(...) at application startup."
+    )
+)
+_settings_provider: ConfigSlot[SettingsProvider] = ConfigSlot(
+    missing_message=(
+        "JAFAAL has no SettingsProvider configured. Call "
+        "jafaal.configure_settings_provider(...) at application startup."
+    )
+)
+_event_sink: ConfigSlot[AuthEventSink] = ConfigSlot(default_factory=NullAuthEventSink)
 
 
 def configure_user_repository(repository: UserRepository) -> None:
     """Install the host's :class:`UserRepository`. Call once at startup."""
-    global _user_repository
-    _user_repository = repository
+    _user_repository.configure(repository)
 
 
 def get_user_repository() -> UserRepository:
@@ -293,18 +303,12 @@ def get_user_repository() -> UserRepository:
     Raises:
         RuntimeError: If none has been configured.
     """
-    if _user_repository is None:
-        raise RuntimeError(
-            "JAFAAL has no UserRepository configured. Call "
-            "jafaal.configure_user_repository(...) at application startup."
-        )
-    return _user_repository
+    return _user_repository.get()
 
 
 def configure_settings_provider(provider: SettingsProvider) -> None:
     """Install the host's :class:`SettingsProvider`. Call once at startup."""
-    global _settings_provider
-    _settings_provider = provider
+    _settings_provider.configure(provider)
 
 
 def get_settings_provider() -> SettingsProvider:
@@ -313,31 +317,24 @@ def get_settings_provider() -> SettingsProvider:
     Raises:
         RuntimeError: If none has been configured.
     """
-    if _settings_provider is None:
-        raise RuntimeError(
-            "JAFAAL has no SettingsProvider configured. Call "
-            "jafaal.configure_settings_provider(...) at application startup."
-        )
-    return _settings_provider
+    return _settings_provider.get()
 
 
 def configure_event_sink(sink: AuthEventSink) -> None:
     """Install the host's :class:`AuthEventSink` (defaults to a no-op sink)."""
-    global _event_sink
-    _event_sink = sink
+    _event_sink.configure(sink)
 
 
 def get_event_sink() -> AuthEventSink:
     """Return the installed :class:`AuthEventSink` (``NullAuthEventSink`` by default)."""
-    return _event_sink
+    return _event_sink.get()
 
 
 def reset_ports() -> None:
     """Clear all installed adapters. Intended for test isolation."""
-    global _user_repository, _settings_provider, _event_sink
-    _user_repository = None
-    _settings_provider = None
-    _event_sink = NullAuthEventSink()
+    _user_repository.reset()
+    _settings_provider.reset()
+    _event_sink.reset()
 
 
 __all__ = [

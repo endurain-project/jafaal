@@ -723,14 +723,14 @@ class DefaultIdentityService:
 
     def _build_principal(
         self,
-        user: object,
+        user: jafaal_ports.UserProtocol,
         scopes: list[str],
         credential: (PasswordCred | AccessTokenCred | ApiKeyCred | SessionCookieCred | OAuthCred),
     ) -> Principal:
         """Build a ``Principal`` from an ORM user row.
 
         Args:
-            user: SQLAlchemy ``Users`` model instance.
+            user: The resolved user, satisfying :class:`~jafaal.ports.UserProtocol`.
             scopes: List of granted OAuth2 scope strings.
             credential: Typed credential variant.
 
@@ -739,11 +739,11 @@ class DefaultIdentityService:
                 ``request.state``.
         """
         return Principal(
-            user_id=user.id,  # type: ignore[attr-defined]
-            username=user.username,  # type: ignore[attr-defined]
-            email=user.email,  # type: ignore[attr-defined]
-            is_active=bool(user.is_active),  # type: ignore[attr-defined]
-            is_superuser=bool(user.is_superuser),  # type: ignore[attr-defined]
+            user_id=user.id,
+            username=user.username,
+            email=user.email,
+            is_active=bool(user.is_active),
+            is_superuser=bool(user.is_superuser),
             scopes=frozenset(scopes),
             credential=credential,
         )

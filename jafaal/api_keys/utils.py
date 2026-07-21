@@ -6,6 +6,7 @@ from collections.abc import Iterable
 
 import jafaal.settings as jafaal_settings
 import jafaal.token_hashing as token_hashing
+from jafaal._core.registry import ConfigSlot
 
 # Host-configurable allow-list of scopes an API key may carry. JAFAAL ships no
 # application scopes of its own, so the default is empty: a host that offers API
@@ -14,7 +15,7 @@ import jafaal.token_hashing as token_hashing
 # Until then, API-key creation rejects every requested scope. Keeping this
 # allow-list separate from the full JWT scope set means API keys never silently
 # gain access when new endpoints/scopes are added later.
-_supported_api_key_scopes: frozenset[str] = frozenset()
+_supported_api_key_scopes: ConfigSlot[frozenset[str]] = ConfigSlot(default_factory=frozenset)
 
 
 def configure_api_key_scopes(scopes: Iterable[str]) -> None:
@@ -25,19 +26,17 @@ def configure_api_key_scopes(scopes: Iterable[str]) -> None:
     Args:
         scopes: The scope strings API keys may carry.
     """
-    global _supported_api_key_scopes
-    _supported_api_key_scopes = frozenset(scopes)
+    _supported_api_key_scopes.configure(frozenset(scopes))
 
 
 def get_api_key_scopes() -> frozenset[str]:
     """Return the configured API-key scope allow-list (empty until configured)."""
-    return _supported_api_key_scopes
+    return _supported_api_key_scopes.get()
 
 
 def reset_api_key_scopes() -> None:
     """Reset the API-key scope allow-list to empty. Intended for tests."""
-    global _supported_api_key_scopes
-    _supported_api_key_scopes = frozenset()
+    _supported_api_key_scopes.reset()
 
 
 def generate_api_key() -> str:

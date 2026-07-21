@@ -52,10 +52,10 @@ class PasswordHasher:
         hash_password(password: str) -> str:
             Hashes a plain text password using the configured password hashing algorithm.
 
-        verify(plain_password: str, hashed_password: str) -> bool:
+        verify_password(plain_password: str, hashed_password: str) -> bool:
             Verifies if a plain password matches the given hashed password.
 
-        verify_and_update(plain_password: str, hashed_password: str) -> Tuple[bool, str | None]:
+        verify_and_update(plain_password: str, hashed_password: str) -> tuple[bool, str | None]:
             Verifies a password and updates the hash if the algorithm or parameters have changed.
 
         generate_password(length: int = 8) -> str:
