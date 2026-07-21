@@ -33,7 +33,7 @@ import jafaal.oauth_state.crud as oauth_state_crud
 import jafaal.oauth_state.models as oauth_state_models
 import jafaal.ports as jafaal_ports
 import jafaal.settings as jafaal_settings
-from jafaal._core import crypto, network
+from jafaal._core import crypto, network, timeutils
 
 logger = logging.getLogger(__name__)
 
@@ -1806,8 +1806,9 @@ class IdentityProviderService:
             )
             return False
 
-        # Calculate token age (TIMESTAMPTZ returns aware datetimes)
-        token_age = now - token_timestamp
+        # Calculate token age (normalize to UTC-aware so the comparison is safe
+        # on backends that return naive datetimes, e.g. SQLite).
+        token_age = now - timeutils.ensure_aware_utc(token_timestamp)
 
         # Check if token exceeds maximum age
         max_age = timedelta(days=MAX_IDP_TOKEN_AGE_DAYS)
@@ -1866,13 +1867,13 @@ class IdentityProviderService:
 
         # Check if token was refreshed very recently (rate limiting)
         if link.idp_refresh_token_updated_at:
-            time_since_refresh = now - link.idp_refresh_token_updated_at
+            time_since_refresh = now - timeutils.ensure_aware_utc(link.idp_refresh_token_updated_at)
             if time_since_refresh < timedelta(minutes=TOKEN_REFRESH_RATE_LIMIT_MINUTES):
                 # Refreshed less than defined - don't refresh again
                 return TokenAction.SKIP
 
         # Check if access token is close to expiry
-        time_until_expiry = link.idp_access_token_expires_at - now
+        time_until_expiry = timeutils.ensure_aware_utc(link.idp_access_token_expires_at) - now
         if time_until_expiry < timedelta(minutes=TOKEN_EXPIRY_THRESHOLD_MINUTES):
             # Token expires soon - should refresh
             return TokenAction.REFRESH

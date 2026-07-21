@@ -88,6 +88,13 @@ def mark_token_as_used(token_hash: str, db: Session) -> bool:
             idp_link_token_models.IdpLinkToken.expires_at > datetime.now(UTC),
         )
         .values(used=True)
+        # Skip in-session synchronization: the caller has already loaded the
+        # token row (via get_idp_link_token_by_hash) and only needs the DB row
+        # marked used + the affected rowcount. Evaluating the WHERE criteria in
+        # Python (the default "evaluate" strategy) would compare the loaded
+        # ``expires_at`` against ``datetime.now(UTC)``, which raises on backends
+        # that return naive datetimes (e.g. SQLite). The DB does the comparison.
+        .execution_options(synchronize_session=False)
     )
     result: CursorResult[Any] = db.execute(stmt)
     db.commit()
