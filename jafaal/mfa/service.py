@@ -18,7 +18,9 @@ Module layering (where MFA logic lives):
 from __future__ import annotations
 
 import base64
+import hmac
 import logging
+import time
 from io import BytesIO
 from typing import TYPE_CHECKING
 
@@ -34,6 +36,7 @@ import jafaal.mfa.crud as jafaal_mfa_crud
 import jafaal.mfa.schema as mfa_schema
 import jafaal.settings as jafaal_settings
 from jafaal._core import crypto
+from jafaal.state_store import StateStoreUnavailableError, get_state_store
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +71,75 @@ def verify_totp(secret: str, token: str) -> bool:
     """
     totp = pyotp.TOTP(secret)
     return totp.verify(token, valid_window=1)  # Allow 1 window tolerance
+
+
+# TOTP replay protection --------------------------------------------------- #
+# A valid TOTP code stays valid for the whole ``valid_window`` tolerance
+# (±1 step ≈ 90s). Without single-use enforcement the same code can be
+# replayed within that window (e.g. on the step-up path, which is not bounded
+# by the single-use pending-MFA claim the login flow has). We record the
+# matched timestep in the ephemeral state store and reject any second use.
+_TOTP_VALID_WINDOW = 1
+# Retain the marker a little beyond the acceptance window so a code cannot be
+# replayed while still valid, then let it expire (no unbounded growth).
+_TOTP_REPLAY_TTL_SECONDS = 30 * (2 * _TOTP_VALID_WINDOW + 1) + 30
+
+
+def _matched_totp_timestep(secret: str, token: str, valid_window: int = _TOTP_VALID_WINDOW) -> int | None:
+    """Return the absolute TOTP timestep ``token`` matches, or ``None``.
+
+    Mirrors :func:`verify_totp` (same ``valid_window`` tolerance) but returns
+    the matched counter so the caller can enforce single-use per timestep.
+    Comparison is constant-time.
+
+    Args:
+        secret: Base32-encoded TOTP secret.
+        token: Candidate TOTP code.
+        valid_window: Number of steps of clock-drift tolerance either side.
+
+    Returns:
+        The matched timestep (``unix_time // interval``), or ``None`` if the
+        code does not match any step in the window.
+    """
+    totp = pyotp.TOTP(secret)
+    current_timestep = int(time.time()) // totp.interval
+    for offset in range(-valid_window, valid_window + 1):
+        candidate = current_timestep + offset
+        if hmac.compare_digest(totp.at(candidate * totp.interval), token):
+            return candidate
+    return None
+
+
+def _totp_used_key(user_id: int, timestep: int) -> str:
+    """Build the state-store key marking a consumed TOTP timestep for a user."""
+    prefix = jafaal_settings.get_settings().store_key_prefix
+    return f"{prefix}:mfa:totp_used:{user_id}:{timestep}"
+
+
+def _totp_timestep_already_used(user_id: int, timestep: int) -> bool:
+    """Return ``True`` if this TOTP timestep was already consumed (a replay).
+
+    Fails open on a state-store outage: replay protection is defense-in-depth
+    layered on top of the (unchanged) TOTP verification, so an unavailable
+    backend must not lock users out of MFA entirely.
+    """
+    try:
+        return get_state_store().get(_totp_used_key(user_id, timestep)) is not None
+    except StateStoreUnavailableError as err:
+        logger.warning("TOTP replay check skipped; state store unavailable", exc_info=err)
+        return False
+
+
+def _mark_totp_timestep_used(user_id: int, timestep: int) -> None:
+    """Record that ``timestep`` has been consumed for ``user_id`` (with TTL)."""
+    try:
+        get_state_store().set(
+            _totp_used_key(user_id, timestep),
+            b"1",
+            ttl_seconds=_TOTP_REPLAY_TTL_SECONDS,
+        )
+    except StateStoreUnavailableError as err:
+        logger.warning("Could not record consumed TOTP timestep; replay protection degraded", exc_info=err)
 
 
 def generate_qr_code(secret: str, username: str, app_name: str = "Jafaal") -> str:
@@ -254,7 +326,15 @@ def verify_user_mfa(
                 logger.error("Failed to decrypt MFA secret")
                 return False
 
-            if verify_totp(secret, normalized_code):
+            # Resolve which timestep the code matches so we can enforce
+            # single-use (replay protection) rather than accepting the same
+            # code repeatedly while it stays inside the validity window.
+            matched_timestep = _matched_totp_timestep(secret, normalized_code)
+            if matched_timestep is not None:
+                if _totp_timestep_already_used(user.id, matched_timestep):
+                    logger.warning(f"Rejected replayed TOTP code for user {user_id}")
+                    return False
+                _mark_totp_timestep_used(user.id, matched_timestep)
                 logger.debug(f"User {user_id} verified MFA with TOTP")
                 return True
         except ValueError as err:

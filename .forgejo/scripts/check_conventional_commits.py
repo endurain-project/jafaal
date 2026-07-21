@@ -88,10 +88,7 @@ def _validate_message(message: str) -> list[str]:
     # Project policy: restrict to a known set of types. Types are matched
     # case-insensitively per the Conventional Commits spec.
     if commit_type.lower() not in ALLOWED_TYPES:
-        errors.append(
-            f"type '{commit_type}' is not allowed; "
-            f"use one of: {', '.join(ALLOWED_TYPES)}"
-        )
+        errors.append(f"type '{commit_type}' is not allowed; use one of: {', '.join(ALLOWED_TYPES)}")
 
     return errors
 
@@ -150,8 +147,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if failures:
         print(
-            f"\n{failures} of {checked} message(s) failed Conventional Commits "
-            "validation.",
+            f"\n{failures} of {checked} message(s) failed Conventional Commits validation.",
             file=sys.stderr,
         )
         return 1

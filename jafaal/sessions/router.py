@@ -12,8 +12,10 @@ from fastapi import (
 )
 from sqlalchemy.orm import Session
 
+import jafaal._internal.user_guards as jafaal_user_guards
 import jafaal.dependencies as jafaal_dependencies
 import jafaal.orm as jafaal_orm
+import jafaal.principal as jafaal_principal
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.schema as jafaal_sessions_schema
 import jafaal.settings as jafaal_settings
@@ -35,6 +37,10 @@ async def read_sessions_user(
         None,
         Security(jafaal_dependencies.check_scopes, scopes=["sessions:read"]),
     ],
+    principal: Annotated[
+        jafaal_principal.Principal,
+        Depends(jafaal_dependencies.get_current_principal),
+    ],
     db: Annotated[Session, Depends(jafaal_orm.get_db)],
 ) -> list[jafaal_sessions_schema.UsersSessionsRead]:
     """
@@ -43,11 +49,13 @@ async def read_sessions_user(
     Args:
         user_id: The ID of the user whose sessions to retrieve.
         _check_scope: Scope validation dependency.
+        principal: The authenticated principal (object-level access check).
         db: Database session dependency.
 
     Returns:
         List of session objects for the specified user.
     """
+    jafaal_user_guards.assert_can_access_user(principal, user_id)
     if jafaal_settings.get_settings().environment != "demo":
         return jafaal_sessions_crud.get_user_sessions(user_id, db)
     else:
@@ -66,6 +74,10 @@ async def delete_session_user(
         None,
         Security(jafaal_dependencies.check_scopes, scopes=["sessions:write"]),
     ],
+    principal: Annotated[
+        jafaal_principal.Principal,
+        Depends(jafaal_dependencies.get_current_principal),
+    ],
     db: Annotated[Session, Depends(jafaal_orm.get_db)],
 ) -> None:
     """
@@ -75,6 +87,7 @@ async def delete_session_user(
         session_id: The ID of the session to delete.
         user_id: The ID of the user who owns the session.
         _check_scope: Scope validation dependency.
+        principal: The authenticated principal (object-level access check).
         db: Database session dependency.
 
     Returns:
@@ -83,6 +96,7 @@ async def delete_session_user(
     Raises:
         JafaalError: If session not found or unauthorized.
     """
+    jafaal_user_guards.assert_can_access_user(principal, user_id)
     jafaal_sessions_crud.delete_session(session_id, user_id, db)
 
 
@@ -95,6 +109,10 @@ async def delete_sessions_user(
     _check_scope: Annotated[
         None,
         Security(jafaal_dependencies.check_scopes, scopes=["sessions:write"]),
+    ],
+    principal: Annotated[
+        jafaal_principal.Principal,
+        Depends(jafaal_dependencies.get_current_principal),
     ],
     db: Annotated[Session, Depends(jafaal_orm.get_db)],
     exclude_session_id: Annotated[
@@ -113,12 +131,14 @@ async def delete_sessions_user(
     Args:
         user_id: The ID of the user whose sessions to revoke.
         _check_scope: Scope validation dependency.
+        principal: The authenticated principal (object-level access check).
         db: Database session dependency.
         exclude_session_id: Optional session to leave intact.
 
     Returns:
         None.
     """
+    jafaal_user_guards.assert_can_access_user(principal, user_id)
     jafaal_sessions_crud.delete_sessions_by_user(
         user_id,
         db,

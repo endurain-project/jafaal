@@ -1,0 +1,89 @@
+"""Tests for AuthSettings validation and the settings accessor lifecycle."""
+
+from dataclasses import FrozenInstanceError
+
+import pytest
+from cryptography.fernet import Fernet
+
+import jafaal
+from jafaal import settings as settings_mod
+
+
+def _valid(**overrides):
+    base = {
+        "secret_key": "k" * 32,
+        "fernet_key": Fernet.generate_key().decode(),
+        "base_url": "https://app.test",
+    }
+    base.update(overrides)
+    return jafaal.AuthSettings(**base)
+
+
+def test_requires_secret_key():
+    with pytest.raises(ValueError, match="secret_key"):
+        _valid(secret_key="")
+
+
+def test_requires_fernet_key():
+    with pytest.raises(ValueError, match="fernet_key"):
+        _valid(fernet_key="")
+
+
+def test_algorithm_must_be_allow_listed():
+    with pytest.raises(ValueError, match="algorithm"):
+        _valid(algorithm="none")
+    with pytest.raises(ValueError, match="algorithm"):
+        _valid(algorithm="RS256")
+
+
+def test_positive_expiries():
+    with pytest.raises(ValueError, match="access_token_expire_minutes"):
+        _valid(access_token_expire_minutes=0)
+    with pytest.raises(ValueError, match="refresh_token_expire_days"):
+        _valid(refresh_token_expire_days=-1)
+
+
+def test_issuer_audience_fall_back_to_base_url():
+    s = _valid()
+    assert s.resolved_issuer == "https://app.test"
+    assert s.resolved_audience == "https://app.test"
+    s2 = _valid(issuer="iss", audience="aud")
+    assert s2.resolved_issuer == "iss"
+    assert s2.resolved_audience == "aud"
+
+
+def test_is_deployed():
+    assert _valid(environment="production").is_deployed is True
+    assert _valid(environment="demo").is_deployed is True
+    assert _valid(environment="test").is_deployed is False
+
+
+def test_settings_are_frozen():
+    s = _valid()
+    with pytest.raises(FrozenInstanceError):
+        s.secret_key = "other"  # type: ignore[misc]
+
+
+def test_configure_get_reset_and_generation():
+    # Snapshot current (the session fixture configured one) and restore after.
+    original = settings_mod.get_settings()
+    gen_before = settings_mod.settings_generation()
+
+    try:
+        settings_mod.configure(_valid(app_name="Reconfigured"))
+        assert settings_mod.is_configured() is True
+        assert settings_mod.get_settings().app_name == "Reconfigured"
+        assert settings_mod.settings_generation() > gen_before
+
+        settings_mod.reset()
+        assert settings_mod.is_configured() is False
+        with pytest.raises(RuntimeError, match="not configured"):
+            settings_mod.get_settings()
+    finally:
+        # Restore for the rest of the session no matter what.
+        settings_mod.configure(original)
+
+
+def test_configure_rejects_wrong_type():
+    with pytest.raises(TypeError):
+        settings_mod.configure({"secret_key": "x"})  # type: ignore[arg-type]

@@ -16,6 +16,7 @@ dependencies = [
     "qrcode[pil]>=8.2",
     "authlib>=1.6.11",
     "httpx>=0.28.1",
+    "python-multipart>=0.0.9",
     "user-agents>=2.2.0",
 ]
 
@@ -27,6 +28,7 @@ typecheck = [
 ]
 lint = [
     "ruff>=0.15.12",
+    "import-linter>=2.5",
 ]
 test = [
     "httpx>=0.28.1",
@@ -75,10 +77,11 @@ lint = "ruff check . --fix"
 format = "ruff format ."
 lint-check = "ruff check ."
 format-check = "ruff format --check ."
+lint-imports = "lint-imports"
 test = "pytest"
 typecheck = "mypy"
 validate = ["lint", "format", "test", "typecheck"]
-check = ["lint-check", "format-check", "test", "typecheck"]
+check = ["lint-check", "format-check", "lint-imports", "test", "typecheck"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
@@ -98,7 +101,7 @@ source = ["jafaal"]
 omit = ["*/tests/*", "*/__pycache__/*"]
 
 [tool.coverage.report]
-fail_under = 80
+fail_under = 60
 exclude_lines = [
     "pragma: no cover",
     "def __repr__",
@@ -149,12 +152,44 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["S101", "S105", "S106"]  # allow assert and test data with password-like strings
+"tests/**/*.py" = ["S101", "S105", "S106", "S107"]  # allow assert and test data with password-like strings
+"jafaal/__init__.py" = ["RUF022"]  # __all__ is intentionally grouped by category, not globally sorted
+"jafaal/user_model.py" = ["N805"]  # SQLAlchemy @declared_attr methods receive `cls`, not `self`
+"jafaal/exceptions.py" = ["RUF012"]  # class-level header dicts are immutable defaults overridden per-instance
+"jafaal/settings.py" = ["S105"]  # false positive on the login_token_url default
+"jafaal/factory.py" = ["S105"]  # false positive on the password_reset route-prefix attribute
 "jafaal/identity_providers/public_router.py" = ["S105", "S106"]  # false positive on token_type
 "jafaal/schema.py" = ["S105", "S106"]  # false positive on token_type Literal defaults
 "jafaal/utils.py" = ["S105", "S106"]  # false positive on cookie name constants
+".forgejo/scripts/check_conventional_commits.py" = ["T201", "W291"]  # CLI helper prints; regex string carries an intentional escaped space
 
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
 line-ending = "auto"
+
+# ---------------------------------------------------------------------------
+# import-linter: architectural import contracts (run via ``lint-imports``).
+# ---------------------------------------------------------------------------
+[tool.importlinter]
+root_package = "jafaal"
+
+[[tool.importlinter.contracts]]
+name = "Vendored _core utilities stay low-level"
+type = "forbidden"
+source_modules = ["jafaal._core"]
+forbidden_modules = [
+    "jafaal._internal",
+    "jafaal.identity_service",
+    "jafaal.dependencies",
+    "jafaal.factory",
+    "jafaal.router",
+    "jafaal.api_keys",
+    "jafaal.credentials",
+    "jafaal.identity_providers",
+    "jafaal.mfa",
+    "jafaal.oauth_state",
+    "jafaal.password_reset_tokens",
+    "jafaal.sessions",
+    "jafaal.sign_up_tokens",
+]

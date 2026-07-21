@@ -9,25 +9,9 @@ import asyncio
 import json
 
 import pytest
-from cryptography.fernet import Fernet
 
-import jafaal
 from jafaal import exceptions as exc
 from jafaal.error_handler import jafaal_exception_handler
-
-
-@pytest.fixture(scope="module", autouse=True)
-def _configured():
-    jafaal.configure(
-        jafaal.AuthSettings(
-            secret_key="s" * 32,
-            fernet_key=Fernet.generate_key().decode(),
-            base_url="https://app.test",
-        )
-    )
-    yield
-    jafaal.reset()
-
 
 # --------------------------------------------------------------------------- #
 # Hierarchy contract

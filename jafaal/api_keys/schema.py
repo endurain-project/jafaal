@@ -73,7 +73,7 @@ class UsersApiKeyCreate(BaseModel):
     @classmethod
     def scopes_must_be_valid(cls, v: list[str]) -> list[str]:
         """
-        Validate API keys only grant activity upload access.
+        Validate requested scopes against the host-configured API-key allow-list.
 
         Args:
             v: List of scope strings to validate.
@@ -84,11 +84,10 @@ class UsersApiKeyCreate(BaseModel):
         Raises:
             ValueError: If any scope is not supported.
         """
-        unsupported = set(v) - api_keys_utils.SUPPORTED_API_KEY_SCOPES
+        supported = api_keys_utils.get_api_key_scopes()
+        unsupported = set(v) - supported
         if unsupported:
-            raise ValueError(
-                f"Unsupported API key scopes: {unsupported}. Valid scopes: {api_keys_utils.SUPPORTED_API_KEY_SCOPES}"
-            )
+            raise ValueError(f"Unsupported API key scopes: {sorted(unsupported)}. Valid scopes: {sorted(supported)}")
         return v
 
     model_config = ConfigDict(from_attributes=True)

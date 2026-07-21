@@ -38,11 +38,11 @@ jobs:
 
       - name: Sync dependencies
         working-directory: jafaal
-        run: uv sync --frozen --no-dev --group test --no-install-project
+        run: uv sync --frozen --no-dev --group test --group lint --no-install-project
 
       - name: Check auth import boundaries
         working-directory: jafaal
-        run: PYTHONPATH=app uv run --no-sync lint-imports
+        run: uv run --no-sync lint-imports
 
       - name: Run tests
         working-directory: jafaal

@@ -2,11 +2,42 @@
 
 import json
 import secrets
+from collections.abc import Iterable
 
 import jafaal.settings as jafaal_settings
 import jafaal.token_hashing as token_hashing
 
-SUPPORTED_API_KEY_SCOPES = frozenset({"activities:upload"})
+# Host-configurable allow-list of scopes an API key may carry. JAFAAL ships no
+# application scopes of its own, so the default is empty: a host that offers API
+# keys installs the scopes it supports via :func:`configure_api_key_scopes`
+# (typically a curated subset of its :class:`~jafaal.scopes.ScopeCatalog`).
+# Until then, API-key creation rejects every requested scope. Keeping this
+# allow-list separate from the full JWT scope set means API keys never silently
+# gain access when new endpoints/scopes are added later.
+_supported_api_key_scopes: frozenset[str] = frozenset()
+
+
+def configure_api_key_scopes(scopes: Iterable[str]) -> None:
+    """Install the scopes an API key is allowed to grant.
+
+    Call once at startup, before serving requests.
+
+    Args:
+        scopes: The scope strings API keys may carry.
+    """
+    global _supported_api_key_scopes
+    _supported_api_key_scopes = frozenset(scopes)
+
+
+def get_api_key_scopes() -> frozenset[str]:
+    """Return the configured API-key scope allow-list (empty until configured)."""
+    return _supported_api_key_scopes
+
+
+def reset_api_key_scopes() -> None:
+    """Reset the API-key scope allow-list to empty. Intended for tests."""
+    global _supported_api_key_scopes
+    _supported_api_key_scopes = frozenset()
 
 
 def generate_api_key() -> str:
@@ -45,23 +76,24 @@ def validate_api_key_scopes(
     requested_scopes: list[str],
 ) -> None:
     """
-    Validate requested scopes against supported API-key scopes.
+    Validate requested scopes against the host-configured API-key allow-list.
 
-    API keys currently support only activity uploads. Keeping this
-    allow-list separate from the full JWT scope set prevents API keys
-    from silently gaining access when new unified-auth endpoints are
-    added later.
+    The set of scopes an API key may carry is installed by the host via
+    :func:`configure_api_key_scopes` (empty by default). A request for any
+    scope outside that allow-list — or an empty request — is rejected.
 
     Args:
         requested_scopes: List of scopes the caller wants
             to assign to the new API key.
 
     Raises:
-        ValueError: If any requested scope is not supported.
+        ValueError: If any requested scope is not supported, or none is given.
     """
-    unsupported = set(requested_scopes) - SUPPORTED_API_KEY_SCOPES
+    supported = get_api_key_scopes()
+    unsupported = set(requested_scopes) - supported
     if unsupported or not requested_scopes:
-        raise ValueError(f"Unsupported API key scopes: {unsupported}. Valid scopes: {SUPPORTED_API_KEY_SCOPES}")
+        offending = unsupported or set(requested_scopes)
+        raise ValueError(f"Unsupported API key scopes: {sorted(offending)}. Valid scopes: {sorted(supported)}")
 
 
 def scopes_to_json(scopes: list[str]) -> str:

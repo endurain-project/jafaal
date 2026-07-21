@@ -72,6 +72,11 @@ from ._internal.security_stores import (
 )
 from ._internal.token_manager import TokenManager, TokenType, get_token_manager
 from .api_keys import models as _api_keys_models  # noqa: F401
+from .api_keys.utils import (
+    configure_api_key_scopes,
+    get_api_key_scopes,
+    reset_api_key_scopes,
+)
 from .credentials import models as _credentials_models  # noqa: F401
 from .dependencies import check_auth_scopes
 from .error_handler import jafaal_exception_handler, register_exception_handlers
@@ -272,6 +277,10 @@ __all__ = [
     "configure_scopes",
     "get_scope_catalog",
     "reset_scopes",
+    # API-key scopes (host-configured allow-list)
+    "configure_api_key_scopes",
+    "get_api_key_scopes",
+    "reset_api_key_scopes",
     # JWT / token management
     "TokenManager",
     "TokenResponseMobile",

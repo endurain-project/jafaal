@@ -21,8 +21,11 @@ from .schema import (
     UsersApiKeyRead,
 )
 from .utils import (
+    configure_api_key_scopes,
     generate_api_key,
+    get_api_key_scopes,
     hash_api_key,
+    reset_api_key_scopes,
     validate_api_key_scopes,
 )
 
@@ -31,13 +34,16 @@ __all__ = [
     "UsersApiKeyCreated",
     "UsersApiKeyRead",
     "UsersApiKeysModel",
+    "configure_api_key_scopes",
     "create_api_key",
     "delete_api_key",
     "generate_api_key",
     "get_api_key_by_hash",
     "get_api_key_by_id",
+    "get_api_key_scopes",
     "get_api_keys_by_user_id",
     "hash_api_key",
+    "reset_api_key_scopes",
     "revoke_api_key",
     "update_last_used",
     "validate_api_key_scopes",

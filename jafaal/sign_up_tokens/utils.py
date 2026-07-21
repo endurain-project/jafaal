@@ -173,6 +173,9 @@ def use_sign_up_token(token: str, db: Session) -> int:
     """
     Validate and consume a sign-up token.
 
+    The token is claimed atomically (a single conditional UPDATE), so two
+    concurrent confirmations of the same token cannot both succeed.
+
     Args:
         token: Plaintext sign-up token to validate.
         db: Active SQLAlchemy session.
@@ -181,29 +184,18 @@ def use_sign_up_token(token: str, db: Session) -> int:
         The user ID associated with the token.
 
     Raises:
-        JafaalError: 400 if the token is invalid or expired.
-        JafaalError: 500 if an unexpected error occurs.
+        JafaalError: 400 if the token is invalid, expired, or already used.
     """
     # Hash the provided token to find the database record
     token_hash = token_hashing.sha256_hex(token)
 
-    # Look up the token in the database
-    db_token = sign_up_tokens_crud.get_sign_up_token_by_hash(token_hash, db)
-
-    if not db_token:
+    # Atomically mark the token used and return its owner. A None result means
+    # the token was missing, expired, or already consumed.
+    user_id = sign_up_tokens_crud.claim_sign_up_token(token_hash, db)
+    if user_id is None:
         raise jafaal_exceptions.InvalidRequestError("Invalid or expired sign up token")
 
-    try:
-        # Mark token as used
-        sign_up_tokens_crud.mark_sign_up_token_used(db_token.id, db)
-
-        # Return the associated user ID
-        return db_token.user_id
-    except jafaal_exceptions.JafaalError:
-        raise
-    except Exception as err:
-        logger.error(f"Error in use_sign_up_token: {err}", exc_info=err)
-        raise jafaal_exceptions.InternalError() from err
+    return user_id
 
 
 def delete_invalid_tokens_from_db() -> None:

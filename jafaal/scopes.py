@@ -29,7 +29,8 @@ IDENTITY_PROVIDERS_WRITE = "identity_providers:write"
 # Scopes a non-superuser token carries.
 _JAFAAL_REGULAR: tuple[str, ...] = (PROFILE, USERS_READ, IDENTITY_PROVIDERS_READ)
 # Scopes a superuser token carries (a superset of the regular tier).
-_JAFAAL_ADMIN: tuple[str, ...] = _JAFAAL_REGULAR + (
+_JAFAAL_ADMIN: tuple[str, ...] = (
+    *_JAFAAL_REGULAR,
     USERS_WRITE,
     SESSIONS_READ,
     SESSIONS_WRITE,

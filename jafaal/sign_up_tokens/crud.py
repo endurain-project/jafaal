@@ -5,6 +5,7 @@ from typing import Any
 
 from sqlalchemy import CursorResult, select
 from sqlalchemy import delete as sa_delete
+from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
 import jafaal.sign_up_tokens.models as sign_up_tokens_models
@@ -64,6 +65,41 @@ def create_sign_up_token(
     db.commit()
     db.refresh(db_token)
     return db_token
+
+
+@db_errors.handle_db_errors
+def claim_sign_up_token(token_hash: str, db: Session) -> int | None:
+    """Atomically claim a valid sign-up token.
+
+    Marks the matching unused, unexpired token as used in a single statement
+    and returns its owner, so two concurrent confirmations of the same token
+    cannot both succeed (avoids the check-then-act race of a separate
+    select + update).
+
+    Args:
+        token_hash: SHA-256 hash of the plaintext sign-up token.
+        db: SQLAlchemy database session.
+
+    Returns:
+        User ID owning the claimed token, or None if the token is missing,
+        expired, or already used.
+
+    Raises:
+        JafaalError: 500 error if database operation fails.
+    """
+    stmt = (
+        sa_update(sign_up_tokens_models.SignUpToken)
+        .where(
+            sign_up_tokens_models.SignUpToken.token_hash == token_hash,
+            sign_up_tokens_models.SignUpToken.used.is_(False),
+            sign_up_tokens_models.SignUpToken.expires_at > datetime.now(UTC),
+        )
+        .values(used=True)
+        .returning(sign_up_tokens_models.SignUpToken.user_id)
+    )
+    user_id = db.execute(stmt).scalar_one_or_none()
+    db.commit()
+    return user_id
 
 
 @db_errors.handle_db_errors

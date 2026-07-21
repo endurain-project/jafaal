@@ -33,6 +33,37 @@ from jafaal._internal.internal_dependencies import (
     get_user_id_from_auth,
     validate_access_token_or_api_key,
 )
+from jafaal.principal import Principal
+
+
+def get_current_principal(
+    request: Request,
+    access_token: Annotated[str, Depends(get_access_token)],
+    identity_service: Annotated[
+        jafaal_identity_service.IdentityService,
+        Depends(jafaal_identity_service.get_identity_service),
+    ],
+) -> Principal:
+    """Resolve (and cache) the authenticated :class:`~jafaal.principal.Principal`.
+
+    Use this on endpoints that must apply object-level authorization (e.g.
+    comparing the caller to a ``user_id`` path parameter) in addition to a
+    scope check. Shares the per-request principal cache with the scope
+    dependencies, so it adds no extra DB lookup.
+
+    Args:
+        request: Current HTTP request (used for caching).
+        access_token: Raw JWT access token.
+        identity_service: Per-request IdentityService.
+
+    Returns:
+        The resolved principal.
+
+    Raises:
+        AuthenticationError: 401 if the token is invalid or the user is
+            not found/active.
+    """
+    return _resolve_and_cache_principal(access_token, request, identity_service)
 
 
 def validate_access_token(
@@ -117,6 +148,7 @@ __all__ = [
     "check_auth_scopes",
     "check_scopes",
     "get_access_token",
+    "get_current_principal",
     "get_sid_from_access_token",
     "get_step_up_attempts",
     "get_sub_from_access_token",
