@@ -1,6 +1,7 @@
 """Tests for the IdentityService boundary and the unified JWT/API-key resolver."""
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from starlette.requests import Request
@@ -120,6 +121,17 @@ def test_resolve_from_api_key_wrong_key(db, make_user):
 def test_resolve_from_api_key_revoked(db, make_user):
     user = make_user()
     _, raw = _make_api_key(db, user.id, is_active=False)
+    with pytest.raises(exc.InvalidApiKeyError):
+        _svc(db).resolve_from_api_key(raw, _request())
+
+
+def test_resolve_from_api_key_expired(db, make_user):
+    user = make_user()
+    db_key, raw = _make_api_key(db, user.id)
+    # Expire the key; expiry is compared in Python, so this exercises the
+    # tz-normalization that keeps the comparison safe on naive-datetime backends.
+    db_key.expires_at = datetime.now(UTC) - timedelta(days=1)
+    db.commit()
     with pytest.raises(exc.InvalidApiKeyError):
         _svc(db).resolve_from_api_key(raw, _request())
 

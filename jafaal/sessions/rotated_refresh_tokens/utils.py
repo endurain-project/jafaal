@@ -9,7 +9,7 @@ import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.rotated_refresh_tokens.crud as rotated_token_crud
 import jafaal.sessions.rotated_refresh_tokens.schema as rotated_token_schema
 import jafaal.token_hashing as token_hashing
-from jafaal._core import crypto
+from jafaal._core import crypto, timeutils
 from jafaal.orm import session_scope
 
 logger = logging.getLogger(__name__)
@@ -125,8 +125,9 @@ def check_token_reuse(raw_token: str, db: Session) -> tuple[bool, bool]:
 
     # Token was already rotated - check grace period
     now = datetime.now(UTC)
+    expires_at = timeutils.ensure_aware_utc(rotated_token.expires_at)
 
-    if now <= rotated_token.expires_at:
+    if now <= expires_at:
         # Within grace period - might be legitimate retry
         logger.warning(
             f"Token reuse within grace period for family {rotated_token.token_family_id}",
@@ -177,7 +178,7 @@ def get_grace_replay_token(raw_token: str, db: Session) -> tuple[str, datetime] 
         return None
 
     # Only replay inside the grace window; past it, reuse is theft.
-    if datetime.now(UTC) > rotated_token.expires_at:
+    if datetime.now(UTC) > timeutils.ensure_aware_utc(rotated_token.expires_at):
         return None
 
     if not rotated_token.replacement_refresh_token or rotated_token.replacement_refresh_token_exp is None:
@@ -188,7 +189,7 @@ def get_grace_replay_token(raw_token: str, db: Session) -> tuple[str, datetime] 
     if replacement is None:
         return None
 
-    return (replacement, rotated_token.replacement_refresh_token_exp)
+    return (replacement, timeutils.ensure_aware_utc(rotated_token.replacement_refresh_token_exp))
 
 
 def invalidate_token_family(token_family_id: str, db: Session) -> int:

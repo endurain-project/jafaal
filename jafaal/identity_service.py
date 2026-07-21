@@ -54,6 +54,7 @@ import jafaal.ports as jafaal_ports
 import jafaal.schema as jafaal_schema
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.utils as jafaal_utils
+from jafaal._core import timeutils
 from jafaal.principal import (
     AccessTokenCred,
     ApiKeyCred,
@@ -862,7 +863,7 @@ class DefaultIdentityService:
         if not db_key.is_active:
             raise jafaal_exceptions.InvalidApiKeyError("API key has been revoked")
 
-        if db_key.expires_at is not None and datetime.now(UTC) > db_key.expires_at:
+        if db_key.expires_at is not None and datetime.now(UTC) > timeutils.ensure_aware_utc(db_key.expires_at):
             raise jafaal_exceptions.InvalidApiKeyError("API key has expired")
 
         # Best-effort last_used_at update; never fails the request.

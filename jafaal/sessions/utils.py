@@ -18,7 +18,7 @@ import jafaal.sessions.models as jafaal_sessions_models
 import jafaal.sessions.schema as jafaal_sessions_schema
 import jafaal.settings as jafaal_settings
 import jafaal.token_hashing as token_hashing
-from jafaal._core import network
+from jafaal._core import network, timeutils
 from jafaal.orm import session_scope
 
 logger = logging.getLogger(__name__)
@@ -119,12 +119,16 @@ def validate_session_timeout(
     now = datetime.now(UTC)
 
     # Check idle timeout
-    idle_limit = session.last_activity_at + timedelta(hours=settings.session_idle_timeout_hours)
+    idle_limit = timeutils.ensure_aware_utc(session.last_activity_at) + timedelta(
+        hours=settings.session_idle_timeout_hours
+    )
     if now > idle_limit:
         raise jafaal_exceptions.SessionExpiredError("Session expired due to inactivity")
 
     # Check absolute timeout
-    absolute_limit = session.created_at + timedelta(hours=settings.session_absolute_timeout_hours)
+    absolute_limit = timeutils.ensure_aware_utc(session.created_at) + timedelta(
+        hours=settings.session_absolute_timeout_hours
+    )
     if now > absolute_limit:
         raise jafaal_exceptions.SessionExpiredError("Session expired. Please login again for security.")
 
