@@ -1,10 +1,24 @@
 """Tests for the SSRF guard and proxy-aware client IP extraction."""
 
+import dataclasses
+from contextlib import contextmanager
+
 import pytest
 from starlette.requests import Request
 
+import jafaal
 import jafaal._core.network as network
 import jafaal.exceptions as exc
+
+
+@contextmanager
+def _settings(**overrides):
+    original = jafaal.get_settings()
+    jafaal.configure(dataclasses.replace(original, **overrides))
+    try:
+        yield
+    finally:
+        jafaal.configure(original)
 
 
 def _request(client_host, headers=None):
@@ -48,14 +62,23 @@ def test_reject_private_range():
 
 
 def test_get_ip_address_honours_xff_when_peer_trusted():
-    # Default trusted_proxies=("*",) trusts all peers, so XFF is honoured.
-    req = _request("203.0.113.1", {"X-Forwarded-For": "1.2.3.4, 5.6.7.8"})
-    assert network.get_ip_address(req) == "1.2.3.4"
+    # With a trust-all proxy list, XFF is honoured for any peer.
+    with _settings(trusted_proxies=("*",)):
+        req = _request("203.0.113.1", {"X-Forwarded-For": "1.2.3.4, 5.6.7.8"})
+        assert network.get_ip_address(req) == "1.2.3.4"
 
 
 def test_get_ip_address_uses_real_ip_header():
-    req = _request("203.0.113.1", {"X-Real-IP": "9.9.9.9"})
-    assert network.get_ip_address(req) == "9.9.9.9"
+    with _settings(trusted_proxies=("*",)):
+        req = _request("203.0.113.1", {"X-Real-IP": "9.9.9.9"})
+        assert network.get_ip_address(req) == "9.9.9.9"
+
+
+def test_get_ip_address_ignores_proxy_headers_by_default():
+    # The safe default (trusted_proxies=()) trusts only the direct peer, so a
+    # spoofed X-Forwarded-For from an arbitrary client is ignored.
+    req = _request("203.0.113.1", {"X-Forwarded-For": "1.2.3.4"})
+    assert network.get_ip_address(req) == "203.0.113.1"
 
 
 def test_get_ip_address_falls_back_to_peer():

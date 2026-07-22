@@ -15,6 +15,7 @@ from pwdlib.hashers import HasherProtocol
 from pwdlib.hashers.argon2 import Argon2Hasher
 from pwdlib.hashers.bcrypt import BcryptHasher
 
+import jafaal.settings as jafaal_settings
 from jafaal.exceptions import PasswordPolicyError
 
 
@@ -288,18 +289,49 @@ class PasswordHasher:
             return False
 
 
-def get_password_hasher():
-    """
-    Returns the password hasher instance.
+def get_password_hasher() -> PasswordHasher:
+    """Return the process-wide password hasher.
 
-    This function provides access to the application's password hasher, which is used for securely hashing and verifying passwords.
+    When JAFAAL is configured, the hasher is built from the Argon2 cost
+    parameters in :class:`~jafaal.settings.AuthSettings` (``argon2_time_cost`` /
+    ``argon2_memory_cost`` / ``argon2_parallelism``), cached, and transparently
+    rebuilt if :func:`jafaal.configure` is called again (mirroring
+    ``get_token_manager``). Before configuration it falls back to the
+    default-cost singleton, so isolated password hashing/verification works
+    without installing settings. Argon2/bcrypt hashes are self-describing, so a
+    hash produced at one cost still verifies (and is transparently upgraded via
+    ``verify_and_update``) at another.
 
     Returns:
-        password_hasher: An instance of the password hasher used for password operations.
+        PasswordHasher: The active password hasher.
     """
-    return password_hasher
+    global _settings_password_hasher, _settings_password_hasher_generation
+    if not jafaal_settings.is_configured():
+        return password_hasher
+    generation = jafaal_settings.settings_generation()
+    if _settings_password_hasher is None or _settings_password_hasher_generation != generation:
+        settings = jafaal_settings.get_settings()
+        _settings_password_hasher = PasswordHasher(
+            hasher=[
+                Argon2Hasher(
+                    time_cost=settings.argon2_time_cost,
+                    memory_cost=settings.argon2_memory_cost,
+                    parallelism=settings.argon2_parallelism,
+                ),
+                BcryptHasher(),
+            ]
+        )
+        _settings_password_hasher_generation = generation
+    return _settings_password_hasher
 
 
 # Initialize the PasswordHasher with both Argon2 and Bcrypt support
 # Argon2 listed first => new hashes use Argon2; bcrypt remains verifiable for legacy rows.
+# This default-cost instance is used before settings are installed (and is
+# imported directly by tests); get_password_hasher() returns a settings-tuned
+# instance once jafaal.configure has run.
 password_hasher = PasswordHasher(hasher=[Argon2Hasher(), BcryptHasher()])
+
+# Cached settings-derived hasher (rebuilt on settings-generation bump).
+_settings_password_hasher: PasswordHasher | None = None
+_settings_password_hasher_generation: int = -1

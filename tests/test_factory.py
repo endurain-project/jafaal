@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 
+import pytest
 from cryptography.fernet import Fernet
 from fastapi import FastAPI
 
@@ -115,28 +117,39 @@ def test_no_rate_limit_warning_when_configured(caplog):
 
 
 # --------------------------------------------------------------------------- #
-# In-memory state store warning (deployed environments)
+# In-memory state store guard (deployed environments)
 # --------------------------------------------------------------------------- #
 
 
-def test_warns_on_in_memory_state_store_when_deployed(caplog):
+def test_raises_on_in_memory_state_store_when_deployed():
     original = jafaal.get_settings()
     jafaal.configure(_production_settings())
     jafaal.reset_state_store()  # in-memory default
     jafaal.configure_rate_limiter(_DummyLimiter())  # silence the unrelated warning
     try:
-        with caplog.at_level(logging.WARNING, logger=FACTORY_LOGGER):
+        with pytest.raises(RuntimeError, match="in-memory StateStore in a deployed environment"):
             jafaal.create_auth_router()
-        text = caplog.text.lower()
-        assert "in-memory" in text
-        assert "deployed" in text
     finally:
         jafaal.configure(original)
         jafaal_rate_limit.reset_rate_limiter()
         jafaal.reset_state_store()
 
 
-def test_no_state_store_warning_with_distributed_backend(caplog):
+def test_in_memory_state_store_allowed_when_opted_in():
+    original = jafaal.get_settings()
+    jafaal.configure(dataclasses.replace(_production_settings(), allow_in_memory_state_store_when_deployed=True))
+    jafaal.reset_state_store()  # in-memory default
+    jafaal.configure_rate_limiter(_DummyLimiter())
+    try:
+        # Opt-out set → startup succeeds on the in-memory store (no raise).
+        jafaal.create_auth_router()
+    finally:
+        jafaal.configure(original)
+        jafaal_rate_limit.reset_rate_limiter()
+        jafaal.reset_state_store()
+
+
+def test_no_state_store_error_with_distributed_backend(caplog):
     original = jafaal.get_settings()
     jafaal.configure(_production_settings())
     jafaal.configure_state_store(_FakeDistributedStore())
@@ -151,13 +164,37 @@ def test_no_state_store_warning_with_distributed_backend(caplog):
         jafaal.reset_state_store()
 
 
-def test_no_state_store_warning_when_not_deployed(caplog):
+def test_no_state_store_error_when_not_deployed():
     # The session fixture configures environment="test" (not deployed).
     jafaal.reset_state_store()  # in-memory default
     jafaal.configure_rate_limiter(_DummyLimiter())
     try:
-        with caplog.at_level(logging.WARNING, logger=FACTORY_LOGGER):
-            jafaal.create_auth_router()
-        assert "in-memory" not in caplog.text.lower()
+        jafaal.create_auth_router()  # does not raise
     finally:
         jafaal_rate_limit.reset_rate_limiter()
+
+
+# --------------------------------------------------------------------------- #
+# verify_configuration
+# --------------------------------------------------------------------------- #
+
+
+def test_verify_configuration_passes_when_fully_configured():
+    # The session fixture installs settings, sessionmaker, user repo, and
+    # settings provider, so verification passes and returns None.
+    assert jafaal.verify_configuration() is None
+
+
+def test_verify_configuration_reports_all_missing_required_components():
+    repo = jafaal.get_user_repository()
+    provider = jafaal.get_settings_provider()
+    jafaal.reset_ports()  # clears the user repository + settings provider
+    try:
+        with pytest.raises(RuntimeError) as excinfo:
+            jafaal.verify_configuration()
+        message = str(excinfo.value)
+        assert "UserRepository" in message
+        assert "SettingsProvider" in message
+    finally:
+        jafaal.configure_user_repository(repo)
+        jafaal.configure_settings_provider(provider)

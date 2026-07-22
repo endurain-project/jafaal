@@ -1,9 +1,28 @@
 """Tests for PasswordHasher: hashing, verification, policy, and dummy verify."""
 
+import dataclasses
+
 import pytest
 
+import jafaal
 from jafaal._internal.password_hasher import PasswordHasher, get_password_hasher
 from jafaal.exceptions import PasswordPolicyError
+
+
+def test_get_password_hasher_uses_settings_argon2_cost():
+    # The Argon2 cost from AuthSettings must flow into the hasher: the produced
+    # hash string encodes the memory/time/parallelism parameters, so we assert
+    # they match the configured (distinctive, cheap) values.
+    original = jafaal.get_settings()
+    jafaal.configure(dataclasses.replace(original, argon2_memory_cost=8192, argon2_time_cost=1, argon2_parallelism=1))
+    try:
+        digest = get_password_hasher().hash_password("Str0ng!Pass")
+        assert digest.startswith("$argon2")
+        assert "m=8192" in digest
+        assert "t=1" in digest
+        assert "p=1" in digest
+    finally:
+        jafaal.configure(original)
 
 
 def test_hash_and_verify_roundtrip():

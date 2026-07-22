@@ -52,8 +52,8 @@ error carries a stable machine-readable `code` alongside its HTTP `status_code`.
 ## Deployment hardening
 
 JAFAAL runs out of the box in a single process, but a production deployment
-should address two silent-by-default footguns — `create_auth_router()` logs a
-startup **warning** for each:
+should address two silent-by-default footguns at startup — `create_auth_router()`
+**warns** about the first and **refuses to start** on the second:
 
 1. **Inject a real rate limiter.** The default is a no-op, so endpoints are not
    rate-limited until you call `jafaal.configure_rate_limiter(...)` (per-account
@@ -61,9 +61,11 @@ startup **warning** for each:
    `create_auth_router(rate_limiter=...)`.
 2. **Use a distributed state store for multi-worker deployments.** The in-memory
    `StateStore` is process-local, so multiple workers/replicas would keep lockout
-   and TOTP-replay state per worker. Configure a shared backend such as
-   [`RedisStateStore`](ports-and-adapters.md#redisstatestore) via
-   `jafaal.configure_state_store(...)`.
+   and TOTP-replay state per worker — `create_auth_router()` therefore raises in a
+   *deployed* environment when it is still active. Configure a shared backend such
+   as [`RedisStateStore`](ports-and-adapters.md#redisstatestore) via
+   `jafaal.configure_state_store(...)`, or set
+   `allow_in_memory_state_store_when_deployed=True` for a single-worker deployment.
 
 Also make sure to:
 

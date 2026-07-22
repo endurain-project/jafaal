@@ -15,6 +15,8 @@ leak between tests.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 from cryptography.fernet import Fernet
 from sqlalchemy import String, create_engine
@@ -132,7 +134,16 @@ class RecordingEventSink:
 
 @pytest.fixture(scope="session")
 def engine():
-    """A single shared in-memory SQLite engine (usable across threads)."""
+    """A single shared engine for the whole suite.
+
+    Defaults to an in-memory SQLite database shared across threads
+    (``StaticPool``). Set ``JAFAAL_TEST_DATABASE_URL`` (e.g. a Postgres or MySQL
+    URL) to run the identical suite against another backend — the CI database
+    matrix uses this to prove the ORM models and queries stay portable.
+    """
+    url = os.environ.get("JAFAAL_TEST_DATABASE_URL")
+    if url:
+        return create_engine(url)
     return create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},

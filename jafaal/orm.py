@@ -53,6 +53,7 @@ __all__ = [
     "get_db",
     "get_sessionmaker",
     "get_user_model",
+    "is_sessionmaker_configured",
     "session_scope",
     "user_id_python_type",
 ]
@@ -99,6 +100,11 @@ def get_sessionmaker() -> sessionmaker[Session]:
         RuntimeError: If :func:`configure_sessionmaker` has not been called.
     """
     return _session_factory.get()
+
+
+def is_sessionmaker_configured() -> bool:
+    """Return whether :func:`configure_sessionmaker` has been called."""
+    return _session_factory.is_configured()
 
 
 def get_db() -> Generator[Session]:

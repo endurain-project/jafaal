@@ -29,6 +29,8 @@ from typing import TYPE_CHECKING
 
 from fastapi import APIRouter
 
+import jafaal.orm as jafaal_orm
+import jafaal.ports as jafaal_ports
 import jafaal.rate_limit as jafaal_rate_limit
 import jafaal.settings as jafaal_settings
 import jafaal.state_store as jafaal_state_store
@@ -61,13 +63,15 @@ class RouterPrefixes:
 def _warn_on_insecure_defaults() -> None:
     """Log startup warnings when security-relevant defaults are still in effect.
 
-    Two silent-by-default footguns are surfaced here, at the single integration
-    entry point, so an operator sees them in the logs:
+    Surfaced here, at the single integration entry point, so an operator sees
+    them in the logs:
 
     * the no-op rate limiter (endpoints are not rate-limited); and
-    * the process-local in-memory state store in a *deployed* environment (a
-      multi-worker / multi-replica deployment then keeps lockout and TOTP-replay
-      state per-worker, weakening both).
+    * a trust-all ``trusted_proxies`` in a *deployed* environment (any client
+      can then spoof its source IP via ``X-Forwarded-For`` / ``X-Real-IP``).
+
+    The in-memory state store in a deployed environment is a *hard error*, not a
+    warning — see :func:`_ensure_state_store_safe_for_deployment`.
     """
     if not jafaal_rate_limit.is_enforcing():
         logger.warning(
@@ -78,13 +82,79 @@ def _warn_on_insecure_defaults() -> None:
         )
 
     deployed = jafaal_settings.is_configured() and jafaal_settings.get_settings().is_deployed
-    if deployed and isinstance(jafaal_state_store.get_state_store(), jafaal_state_store.InMemoryStateStore):
+    if deployed and tuple(jafaal_settings.get_settings().trusted_proxies) == ("*",):
         logger.warning(
-            "JAFAAL is using the in-memory StateStore in a deployed environment. It is process-local, "
-            "so a multi-worker / multi-replica deployment keeps progressive-lockout counters and "
-            "TOTP-replay markers per-worker, weakening brute-force and replay protection. Configure a "
-            "distributed backend via jafaal.configure_state_store(...) (e.g. jafaal.adapters.RedisStateStore)."
+            "JAFAAL trusted_proxies is set to ('*',) in a deployed environment: every peer is trusted, so "
+            "any client can spoof its source IP via X-Forwarded-For / X-Real-IP (poisoning session-IP audit "
+            "records and IdP link-token IP checks). Set trusted_proxies to your reverse proxy's IPs/CIDRs."
         )
+
+
+def _ensure_state_store_safe_for_deployment() -> None:
+    """Refuse to run on the in-memory state store in a deployed environment.
+
+    The process-local :class:`~jafaal.state_store.InMemoryStateStore` is correct
+    for a single process only; in a multi-worker / multi-replica deployment it
+    fragments progressive-lockout counters and TOTP-replay markers per worker,
+    weakening brute-force and replay protection. This is a hard failure at
+    startup (not a warning) unless the host explicitly opts in via
+    :attr:`~jafaal.settings.AuthSettings.allow_in_memory_state_store_when_deployed`
+    (single-worker deployments only).
+
+    Raises:
+        RuntimeError: If the environment is deployed, the in-memory store is
+            active, and the opt-out flag is not set.
+    """
+    if not jafaal_settings.is_configured():
+        return
+    settings = jafaal_settings.get_settings()
+    if not settings.is_deployed or settings.allow_in_memory_state_store_when_deployed:
+        return
+    if isinstance(jafaal_state_store.get_state_store(), jafaal_state_store.InMemoryStateStore):
+        raise RuntimeError(
+            "JAFAAL is using the in-memory StateStore in a deployed environment "
+            f"(environment={settings.environment!r}). It is process-local, so a multi-worker / "
+            "multi-replica deployment keeps progressive-lockout counters and TOTP-replay markers "
+            "per-worker, weakening brute-force and replay protection. Configure a distributed backend "
+            "via jafaal.configure_state_store(...) (e.g. jafaal.adapters.RedisStateStore), or set "
+            "AuthSettings.allow_in_memory_state_store_when_deployed=True for a single-worker deployment."
+        )
+
+
+def verify_configuration() -> None:
+    """Assert that every required host-supplied component is installed.
+
+    JAFAAL resolves several host adapters lazily, so a missing one otherwise
+    surfaces as a ``RuntimeError`` on the first request that needs it. Call this
+    once at startup (e.g. in a FastAPI lifespan handler) to fail fast with a
+    single, clear message listing everything that is missing.
+
+    Checks the components JAFAAL cannot default: the settings object, the session
+    factory, the user repository, and the settings provider. The event sink,
+    state store, rate limiter, and scope catalog all have working defaults and so
+    are not required here. Also enforces
+    :func:`_ensure_state_store_safe_for_deployment`.
+
+    Raises:
+        RuntimeError: If any required component is missing (the message
+            enumerates all of them), or if the in-memory state store is used in a
+            deployed environment without the opt-out.
+    """
+    missing: list[str] = []
+    if not jafaal_settings.is_configured():
+        missing.append("AuthSettings — call jafaal.configure(AuthSettings(...))")
+    if not jafaal_orm.is_sessionmaker_configured():
+        missing.append("session factory — call jafaal.configure_sessionmaker(sessionmaker(bind=engine))")
+    if not jafaal_ports.is_user_repository_configured():
+        missing.append("UserRepository — call jafaal.configure_user_repository(...)")
+    if not jafaal_ports.is_settings_provider_configured():
+        missing.append("SettingsProvider — call jafaal.configure_settings_provider(...)")
+    if missing:
+        raise RuntimeError(
+            "JAFAAL is not fully configured; the following required components are missing:\n"
+            + "\n".join(f"  - {item}" for item in missing)
+        )
+    _ensure_state_store_safe_for_deployment()
 
 
 def create_auth_router(
@@ -118,6 +188,7 @@ def create_auth_router(
     prefixes = prefixes or RouterPrefixes()
 
     _warn_on_insecure_defaults()
+    _ensure_state_store_safe_for_deployment()
 
     # Import the sub-routers lazily: the rate-limit decorators bind the
     # configured limiter at decoration (import) time, so the limiter must be

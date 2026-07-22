@@ -42,16 +42,22 @@ the settings and invalidates settings-derived caches (e.g. the token manager).
 | `base_url` | `""` | Public base URL; default JWT issuer/audience and SSO redirect base. |
 | `environment` | `"production"` | `production`/`demo` are treated as deployed (cookie `Secure`). |
 | `allow_api_key_query_param` | `False` | Whether API keys may be sent via `?api_key=` (header only by default). |
+| `allow_in_memory_state_store_when_deployed` | `False` | Permit the in-memory state store in a deployed environment (single-worker only; otherwise `create_auth_router()` raises at startup). |
+| `argon2_time_cost` | `3` | Argon2 time cost (iterations) for password hashing. |
+| `argon2_memory_cost` | `65536` | Argon2 memory cost, in KiB. |
+| `argon2_parallelism` | `4` | Argon2 parallelism (lanes). |
 | `rate_limit_sensitive` | `"10/minute"` | Budget hint for sensitive endpoints. |
 | `rate_limit_write` | `"30/minute"` | Budget hint for write endpoints. |
-| `trusted_proxies` | `("*",)` | Peers whose `X-Forwarded-For`/`X-Real-IP` are honoured. |
+| `trusted_proxies` | `()` | Peers whose `X-Forwarded-For`/`X-Real-IP` are honoured (empty = trust only the direct peer). |
 | `ssrf_allowed_hosts` | `()` | Hosts/CIDRs exempted from the SSRF private-address guard. |
 
 !!! warning "Behind a proxy"
-    `trusted_proxies` defaults to `("*",)` (trust every peer), which is correct
-    for a single node but permissive behind an untrusted network. Set it to your
-    actual proxy addresses/CIDRs so clients cannot spoof their IP (the client IP
-    keys the progressive-lockout counters).
+    `trusted_proxies` defaults to `()` — only the direct TCP peer is trusted, so
+    `X-Forwarded-For`/`X-Real-IP` from arbitrary clients are ignored (a client
+    cannot spoof the IP that keys the progressive-lockout counters). When running
+    behind a reverse proxy, set it to your proxy addresses/CIDRs so the real
+    client IP is used; `("*",)` trusts every peer (only safe when a trusted proxy
+    always overwrites the header).
 
 ## Database: `Base` and the session factory
 
@@ -108,9 +114,16 @@ infrastructure you inject:
 ```
 
 `create_auth_router()` logs a startup **warning** when the no-op rate limiter is
-still active, or when the in-memory state store is used in a *deployed*
-environment (see [Security → Deployment hardening](security.md#deployment-hardening)).
+still active, and **refuses to start** (raises `RuntimeError`) when the in-memory
+state store is used in a *deployed* environment — set
+`allow_in_memory_state_store_when_deployed=True` to override for a single-worker
+deployment (see [Security → Deployment hardening](security.md#deployment-hardening)).
 For multi-worker/replica deployments, inject a distributed
 [`StateStore`][jafaal.StateStore] (e.g.
 [`RedisStateStore`](ports-and-adapters.md#redisstatestore)) and a
 [`RateLimiter`][jafaal.RateLimiter].
+
+Call `jafaal.verify_configuration()` once at startup (e.g. in a FastAPI lifespan
+handler) to fail fast if a required component — the settings object, the session
+factory, the user repository, or the settings provider — has not been installed,
+instead of hitting a `RuntimeError` on the first request that needs it.

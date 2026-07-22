@@ -306,6 +306,11 @@ def get_user_repository() -> UserRepository:
     return _user_repository.get()
 
 
+def is_user_repository_configured() -> bool:
+    """Return whether a :class:`UserRepository` has been installed."""
+    return _user_repository.is_configured()
+
+
 def configure_settings_provider(provider: SettingsProvider) -> None:
     """Install the host's :class:`SettingsProvider`. Call once at startup."""
     _settings_provider.configure(provider)
@@ -318,6 +323,11 @@ def get_settings_provider() -> SettingsProvider:
         RuntimeError: If none has been configured.
     """
     return _settings_provider.get()
+
+
+def is_settings_provider_configured() -> bool:
+    """Return whether a :class:`SettingsProvider` has been installed."""
+    return _settings_provider.is_configured()
 
 
 def configure_event_sink(sink: AuthEventSink) -> None:
@@ -356,5 +366,7 @@ __all__ = [
     "get_event_sink",
     "get_settings_provider",
     "get_user_repository",
+    "is_settings_provider_configured",
+    "is_user_repository_configured",
     "reset_ports",
 ]

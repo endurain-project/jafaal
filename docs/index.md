@@ -43,7 +43,7 @@ pip install jafaal
 uv add jafaal
 ```
 
-Requires Python 3.13+.
+Requires Python 3.12+.
 
 ### Optional features
 

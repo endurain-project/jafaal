@@ -22,7 +22,7 @@ router = APIRouter()
     response_model=list[idp_schema.IdentityProvider],
     status_code=status.HTTP_200_OK,
 )
-async def list_identity_providers(
+def list_identity_providers(
     _check_scopes: Annotated[
         None,
         Security(jafaal_dependencies.check_scopes, scopes=["identity_providers:read"]),
@@ -50,7 +50,7 @@ async def list_identity_providers(
     response_model=list[idp_schema.IdentityProviderTemplate],
     status_code=status.HTTP_200_OK,
 )
-async def list_idp_templates(
+def list_idp_templates(
     _check_scopes: Annotated[
         None,
         Security(jafaal_dependencies.check_scopes, scopes=["identity_providers:read"]),
@@ -74,7 +74,7 @@ async def list_idp_templates(
     response_model=idp_schema.IdentityProvider,
     status_code=status.HTTP_201_CREATED,
 )
-async def create_identity_provider(
+def create_identity_provider(
     _check_scopes: Annotated[
         None,
         Security(jafaal_dependencies.check_scopes, scopes=["identity_providers:write"]),
@@ -106,7 +106,7 @@ async def create_identity_provider(
     response_model=idp_schema.IdentityProvider,
     status_code=status.HTTP_200_OK,
 )
-async def update_identity_provider(
+def update_identity_provider(
     idp_id: int,
     _validate_id: Annotated[Callable, Depends(idp_dependencies.validate_idp_id)],
     _check_scopes: Annotated[
@@ -137,7 +137,7 @@ async def update_identity_provider(
 
 
 @router.delete("/{idp_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_identity_provider(
+def delete_identity_provider(
     idp_id: int,
     _validate_id: Annotated[Callable, Depends(idp_dependencies.validate_idp_id)],
     _check_scopes: Annotated[

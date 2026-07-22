@@ -32,7 +32,7 @@ router = APIRouter()
     response_model=list[jafaal_sessions_schema.UsersSessionsRead],
     status_code=status.HTTP_200_OK,
 )
-async def read_sessions_user(
+def read_sessions_user(
     user_id: UserId,
     _check_scope: Annotated[
         None,
@@ -71,7 +71,7 @@ async def read_sessions_user(
     "/{session_id}/user/{user_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
-async def delete_session_user(
+def delete_session_user(
     session_id: str,
     user_id: UserId,
     _check_scope: Annotated[
@@ -108,7 +108,7 @@ async def delete_session_user(
     "/user/{user_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
-async def delete_sessions_user(
+def delete_sessions_user(
     user_id: UserId,
     _check_scope: Annotated[
         None,

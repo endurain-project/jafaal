@@ -98,7 +98,7 @@ def _raise_auth_security_store_unavailable(
     ),
 )
 @jafaal_rate_limit.limit(jafaal_rate_limit.SENSITIVE)
-async def login_for_access_token(
+def login_for_access_token(
     response: Response,
     request: Request,
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
@@ -261,7 +261,7 @@ async def login_for_access_token(
     ),
 )
 @jafaal_rate_limit.limit(jafaal_rate_limit.SENSITIVE)
-async def verify_mfa_and_login(
+def verify_mfa_and_login(
     response: Response,
     request: Request,
     mfa_request: jafaal_schema.MFALoginRequest,

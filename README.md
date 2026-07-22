@@ -7,7 +7,7 @@
 [![Release](https://img.shields.io/badge/dynamic/json?url=https://codeberg.org/api/v1/repos/endurain-project/jafaal/releases/latest&query=$.tag_name&label=release&color=blue)](https://codeberg.org/endurain-project/jafaal/releases)
 [![PyPI version](https://img.shields.io/pypi/v/jafaal)](https://pypi.org/project/jafaal/)
 [![PyPI downloads](https://img.shields.io/pypi/dm/jafaal)](https://pypi.org/project/jafaal/)
-[![Python](https://img.shields.io/badge/python-3.13%2B-blue)](https://pypi.org/project/jafaal/)
+[![Python](https://img.shields.io/badge/python-3.12%2B-blue)](https://pypi.org/project/jafaal/)
 [![Docs](https://img.shields.io/badge/docs-endurain--project.codeberg.page-blue)](https://jafaal.endurain.com/)
 [![Stars](https://img.shields.io/badge/dynamic/json?url=https://codeberg.org/api/v1/repos/endurain-project/jafaal&query=$.stars_count&label=stars&logo=codeberg)](https://codeberg.org/endurain-project/jafaal)
 
@@ -38,7 +38,7 @@ pip install jafaal
 uv add jafaal
 ```
 
-Requires Python 3.13+.
+Requires Python 3.12+.
 
 ### Optional features
 

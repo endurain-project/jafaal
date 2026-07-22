@@ -25,7 +25,7 @@ router = APIRouter()
     response_model=list[api_keys_schema.UsersApiKeyRead],
     status_code=status.HTTP_200_OK,
 )
-async def get_user_api_keys(
+def get_user_api_keys(
     token_user_id: Annotated[
         int,
         Depends(jafaal_internal_dependencies.get_sub_from_access_token),
@@ -51,7 +51,7 @@ async def get_user_api_keys(
     response_model=api_keys_schema.UsersApiKeyCreated,
     status_code=status.HTTP_201_CREATED,
 )
-async def create_user_api_key(
+def create_user_api_key(
     data: api_keys_schema.UsersApiKeyCreate,
     token_user_id: Annotated[
         int,
@@ -130,7 +130,7 @@ async def create_user_api_key(
     "/{api_key_id}/revoke",
     status_code=status.HTTP_204_NO_CONTENT,
 )
-async def revoke_user_api_key(
+def revoke_user_api_key(
     api_key_id: str,
     token_user_id: Annotated[
         int,
@@ -163,7 +163,7 @@ async def revoke_user_api_key(
     "/{api_key_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
-async def delete_user_api_key(
+def delete_user_api_key(
     api_key_id: str,
     token_user_id: Annotated[
         int,

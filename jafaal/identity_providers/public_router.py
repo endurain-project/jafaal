@@ -75,7 +75,7 @@ def _build_link_result_url(redirect_path: str | None, idp_name: str | None, *, s
     response_model=list[idp_schema.IdentityProviderPublic],
     status_code=status.HTTP_200_OK,
 )
-async def get_enabled_identity_providers(db: Annotated[Session, Depends(jafaal_orm.get_db)]):
+def get_enabled_identity_providers(db: Annotated[Session, Depends(jafaal_orm.get_db)]):
     """
     Retrieve a list of enabled identity providers from the database.
 
@@ -383,7 +383,7 @@ async def handle_callback(
     status_code=status.HTTP_200_OK,
 )
 @jafaal_rate_limit.limit(jafaal_rate_limit.SENSITIVE)
-async def exchange_tokens_for_session(
+def exchange_tokens_for_session(
     session_id: str,
     request: Request,
     response: Response,

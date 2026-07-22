@@ -109,7 +109,7 @@ from .exceptions import (
     UpstreamError,
     UpstreamTimeoutError,
 )
-from .factory import RouterPrefixes, create_auth_router
+from .factory import RouterPrefixes, create_auth_router, verify_configuration
 from .identity_providers import models as _idp_models  # noqa: F401
 from .identity_providers.link_tokens import models as _idp_link_token_models  # noqa: F401
 from .identity_providers.links import models as _idp_link_models  # noqa: F401
@@ -202,6 +202,7 @@ __all__ = [
     "create_auth_router",
     "get_settings",
     "reset",
+    "verify_configuration",
     # Ports (host-implemented boundary)
     "AuthEventSink",
     "EmailVerificationRequested",

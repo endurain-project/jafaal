@@ -57,6 +57,27 @@ def test_positive_expiries():
         _valid(refresh_token_expire_days=-1)
 
 
+def test_positive_argon2_cost():
+    with pytest.raises(ValueError, match="argon2_time_cost"):
+        _valid(argon2_time_cost=0)
+    with pytest.raises(ValueError, match="argon2_memory_cost"):
+        _valid(argon2_memory_cost=0)
+    with pytest.raises(ValueError, match="argon2_parallelism"):
+        _valid(argon2_parallelism=-1)
+
+
+def test_secure_defaults():
+    s = _valid()
+    # trusted_proxies is empty by default: trust only the direct peer, so a
+    # client cannot spoof its source IP via X-Forwarded-For / X-Real-IP.
+    assert s.trusted_proxies == ()
+    # The process-local in-memory state store is not permitted in a deployed
+    # environment unless the host explicitly opts in.
+    assert s.allow_in_memory_state_store_when_deployed is False
+    # Argon2 cost defaults match pwdlib / argon2-cffi.
+    assert (s.argon2_time_cost, s.argon2_memory_cost, s.argon2_parallelism) == (3, 65536, 4)
+
+
 def test_issuer_audience_fall_back_to_base_url():
     s = _valid()
     assert s.resolved_issuer == "https://app.test"

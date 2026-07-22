@@ -87,6 +87,16 @@ class AuthSettings:
         allow_api_key_query_param: Whether API keys may be supplied via the
             ``?api_key=`` query string (a security risk; defaults to False so
             only the ``X-API-Key`` header is accepted).
+        allow_in_memory_state_store_when_deployed: Permit the process-local
+            in-memory :class:`~jafaal.state_store.StateStore` in a *deployed*
+            environment. Off by default: :func:`jafaal.create_auth_router`
+            refuses to start with the in-memory store when deployed, because a
+            multi-worker/replica deployment would fragment progressive-lockout
+            and TOTP-replay state per-worker. Set ``True`` only for a genuine
+            single-worker deployment.
+        argon2_time_cost: Argon2 time cost (iterations) for password hashing.
+        argon2_memory_cost: Argon2 memory cost, in KiB.
+        argon2_parallelism: Argon2 parallelism (lanes).
         app_name: Human-readable application name; used as the MFA TOTP issuer
             shown in authenticator apps.
         user_agent: ``User-Agent`` header sent on outbound OIDC HTTP calls.
@@ -102,7 +112,12 @@ class AuthSettings:
         rate_limit_write: Budget for write endpoints (e.g. logout, session
             revocation), consumed by the host's ``RateLimiter``.
         trusted_proxies: Peers whose ``X-Forwarded-For`` / ``X-Real-IP`` headers
-            are honoured. ``("*",)`` trusts all peers (single-node default).
+            are honoured. Empty by default, which trusts only the direct TCP
+            peer (the safe default: proxy headers from arbitrary clients are
+            ignored, so a client cannot spoof its source IP). Set explicit proxy
+            IPs/CIDRs when running behind a reverse proxy, or ``("*",)`` to trust
+            every peer (only safe when a trusted proxy always overwrites the
+            header).
         ssrf_allowed_hosts: Hosts/CIDRs exempted from the SSRF private-address
             guard on outbound OIDC calls.
     """
@@ -135,6 +150,15 @@ class AuthSettings:
 
     # --- security toggles ---
     allow_api_key_query_param: bool = False
+    # Off by default so a deployed multi-worker/replica setup cannot silently run
+    # on the process-local in-memory state store (which would fragment lockout /
+    # TOTP-replay state). create_auth_router() enforces this.
+    allow_in_memory_state_store_when_deployed: bool = False
+
+    # --- password hashing (Argon2 cost; defaults match pwdlib/argon2-cffi) ---
+    argon2_time_cost: int = 3
+    argon2_memory_cost: int = 65536
+    argon2_parallelism: int = 4
 
     # --- rate limiting (canonical budgets for the host's RateLimiter) ---
     rate_limit_sensitive: str = "10/minute"
@@ -150,7 +174,10 @@ class AuthSettings:
     store_key_prefix: str = "jafaal:auth"
 
     # --- network / SSRF ---
-    trusted_proxies: tuple[str, ...] = ("*",)
+    # Empty by default: trust only the direct peer (proxy headers are ignored),
+    # so a client cannot spoof X-Forwarded-For / X-Real-IP. Set explicit proxy
+    # IPs/CIDRs behind a reverse proxy, or ("*",) to trust all peers.
+    trusted_proxies: tuple[str, ...] = ()
     ssrf_allowed_hosts: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -179,6 +206,12 @@ class AuthSettings:
             raise ValueError("AuthSettings.access_token_expire_minutes must be positive")
         if self.refresh_token_expire_days <= 0:
             raise ValueError("AuthSettings.refresh_token_expire_days must be positive")
+        if self.argon2_time_cost <= 0:
+            raise ValueError("AuthSettings.argon2_time_cost must be positive")
+        if self.argon2_memory_cost <= 0:
+            raise ValueError("AuthSettings.argon2_memory_cost must be positive")
+        if self.argon2_parallelism <= 0:
+            raise ValueError("AuthSettings.argon2_parallelism must be positive")
 
     @property
     def resolved_issuer(self) -> str:

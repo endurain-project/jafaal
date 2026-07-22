@@ -1,0 +1,177 @@
+name: Test matrix jafaal
+
+# Portability matrix on top of the fast default `test-jafaal` job:
+#   * every supported Python (3.12, 3.13) on the default SQLite backend;
+#   * the suite against real Postgres and MySQL servers (proving the ORM models
+#     and queries stay database-agnostic); and
+#   * a bare `import jafaal` with only the base dependencies installed (no
+#     mfa / sso / redis extras, no dev groups), proving the optional-feature
+#     modules import defensively.
+
+on:
+  push:
+    branches:
+      - master
+      - main
+    paths:
+      - jafaal/**
+      - tests/**
+      - pyproject.toml
+      - uv.lock
+      - .forgejo/workflows/test-matrix-jafaal.yml
+  pull_request:
+    branches:
+      - master
+      - main
+    paths:
+      - jafaal/**
+      - tests/**
+      - pyproject.toml
+      - uv.lock
+      - .forgejo/workflows/test-matrix-jafaal.yml
+
+concurrency:
+  group: ${{ forgejo.workflow }}-${{ forgejo.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  # 1. Every supported Python version on the default SQLite backend.
+  test-python-matrix:
+    name: jafaal (py${{ matrix.python }} · sqlite)
+    runs-on: local-runner
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13"]
+    steps:
+      - name: Checkout code
+        uses: https://data.forgejo.org/actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 1
+
+      - name: Install uv
+        uses: https://data.forgejo.org/astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          working-directory: jafaal
+
+      - name: Sync dependencies
+        working-directory: jafaal
+        run: uv sync --frozen --no-dev --group test --group lint --no-install-project --python ${{ matrix.python }}
+
+      - name: Check auth import boundaries
+        working-directory: jafaal
+        run: uv run --no-sync --python ${{ matrix.python }} lint-imports
+
+      - name: Run tests
+        working-directory: jafaal
+        run: uv run --no-sync --python ${{ matrix.python }} pytest
+
+  # 2. The suite against a real PostgreSQL server.
+  test-postgres:
+    name: jafaal (postgres)
+    runs-on: local-runner
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: jafaal
+          POSTGRES_PASSWORD: jafaal
+          POSTGRES_DB: jafaal
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U jafaal -d jafaal"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      JAFAAL_TEST_DATABASE_URL: postgresql+psycopg://jafaal:jafaal@localhost:5432/jafaal
+    steps:
+      - name: Checkout code
+        uses: https://data.forgejo.org/actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 1
+
+      - name: Install uv
+        uses: https://data.forgejo.org/astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          working-directory: jafaal
+
+      - name: Sync dependencies (with database drivers)
+        working-directory: jafaal
+        run: uv sync --frozen --no-dev --group test --group test-db --no-install-project
+
+      - name: Run tests
+        working-directory: jafaal
+        run: uv run --no-sync pytest
+
+  # 3. The suite against a real MySQL server.
+  test-mysql:
+    name: jafaal (mysql)
+    runs-on: local-runner
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_USER: jafaal
+          MYSQL_PASSWORD: jafaal
+          MYSQL_DATABASE: jafaal
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -u root -proot"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    env:
+      JAFAAL_TEST_DATABASE_URL: mysql+pymysql://jafaal:jafaal@localhost:3306/jafaal
+    steps:
+      - name: Checkout code
+        uses: https://data.forgejo.org/actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 1
+
+      - name: Install uv
+        uses: https://data.forgejo.org/astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          working-directory: jafaal
+
+      - name: Sync dependencies (with database drivers)
+        working-directory: jafaal
+        run: uv sync --frozen --no-dev --group test --group test-db --no-install-project
+
+      - name: Run tests
+        working-directory: jafaal
+        run: uv run --no-sync pytest
+
+  # 4. Bare import with only the base dependencies (no extras, no dev groups):
+  #    proves `import jafaal` and router assembly work without mfa/sso/redis.
+  import-base-deps:
+    name: jafaal (bare import, no extras)
+    runs-on: local-runner
+    steps:
+      - name: Checkout code
+        uses: https://data.forgejo.org/actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 1
+
+      - name: Install uv
+        uses: https://data.forgejo.org/astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          working-directory: jafaal
+
+      - name: Install base dependencies only (no optional extras, no dev groups)
+        working-directory: jafaal
+        # --no-dev installs the base runtime dependencies + the project only;
+        # the mfa / sso / redis extras and all other dependency groups stay out.
+        run: uv sync --frozen --no-dev
+
+      - name: Import jafaal and assemble the router without optional extras
+        working-directory: jafaal
+        run: >-
+          uv run --no-sync python -c "import jafaal;
+          assert jafaal.__version__;
+          jafaal.create_auth_router();
+          print('bare import + router assembly OK')"

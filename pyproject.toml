@@ -5,7 +5,7 @@ description = "Just Another FastAPI Authentication Library"
 authors = [{name = "João Vitória Silva", email = "joao@endurain.com"}]
 license = {text = "MIT"}
 readme = {file = "README.md", content-type = "text/markdown"}
-requires-python = ">=3.13,<4.0"
+requires-python = ">=3.12,<4.0"
 dependencies = [
     "fastapi>=0.136.0",
     "sqlalchemy>=2.0.49",
@@ -69,6 +69,13 @@ test = [
     # The Redis state-store adapter is tested hermetically against fakeredis.
     "redis>=5.0.0",
     "fakeredis>=2.21.0",
+]
+# Real database drivers for the CI database matrix (Postgres + MySQL). The
+# default test run uses in-memory SQLite (built into Python) and needs neither;
+# set JAFAAL_TEST_DATABASE_URL to run the suite against another backend.
+test-db = [
+    "psycopg[binary]>=3.2",
+    "pymysql>=1.1",
 ]
 dev = [
     "hatch>=1.16.5",
@@ -144,7 +151,7 @@ exclude_lines = [
 ]
 
 [tool.mypy]
-python_version = "3.13"
+python_version = "3.12"
 incremental = false
 check_untyped_defs = true
 mypy_path = ["."]
@@ -161,7 +168,7 @@ module = [
 ignore_missing_imports = true
 
 [tool.ruff]
-target-version = "py313"
+target-version = "py312"
 line-length = 120
 src = ["."]
 

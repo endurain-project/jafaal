@@ -8,15 +8,15 @@ on:
         required: false
         default: false
         type: boolean
-  push:
-    branches:
-      - main
-      - master
-    paths:
-      - 'docs/**'
-      - 'mkdocs.yml'
-      - 'jafaal/**/*.py'
-      - '.forgejo/workflows/docs.yml'
+  #push:
+  #  branches:
+  #    - main
+  #    - master
+  #  paths:
+  #    - 'docs/**'
+  #    - 'mkdocs.yml'
+  #    - 'jafaal/**/*.py'
+  #    - '.forgejo/workflows/docs.yml'
 
 concurrency:
   group: ${{ forgejo.workflow }}-${{ forgejo.ref }}

@@ -62,7 +62,7 @@ async def request_password_reset(
     status_code=status.HTTP_200_OK,
 )
 @jafaal_rate_limit.limit(jafaal_rate_limit.SENSITIVE)
-async def confirm_password_reset(
+def confirm_password_reset(
     request: Request,
     confirm_data: password_reset_tokens_schema.PasswordResetConfirm,
     identity_service: Annotated[
