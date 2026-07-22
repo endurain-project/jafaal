@@ -19,5 +19,8 @@ coverage.xml
 # local dev docs
 devdocs/
 
+# built documentation site (mkdocs)
+site/
+
 #local dev scripts
 devscripts/
