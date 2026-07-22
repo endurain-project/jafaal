@@ -23,7 +23,7 @@ from jafaal.orm import UserId, session_scope
 logger = logging.getLogger(__name__)
 
 
-def create_password_reset_token(user_id: UserId, db: Session) -> str:
+def create_password_reset_token(user_id: UserId, db: Session) -> tuple[str, datetime]:
     """
     Create and persist a password reset token for a user.
 
@@ -32,11 +32,16 @@ def create_password_reset_token(user_id: UserId, db: Session) -> str:
         db: Active SQLAlchemy session.
 
     Returns:
-        The plaintext token to deliver to the user.
-        Only the token hash is stored in the database.
+        A ``(token, expires_at)`` tuple: the plaintext token to deliver to the
+        user and the exact expiry persisted on the row (so callers surface the
+        authoritative expiry rather than recomputing ``now()``). Only the token
+        hash is stored in the database.
     """
     # Generate token and hash
     token, token_hash = token_hashing.generate_token_and_hash()
+
+    # Compute the expiry once so the persisted row and the returned value agree.
+    expires_at = datetime.now(UTC) + timedelta(hours=1)
 
     # Create token object
     reset_token = password_reset_tokens_schema.PasswordResetToken(
@@ -44,15 +49,15 @@ def create_password_reset_token(user_id: UserId, db: Session) -> str:
         user_id=user_id,
         token_hash=token_hash,
         created_at=datetime.now(UTC),
-        expires_at=(datetime.now(UTC) + timedelta(hours=1)),
+        expires_at=expires_at,
         used=False,
     )
 
     # Save to database
     password_reset_tokens_crud.create_password_reset_token(reset_token, db)
 
-    # Return the plain token (not the hash)
-    return token
+    # Return the plain token (not the hash) and its authoritative expiry
+    return token, expires_at
 
 
 async def request_password_reset(email: str, db: Session) -> None:
@@ -75,13 +80,13 @@ async def request_password_reset(email: str, db: Session) -> None:
         # Don't reveal whether the address maps to an (active) account.
         return
 
-    token = create_password_reset_token(user.id, db)
+    token, expires_at = create_password_reset_token(user.id, db)
     event = jafaal_ports.PasswordResetRequested(
         user_id=user.id,
         email=user.email,
         display_name=user.username,
         token=token,
-        expires_at=datetime.now(UTC) + timedelta(hours=1),
+        expires_at=expires_at,
         locale=None,
     )
     try:

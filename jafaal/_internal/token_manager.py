@@ -12,6 +12,7 @@ from enum import Enum
 
 from joserfc import jwt
 from joserfc.errors import (
+    BadSignatureError,
     DecodeError,
     ExpiredTokenError,
     InsecureClaimError,
@@ -59,6 +60,7 @@ class TokenManager:
         refresh_token_expire_days: int = 7,
         issuer: str = "",
         audience: str = "",
+        secret_key_fallbacks: tuple[str, ...] = (),
     ):
         """
         Initializes the TokenManager with the provided secret key and settings.
@@ -75,6 +77,10 @@ class TokenManager:
             refresh_token_expire_days (int): Refresh-token lifetime in days.
             issuer (str): JWT ``iss`` claim value.
             audience (str): JWT ``aud`` claim value.
+            secret_key_fallbacks (tuple[str, ...]): Additional keys accepted
+                when *verifying* a token (never used to sign). Lets tokens
+                issued before a ``secret_key`` rotation keep validating during
+                the overlap window.
         """
         if algorithm not in jafaal_settings.ALLOWED_ALGORITHMS:
             raise ValueError(
@@ -87,6 +93,10 @@ class TokenManager:
         self.issuer = issuer
         self.audience = audience
         self._key = OctKey.import_key(secret_key)
+        # Verification accepts the primary key plus any rotation fallbacks, so a
+        # token signed before a secret_key rotation still validates during the
+        # overlap window. Signing always uses the primary key (self._key).
+        self._decode_keys = [self._key, *(OctKey.import_key(fallback) for fallback in secret_key_fallbacks)]
 
     def get_token_claim(self, token: str, claim: str) -> str | list[str] | int:
         """
@@ -126,6 +136,12 @@ class TokenManager:
         """
         Decodes a JWT token and returns the parsed Token object.
 
+        The token is verified against the primary signing key first, then each
+        configured rotation fallback (``secret_key_fallbacks``) in turn, so a
+        token signed before a key rotation still decodes during the overlap
+        window. Only a signature mismatch falls through to the next key; a
+        malformed token or a disallowed algorithm fails immediately.
+
         Args:
             token (str): The JWT token to decode.
 
@@ -137,24 +153,41 @@ class TokenManager:
             JafaalError: If the token cannot be decoded, raises an HTTP 401
                 Unauthorized exception.
         """
-        try:
-            # Decode the token and return the payload. The ``algorithms``
-            # allow-list is mandatory: without it, joserfc would accept any
-            # algorithm the token header advertises (including ``none`` or
-            # asymmetric variants), which would let an attacker who controls
-            # the unauthenticated token bypass the HMAC signature check.
-            return jwt.decode(token, self._key, algorithms=[self.algorithm])
-        except InvalidPayloadError as payload_err:
-            logger.error(f"Invalid token payload: {payload_err}", exc_info=payload_err, extra={"token": "[REDACTED]"})
-            raise jafaal_exceptions.InvalidTokenError("Invalid token payload") from payload_err
-        except DecodeError as decode_err:
-            logger.error(f"Error decoding token: {decode_err}", exc_info=decode_err, extra={"token": "[REDACTED]"})
-            raise jafaal_exceptions.InvalidTokenError("Unable to decode token") from decode_err
-        except Exception as err:
-            logger.error(
-                f"Unexpected error decoding token: {type(err).__name__}", exc_info=err, extra={"token": "[REDACTED]"}
-            )
-            raise jafaal_exceptions.InvalidTokenError("Unable to decode token") from err
+        last_signature_err: BadSignatureError | None = None
+        for key in self._decode_keys:
+            try:
+                # Decode the token and return the payload. The ``algorithms``
+                # allow-list is mandatory: without it, joserfc would accept any
+                # algorithm the token header advertises (including ``none`` or
+                # asymmetric variants), which would let an attacker who controls
+                # the unauthenticated token bypass the HMAC signature check.
+                return jwt.decode(token, key, algorithms=[self.algorithm])
+            except BadSignatureError as sig_err:
+                # Wrong key: try the next rotation fallback before giving up.
+                last_signature_err = sig_err
+                continue
+            except InvalidPayloadError as payload_err:
+                logger.error(
+                    f"Invalid token payload: {payload_err}", exc_info=payload_err, extra={"token": "[REDACTED]"}
+                )
+                raise jafaal_exceptions.InvalidTokenError("Invalid token payload") from payload_err
+            except DecodeError as decode_err:
+                logger.error(f"Error decoding token: {decode_err}", exc_info=decode_err, extra={"token": "[REDACTED]"})
+                raise jafaal_exceptions.InvalidTokenError("Unable to decode token") from decode_err
+            except Exception as err:
+                logger.error(
+                    f"Unexpected error decoding token: {type(err).__name__}",
+                    exc_info=err,
+                    extra={"token": "[REDACTED]"},
+                )
+                raise jafaal_exceptions.InvalidTokenError("Unable to decode token") from err
+        # Signature did not match the primary key or any rotation fallback.
+        logger.error(
+            "Token signature did not match any active signing key",
+            exc_info=last_signature_err,
+            extra={"token": "[REDACTED]"},
+        )
+        raise jafaal_exceptions.InvalidTokenError("Unable to decode token") from last_signature_err
 
     def validate_token_expiration(
         self,
@@ -366,6 +399,7 @@ def get_token_manager() -> TokenManager:
             refresh_token_expire_days=settings.refresh_token_expire_days,
             issuer=settings.resolved_issuer,
             audience=settings.resolved_audience,
+            secret_key_fallbacks=settings.secret_key_fallbacks,
         )
         _token_manager_generation = generation
     return _token_manager

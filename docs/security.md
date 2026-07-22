@@ -27,6 +27,10 @@ protections and the deployment steps you are responsible for.
 - **CSRF binding** for web clients, with an OAuth 2.1 bootstrap rule for page
   reloads. Refresh cookies are `HttpOnly`, `SameSite=Strict`, and `Secure` in
   deployed environments.
+- **Zero-downtime key rotation.** Both the JWT signing key and the Fernet at-rest
+  key accept previous keys as verify-/decrypt-only *fallbacks*
+  (`secret_key_fallbacks` / `fernet_key_fallbacks`), so keys rotate without
+  invalidating live tokens or stored secrets.
 
 ### MFA
 
@@ -75,7 +79,9 @@ message is the event slug, so even a plain-text handler stays readable.
 !!! warning "Audit records are sensitive"
     To be useful for a SIEM, audit records contain identifiers the application
     logs deliberately omit — plaintext usernames from failed logins and client
-    IPs. Treat the `jafaal.audit` stream as sensitive and route it accordingly.
+    IPs. Treat the `jafaal.audit` stream as sensitive and route it accordingly,
+    or set `audit_include_pii=False` to drop those identifiers (usernames are
+    then emitted only as a one-way hash) for PII-minimal retention.
 
 ## Deployment hardening
 

@@ -1,5 +1,7 @@
 """Tests for TokenManager: issuance, validation, type confusion, and tampering."""
 
+import base64
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -90,3 +92,48 @@ def test_csrf_token_is_random_and_urlsafe():
     b = TokenManager.create_csrf_token()
     assert a != b
     assert len(a) >= 32
+
+
+def _unsigned_token(alg: str) -> str:
+    """Craft a header.payload. token with a chosen ``alg`` and an empty signature."""
+
+    def b64(data: bytes) -> str:
+        return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+    header = b64(json.dumps({"alg": alg, "typ": "JWT"}).encode())
+    payload = b64(json.dumps({"sub": 1}).encode())
+    return f"{header}.{payload}."
+
+
+def test_alg_none_token_rejected():
+    # An ``alg: none`` token must never be accepted: the decode allow-list is
+    # pinned to HS256, so joserfc rejects it before any signature check.
+    tm = get_token_manager()
+    with pytest.raises(exc.InvalidTokenError):
+        tm.decode_token(_unsigned_token("none"))
+
+
+def test_disallowed_algorithm_header_rejected():
+    # A token advertising an algorithm outside the allow-list (HS512 here) is
+    # rejected at decode, closing the algorithm-substitution vector.
+    tm = get_token_manager()
+    with pytest.raises(exc.InvalidTokenError):
+        tm.decode_token(_unsigned_token("HS512"))
+
+
+def test_wrong_issuer_rejected():
+    # Same signing key (signature verifies) but a different issuer must fail the
+    # essential ``iss`` claim check.
+    signer = TokenManager("k" * 32, "HS256", issuer="issuer-a", audience="aud")
+    _, token = signer.create_token("s", _user(), TokenType.ACCESS)
+    verifier = TokenManager("k" * 32, "HS256", issuer="issuer-b", audience="aud")
+    with pytest.raises(exc.InvalidTokenError):
+        verifier.validate_token_expiration(token, TokenType.ACCESS)
+
+
+def test_wrong_audience_rejected():
+    signer = TokenManager("k" * 32, "HS256", issuer="iss", audience="aud-a")
+    _, token = signer.create_token("s", _user(), TokenType.ACCESS)
+    verifier = TokenManager("k" * 32, "HS256", issuer="iss", audience="aud-b")
+    with pytest.raises(exc.InvalidTokenError):
+        verifier.validate_token_expiration(token, TokenType.ACCESS)

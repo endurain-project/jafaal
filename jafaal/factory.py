@@ -224,9 +224,10 @@ def create_auth_router(
     _warn_on_router_prefix_mismatch(prefixes)
     _ensure_state_store_safe_for_deployment()
 
-    # Import the sub-routers lazily: the rate-limit decorators bind the
-    # configured limiter at decoration (import) time, so the limiter must be
-    # installed first (above).
+    # Import the sub-routers here, after installing the limiter. The rate-limit
+    # decorators bind the configured limiter lazily (on first request, re-binding
+    # when it is reconfigured), so this import order is no longer load-bearing —
+    # it is kept only for clarity.
     from jafaal.api_keys.router import router as api_keys_router
     from jafaal.identity_providers.public_router import router as idp_public_router
     from jafaal.identity_providers.router import router as idp_router

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 
+import jafaal
 import jafaal.audit as audit
+from jafaal._core import hashing
 
 
 def _audit_records(caplog):
@@ -45,6 +48,37 @@ def test_record_drops_none_and_reserved_fields(caplog):
     assert rec.reason == "invalid_credentials"
     # The genuine LogRecord.module is preserved, not the reserved-key collision.
     assert rec.module != "attacker-controlled"
+
+
+def test_audit_scrubs_pii_when_disabled(caplog):
+    original = jafaal.get_settings()
+    jafaal.configure(dataclasses.replace(original, audit_include_pii=False))
+    try:
+        with caplog.at_level(logging.INFO, logger=audit.AUDIT_LOGGER_NAME):
+            audit.record(
+                audit.Event.LOGIN_FAILURE,
+                outcome=audit.Outcome.FAILURE,
+                username="Alice",
+                ip="1.2.3.4",
+                email="a@b.test",
+            )
+        rec = _audit_records(caplog)[0]
+        # Direct identifiers are dropped; username survives only as a one-way hash.
+        assert not hasattr(rec, "username")
+        assert not hasattr(rec, "ip")
+        assert not hasattr(rec, "email")
+        assert rec.username_hash == hashing.sha256_hex("alice")
+    finally:
+        jafaal.configure(original)
+
+
+def test_audit_includes_pii_by_default(caplog):
+    with caplog.at_level(logging.INFO, logger=audit.AUDIT_LOGGER_NAME):
+        audit.record(audit.Event.LOGIN_FAILURE, outcome=audit.Outcome.FAILURE, username="alice", ip="1.2.3.4")
+    rec = _audit_records(caplog)[0]
+    # Default keeps identifiers so a SIEM sees the brute-force signal.
+    assert rec.username == "alice"
+    assert rec.ip == "1.2.3.4"
 
 
 def test_login_failure_emits_audit_event(client, make_user, caplog):

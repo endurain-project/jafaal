@@ -29,7 +29,7 @@ def _identity_service(db):
 
 def test_password_reset_claim_is_atomic_single_use(db, make_user):
     user = make_user()
-    token = prt_utils.create_password_reset_token(user.id, db)
+    token, _ = prt_utils.create_password_reset_token(user.id, db)
     token_hash = token_hashing.sha256_hex(token)
     assert prt_crud.claim_password_reset_token(token_hash, db) == user.id
     # A second claim of the same token finds nothing (already used).
@@ -38,7 +38,7 @@ def test_password_reset_claim_is_atomic_single_use(db, make_user):
 
 def test_use_password_reset_token_updates_credential(db, make_user):
     user = make_user(password="Old1!Pass")
-    token = prt_utils.create_password_reset_token(user.id, db)
+    token, _ = prt_utils.create_password_reset_token(user.id, db)
     prt_utils.use_password_reset_token(token, "New1!Passw", _identity_service(db), db)
 
     cred = credentials_crud.get_credential(user.id, db)
@@ -90,7 +90,7 @@ def test_request_password_reset_swallows_delivery_failure(db, make_user):
 
 def test_sign_up_claim_is_atomic_single_use(db, make_user):
     user = make_user()
-    token = sut_utils.create_sign_up_token(user.id, db)
+    token, _ = sut_utils.create_sign_up_token(user.id, db)
     token_hash = token_hashing.sha256_hex(token)
     assert sut_crud.claim_sign_up_token(token_hash, db) == user.id
     assert sut_crud.claim_sign_up_token(token_hash, db) is None
@@ -98,7 +98,7 @@ def test_sign_up_claim_is_atomic_single_use(db, make_user):
 
 def test_use_sign_up_token_consumes_once(db, make_user):
     user = make_user()
-    token = sut_utils.create_sign_up_token(user.id, db)
+    token, _ = sut_utils.create_sign_up_token(user.id, db)
     assert sut_utils.use_sign_up_token(token, db) == user.id
     with pytest.raises(exc.InvalidRequestError):
         sut_utils.use_sign_up_token(token, db)

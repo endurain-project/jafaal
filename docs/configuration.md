@@ -35,6 +35,8 @@ the settings and invalidates settings-derived caches (e.g. the token manager).
 | --- | --- | --- |
 | `secret_key` | — (required) | HMAC key that signs/verifies JWTs (≥ 32 chars). |
 | `fernet_key` | — (required) | Fernet key encrypting at-rest tokens (IdP secrets, MFA secret, rotated refresh tokens). |
+| `secret_key_fallbacks` | `()` | Extra HMAC keys accepted only when *verifying* JWTs (rotation overlap). |
+| `fernet_key_fallbacks` | `()` | Extra Fernet keys accepted only when *decrypting* at-rest tokens (rotation overlap). |
 | `access_token_expire_minutes` | `15` | Access-token lifetime. |
 | `refresh_token_expire_days` | `7` | Refresh-token lifetime. |
 | `session_idle_timeout_hours` | `1` | Idle-session timeout (when enabled). |
@@ -50,6 +52,7 @@ the settings and invalidates settings-derived caches (e.g. the token manager).
 | `rate_limit_write` | `"30/minute"` | Budget hint for write endpoints. |
 | `trusted_proxies` | `()` | Peers whose `X-Forwarded-For`/`X-Real-IP` are honoured (empty = trust only the direct peer). |
 | `ssrf_allowed_hosts` | `()` | Hosts/CIDRs exempted from the SSRF private-address guard. |
+| `audit_include_pii` | `True` | Include direct identifiers (username/IP/email) in `jafaal.audit` records; set `False` for PII-minimal retention. |
 
 !!! warning "Behind a proxy"
     `trusted_proxies` defaults to `()` — only the direct TCP peer is trusted, so
@@ -58,6 +61,28 @@ the settings and invalidates settings-derived caches (e.g. the token manager).
     behind a reverse proxy, set it to your proxy addresses/CIDRs so the real
     client IP is used; `("*",)` trusts every peer (only safe when a trusted proxy
     always overwrites the header).
+
+### Key rotation
+
+Both the JWT signing key and the Fernet encryption key rotate without downtime by
+keeping the previous key as a *fallback* for an overlap window. New material is
+always produced with the primary key; the fallbacks are verify-/decrypt-only.
+
+```python
+jafaal.configure(
+    jafaal.AuthSettings(
+        secret_key=NEW_SIGNING_KEY,                  # signs all new JWTs
+        secret_key_fallbacks=(OLD_SIGNING_KEY,),     # still verifies tokens signed before rotation
+        fernet_key=NEW_FERNET_KEY,                    # encrypts all new at-rest secrets
+        fernet_key_fallbacks=(OLD_FERNET_KEY,),      # still decrypts data written with the old key
+        base_url="https://app.example.com",
+        app_name="Example",
+    )
+)
+```
+
+Once every token signed with — and every secret encrypted with — the old key has
+expired or been re-written, drop the fallback.
 
 ## Database: `Base` and the session factory
 

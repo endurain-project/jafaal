@@ -29,6 +29,8 @@ from dataclasses import dataclass
 
 from cryptography.fernet import Fernet
 
+from jafaal._core.registry import ConfigSlot
+
 __all__ = [
     "ALLOWED_ALGORITHMS",
     "MIN_SECRET_KEY_LENGTH",
@@ -61,6 +63,12 @@ class AuthSettings:
         fernet_key: Fernet key used to encrypt at-rest tokens (IdP client
             secrets, MFA secrets, rotated refresh tokens). A url-safe base64
             32-byte key as produced by ``cryptography.fernet.Fernet.generate_key``.
+        secret_key_fallbacks: Additional HMAC keys accepted when *verifying*
+            JWTs (never used to sign), so tokens issued before a ``secret_key``
+            rotation still validate during the overlap window.
+        fernet_key_fallbacks: Additional Fernet keys accepted when *decrypting*
+            at-rest tokens (never used to encrypt), enabling ``fernet_key``
+            rotation without a bulk re-encrypt.
         algorithm: JWT signing algorithm (only ``HS256`` is supported).
         access_token_expire_minutes: Access-token lifetime, in minutes.
         refresh_token_expire_days: Refresh-token lifetime, in days.
@@ -94,6 +102,10 @@ class AuthSettings:
             multi-worker/replica deployment would fragment progressive-lockout
             and TOTP-replay state per-worker. Set ``True`` only for a genuine
             single-worker deployment.
+        audit_include_pii: When True (default), audit records carry direct
+            identifiers (plaintext username, client IP, email). Set False to
+            drop them (substituting a one-way username hash) for PII-minimal
+            audit retention.
         argon2_time_cost: Argon2 time cost (iterations) for password hashing.
         argon2_memory_cost: Argon2 memory cost, in KiB.
         argon2_parallelism: Argon2 parallelism (lanes).
@@ -126,6 +138,13 @@ class AuthSettings:
     secret_key: str
     fernet_key: str
 
+    # --- key rotation (additional keys accepted for verification/decryption) ---
+    # Older keys kept alongside the primary so secrets encrypted (or tokens
+    # signed) before a rotation still validate. New material is always produced
+    # with the primary key; these are decrypt-/verify-only.
+    secret_key_fallbacks: tuple[str, ...] = ()
+    fernet_key_fallbacks: tuple[str, ...] = ()
+
     # --- JWT ---
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 15
@@ -154,6 +173,13 @@ class AuthSettings:
     # on the process-local in-memory state store (which would fragment lockout /
     # TOTP-replay state). create_auth_router() enforces this.
     allow_in_memory_state_store_when_deployed: bool = False
+
+    # --- audit ---
+    # When False, the jafaal.audit stream drops direct identifiers (plaintext
+    # username, client IP, email) and substitutes a one-way username hash, so
+    # audit records can be retained without storing PII. On by default so a SIEM
+    # sees the identifiers it needs to spot targeted brute-force.
+    audit_include_pii: bool = True
 
     # --- password hashing (Argon2 cost; defaults match pwdlib/argon2-cffi) ---
     argon2_time_cost: int = 3
@@ -212,6 +238,17 @@ class AuthSettings:
             raise ValueError("AuthSettings.argon2_memory_cost must be positive")
         if self.argon2_parallelism <= 0:
             raise ValueError("AuthSettings.argon2_parallelism must be positive")
+        for index, fallback in enumerate(self.secret_key_fallbacks):
+            if len(fallback) < MIN_SECRET_KEY_LENGTH:
+                raise ValueError(
+                    f"AuthSettings.secret_key_fallbacks[{index}] is too short (got {len(fallback)} "
+                    f"characters, need at least {MIN_SECRET_KEY_LENGTH})."
+                )
+        for index, fallback in enumerate(self.fernet_key_fallbacks):
+            try:
+                Fernet(fallback.encode())
+            except Exception as err:
+                raise ValueError(f"AuthSettings.fernet_key_fallbacks[{index}] is not a valid Fernet key.") from err
 
     @property
     def resolved_issuer(self) -> str:
@@ -233,10 +270,16 @@ class AuthSettings:
 # Installed-settings accessor
 # ---------------------------------------------------------------------------
 
-_settings: AuthSettings | None = None
-# Bumped on every (re)configure so cached, settings-derived singletons (e.g. the
-# token manager) can detect staleness and rebuild.
-_generation: int = 0
+# Backed by the shared ConfigSlot so settings use the same configure/get/reset
+# machinery as the ports/scopes/state-store/rate-limiter singletons. The slot's
+# generation counter is what settings-derived caches (the token manager) watch
+# to rebuild after a reconfigure.
+_slot: ConfigSlot[AuthSettings] = ConfigSlot(
+    missing_message=(
+        "JAFAAL is not configured. Call jafaal.configure(AuthSettings(...)) "
+        "at application startup before using the library."
+    )
+)
 
 
 def configure(settings: AuthSettings) -> None:
@@ -248,11 +291,9 @@ def configure(settings: AuthSettings) -> None:
     Args:
         settings: The fully-built, validated settings instance.
     """
-    global _settings, _generation
     if not isinstance(settings, AuthSettings):
         raise TypeError(f"expected AuthSettings, got {type(settings).__name__}")
-    _settings = settings
-    _generation += 1
+    _slot.configure(settings)
 
 
 def get_settings() -> AuthSettings:
@@ -261,17 +302,12 @@ def get_settings() -> AuthSettings:
     Raises:
         RuntimeError: If :func:`configure` has not been called.
     """
-    if _settings is None:
-        raise RuntimeError(
-            "JAFAAL is not configured. Call jafaal.configure(AuthSettings(...)) "
-            "at application startup before using the library."
-        )
-    return _settings
+    return _slot.get()
 
 
 def is_configured() -> bool:
     """Return whether :func:`configure` has been called."""
-    return _settings is not None
+    return _slot.is_configured()
 
 
 def settings_generation() -> int:
@@ -280,11 +316,9 @@ def settings_generation() -> int:
     Cached, settings-derived singletons compare against this to detect that
     :func:`configure` has been called again and rebuild themselves.
     """
-    return _generation
+    return _slot.generation
 
 
 def reset() -> None:
     """Clear the installed settings. Intended for test isolation."""
-    global _settings, _generation
-    _settings = None
-    _generation += 1
+    _slot.reset()

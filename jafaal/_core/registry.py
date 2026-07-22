@@ -47,10 +47,15 @@ class ConfigSlot[T]:
         self._default_factory = default_factory
         self._missing_message = missing_message
         self._value: T | None = default_factory() if default_factory is not None else None
+        # Bumped on every configure/reset so settings-derived caches (the token
+        # manager, the lazily-bound rate-limit decorators) can detect staleness
+        # and rebuild without holding a reference to the value itself.
+        self._generation = 0
 
     def configure(self, value: T) -> None:
         """Install ``value`` for the process."""
         self._value = value
+        self._generation += 1
 
     def get(self) -> T:
         """Return the installed value.
@@ -67,6 +72,16 @@ class ConfigSlot[T]:
         """Return whether a value is currently installed."""
         return self._value is not None
 
+    @property
+    def generation(self) -> int:
+        """Return the reconfigure counter (incremented on every configure/reset).
+
+        Callers that cache something derived from the slot's value compare
+        against this to notice a reconfigure and rebuild.
+        """
+        return self._generation
+
     def reset(self) -> None:
         """Restore the default (defaulted slot) or clear the value (required slot)."""
         self._value = self._default_factory() if self._default_factory is not None else None
+        self._generation += 1

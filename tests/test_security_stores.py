@@ -1,12 +1,17 @@
 """Tests for the progressive-lockout security stores (login, MFA, step-up)."""
 
+import time
+
+import jafaal.state_store as state_store_mod
 from jafaal._internal.security_stores import (
+    _LOGIN_LOCKOUT_THRESHOLDS,
     FailedLoginAttempts,
     PendingMFALogin,
     StepUpAttempts,
     normalize_username_key,
     username_log_identifier,
 )
+from jafaal.state_store import InMemoryStateStore
 
 
 def test_normalize_username_key():
@@ -45,6 +50,36 @@ def test_failed_login_reset_clears_lock():
     store.reset_attempts("bob")
     assert store.is_locked_out("bob") is False
     assert store.get_lockout_time("bob") is None
+
+
+def test_login_lockout_reaches_second_and_third_tier_durations():
+    # Drive the atomic increment with the REAL login thresholds, pre-seeding the
+    # counter so the higher tiers (which an active gate would otherwise block
+    # from being reached in one burst) are exercised deterministically.
+    tiers = tuple((count, seconds) for count, seconds, _label in _LOGIN_LOCKOUT_THRESHOLDS)
+    # (seed, resulting count, expected lock seconds): tier 1 (5→5m), 2 (10→30m), 3 (20→24h).
+    for seed, expected_seconds in ((4, 5 * 60), (9, 30 * 60), (19, 24 * 60 * 60)):
+        store = InMemoryStateStore()
+        store.set("counter", str(seed).encode(), ttl_seconds=3600)
+        now = int(time.time())
+        outcome = store.record_tiered_failure("counter", "gate", tiers, 3600)
+        assert outcome.newly_locked is True
+        assert outcome.locked_until_epoch is not None
+        assert abs((outcome.locked_until_epoch - now) - expected_seconds) <= 2
+
+
+def test_login_lock_releases_after_expiry(monkeypatch):
+    store = InMemoryStateStore()
+    attempts = FailedLoginAttempts(store)
+    for _ in range(5):
+        attempts.record_failed_attempt("alice")
+    assert attempts.is_locked_out("alice") is True
+
+    # Advance the monotonic clock past the tier-1 (5 min) lock: the gate entry
+    # expires by TTL and the account unlocks without any manual reset.
+    base = state_store_mod.time.monotonic()
+    monkeypatch.setattr(state_store_mod.time, "monotonic", lambda: base + 6 * 60)
+    assert attempts.is_locked_out("alice") is False
 
 
 def test_failed_login_is_case_and_whitespace_insensitive():

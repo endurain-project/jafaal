@@ -31,15 +31,21 @@ event slug, so even a plain text handler stays readable.
 Privacy note: audit records may contain identifiers the application logs
 deliberately omit — plaintext usernames from failed logins and client IPs —
 because that is exactly the signal a SIEM needs to spot targeted brute-force.
-Treat the ``jafaal.audit`` stream as sensitive and route it accordingly. JAFAAL
-installs no handler itself; until the host attaches one, records propagate like
-any other ``jafaal.*`` logger.
+Treat the ``jafaal.audit`` stream as sensitive and route it accordingly. Set
+:attr:`AuthSettings.audit_include_pii` to ``False`` to drop those identifiers
+(``ip``/``email`` are omitted and ``username`` is emitted only as a one-way
+``username_hash``) for PII-minimal retention. JAFAAL installs no handler itself;
+until the host attaches one, records propagate like any other ``jafaal.*``
+logger.
 """
 
 from __future__ import annotations
 
 import logging
 from typing import Any, Final
+
+import jafaal.settings as jafaal_settings
+from jafaal._core import hashing
 
 __all__ = [
     "AUDIT_LOGGER_NAME",
@@ -85,6 +91,35 @@ class Event:
 # defensively. ``message``/``asctime`` are added later by the formatter.
 _RESERVED_LOGRECORD_KEYS: frozenset[str] = frozenset(logging.makeLogRecord({}).__dict__) | {"message", "asctime"}
 
+# Fields that directly identify a subject. Dropped (or, for ``username``,
+# replaced by a one-way hash) when ``AuthSettings.audit_include_pii`` is False so
+# audit records can be retained without storing PII.
+_PII_FIELDS: frozenset[str] = frozenset({"username", "ip", "email"})
+
+
+def _audit_pii_enabled() -> bool:
+    """Whether audit records may include direct identifiers.
+
+    Defaults to True (identifiers included) when settings are not configured, so
+    audit behaviour is unchanged for callers that emit events before/without
+    installing :class:`~jafaal.settings.AuthSettings` (e.g. unit tests).
+    """
+    return not jafaal_settings.is_configured() or jafaal_settings.get_settings().audit_include_pii
+
+
+def _scrub_pii(fields: dict[str, Any]) -> dict[str, Any]:
+    """Drop direct identifiers, substituting a one-way username hash.
+
+    The plaintext ``username`` is replaced by a ``username_hash`` (unless one is
+    already supplied), and ``ip`` / ``email`` are dropped entirely.
+    """
+    username = fields.pop("username", None)
+    if username is not None and "username_hash" not in fields:
+        fields["username_hash"] = hashing.sha256_hex(str(username).strip().casefold())
+    fields.pop("ip", None)
+    fields.pop("email", None)
+    return fields
+
 
 def record(
     event: str,
@@ -105,6 +140,8 @@ def record(
             that would collide with a reserved ``LogRecord`` attribute are
             dropped, so a call site can pass optional fields unconditionally.
     """
+    if not _audit_pii_enabled():
+        fields = _scrub_pii(fields)
     extra: dict[str, Any] = {"audit": True, "event": event, "outcome": outcome}
     for key, value in fields.items():
         if value is None or key in _RESERVED_LOGRECORD_KEYS:

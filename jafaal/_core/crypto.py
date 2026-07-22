@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, MultiFernet
 
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.settings as jafaal_settings
@@ -18,18 +18,26 @@ import jafaal.settings as jafaal_settings
 logger = logging.getLogger(__name__)
 
 
-def _create_cipher() -> Fernet:
-    """Build a Fernet cipher from the configured key.
+def _create_cipher() -> MultiFernet:
+    """Build a MultiFernet from the primary key plus any rotation fallbacks.
+
+    Encryption always uses the primary ``fernet_key`` (the first key); decryption
+    tries the primary and then each ``AuthSettings.fernet_key_fallbacks`` entry in
+    order. That is what makes key rotation possible: put a freshly generated key
+    first and keep the previous key as a fallback, and secrets written under
+    either key still decrypt — no bulk re-encrypt required.
 
     Returns:
-        A Fernet cipher initialised with ``AuthSettings.fernet_key``.
+        A MultiFernet cipher over ``[fernet_key, *fernet_key_fallbacks]``.
 
     Raises:
-        InternalError: 500 if the key is missing or malformed.
+        InternalError: 500 if a key is missing or malformed.
     """
     try:
-        key = jafaal_settings.get_settings().fernet_key
-        return Fernet(key.encode())
+        settings = jafaal_settings.get_settings()
+        keys = [Fernet(settings.fernet_key.encode())]
+        keys.extend(Fernet(fallback.encode()) for fallback in settings.fernet_key_fallbacks)
+        return MultiFernet(keys)
     except Exception as err:
         logger.error(f"Error in _create_cipher: {type(err).__name__}", exc_info=err)
         raise jafaal_exceptions.InternalError() from err

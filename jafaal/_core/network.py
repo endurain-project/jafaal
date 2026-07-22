@@ -151,9 +151,10 @@ def refresh_trusted_proxy_hostnames(
 def _is_trusted_peer(peer_ip: str) -> bool:
     """Check whether ``peer_ip`` is in the ``trusted_proxies`` allow-list.
 
-    Supports exact IPs and CIDR notation. The special value ``"*"`` (the
-    default) trusts every peer. Also supports resolved hostnames (cached by
-    :func:`refresh_trusted_proxy_hostnames`).
+    Supports exact IPs and CIDR notation. The special value ``"*"`` trusts
+    every peer — but it is **not** the default; ``trusted_proxies`` defaults to
+    empty, so only the direct TCP peer is trusted. Also supports resolved
+    hostnames (cached by :func:`refresh_trusted_proxy_hostnames`).
 
     Args:
         peer_ip: The direct TCP-connection IP of the caller.
@@ -194,8 +195,8 @@ def get_ip_address(request: Request) -> str:
     Proxy headers (``X-Forwarded-For``, ``X-Real-IP``) are only trusted when the
     direct TCP peer matches an entry in ``trusted_proxies``. This prevents
     attackers from spoofing their IP by injecting those headers on direct
-    connections. When ``trusted_proxies`` is ``("*",)`` (the default) all peers
-    are trusted.
+    connections. ``trusted_proxies`` defaults to empty — only the direct peer is
+    trusted; set it to ``("*",)`` to trust every peer.
 
     Args:
         request: Request object with headers and client info.

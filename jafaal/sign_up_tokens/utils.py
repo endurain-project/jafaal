@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def create_sign_up_token(user_id: UserId, db: Session) -> str:
+def create_sign_up_token(user_id: UserId, db: Session) -> tuple[str, datetime]:
     """
     Create and persist a sign-up token for a user.
 
@@ -32,11 +32,16 @@ def create_sign_up_token(user_id: UserId, db: Session) -> str:
         db: Active SQLAlchemy session.
 
     Returns:
-        The plaintext token to deliver to the user.
-        Only the hash is stored in the database.
+        A ``(token, expires_at)`` tuple: the plaintext token to deliver to the
+        user and the exact expiry persisted on the row (so callers surface the
+        authoritative expiry rather than recomputing ``now()``). Only the hash
+        is stored in the database.
     """
     # Generate token and hash
     token, token_hash = token_hashing.generate_token_and_hash()
+
+    # Compute the expiry once so the persisted row and the returned value agree.
+    expires_at = datetime.now(UTC) + timedelta(hours=24)  # 24 hour expiration
 
     # Create token object
     reset_token = sign_up_tokens_schema.SignUpToken(
@@ -44,15 +49,15 @@ def create_sign_up_token(user_id: UserId, db: Session) -> str:
         user_id=user_id,
         token_hash=token_hash,
         created_at=datetime.now(UTC),
-        expires_at=datetime.now(UTC) + timedelta(hours=24),  # 24 hour expiration
+        expires_at=expires_at,
         used=False,
     )
 
     # Save to database
     sign_up_tokens_crud.create_sign_up_token(reset_token, db)
 
-    # Return the plain token (not the hash)
-    return token
+    # Return the plain token (not the hash) and its authoritative expiry
+    return token, expires_at
 
 
 def register_local_user(
@@ -106,13 +111,13 @@ async def request_email_verification(user: jafaal_ports.UserProtocol, db: Sessio
         user: The newly created user awaiting email verification.
         db: Active SQLAlchemy session.
     """
-    token = create_sign_up_token(user.id, db)
+    token, expires_at = create_sign_up_token(user.id, db)
     event = jafaal_ports.EmailVerificationRequested(
         user_id=user.id,
         email=user.email,
         display_name=user.username,
         token=token,
-        expires_at=datetime.now(UTC) + timedelta(hours=24),
+        expires_at=expires_at,
         locale=None,
     )
     try:
