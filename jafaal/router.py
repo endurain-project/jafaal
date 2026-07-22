@@ -1,5 +1,6 @@
+import contextlib
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from datetime import UTC, datetime
 from typing import Annotated
 
@@ -19,6 +20,7 @@ import jafaal._internal.password_hasher as jafaal_password_hasher
 import jafaal._internal.security_stores as jafaal_security_stores
 import jafaal._internal.token_manager as jafaal_token_manager
 import jafaal._internal.user_guards as jafaal_user_guards
+import jafaal.audit as jafaal_audit
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_providers.utils as idp_utils
 import jafaal.identity_service as jafaal_identity_service
@@ -86,6 +88,23 @@ def _raise_auth_security_store_unavailable(
     """
     logger.error("Auth security storage unavailable during authentication", exc_info=err)
     raise jafaal_exceptions.StoreUnavailableError("Authentication temporarily unavailable") from err
+
+
+@contextlib.contextmanager
+def _translate_store_outage() -> Generator[None]:
+    """Translate an auth-security-store outage into a 503 at the router edge.
+
+    Wraps the several security-store touch points in the login / MFA flows so the
+    "log the outage, raise ``StoreUnavailableError``" policy lives in exactly one
+    place instead of a repeated ``try/except`` at each call site.
+
+    Raises:
+        JafaalError: 503 if the wrapped operation hits a store outage.
+    """
+    try:
+        yield
+    except jafaal_security_stores.AuthSecurityStoreUnavailableError as err:
+        _raise_auth_security_store_unavailable(err)
 
 
 @router.post(
@@ -176,7 +195,7 @@ def login_for_access_token(
     )
 
     # Check if username is locked out from too many failed login attempts
-    try:
+    with _translate_store_outage():
         if failed_attempts.is_locked_out(form_data.username):
             lockout_until = failed_attempts.get_lockout_time(form_data.username)
             if lockout_until:
@@ -185,8 +204,6 @@ def login_for_access_token(
                     f"Account locked due to too many failed login attempts. Try again in {seconds_remaining} seconds.",
                     retry_after=seconds_remaining,
                 )
-    except jafaal_security_stores.AuthSecurityStoreUnavailableError as err:
-        _raise_auth_security_store_unavailable(err)
 
     # Authenticate user
     try:
@@ -194,10 +211,16 @@ def login_for_access_token(
     except jafaal_exceptions.JafaalError as err:
         # Record failed attempt on authentication errors (401 Unauthorized)
         if isinstance(err, jafaal_exceptions.AuthenticationError):
-            try:
+            jafaal_audit.record(
+                jafaal_audit.Event.LOGIN_FAILURE,
+                outcome=jafaal_audit.Outcome.FAILURE,
+                level=logging.WARNING,
+                username=form_data.username,
+                ip=request.client.host if request.client else None,
+                reason=err.code,
+            )
+            with _translate_store_outage():
                 failed_attempts.record_failed_attempt(form_data.username)
-            except jafaal_security_stores.AuthSecurityStoreUnavailableError as store_err:
-                _raise_auth_security_store_unavailable(store_err)
         raise err
 
     # Check if the user is active
@@ -206,10 +229,8 @@ def login_for_access_token(
     # Check if MFA is enabled for this user
     if mfa_service.is_mfa_enabled_for_user(user.id, db):
         # Store the user for pending MFA verification
-        try:
+        with _translate_store_outage():
             pending_mfa_store.add_pending_login(form_data.username, user.id)
-        except jafaal_security_stores.AuthSecurityStoreUnavailableError as err:
-            _raise_auth_security_store_unavailable(err)
 
         # Don't reset failed login attempts yet - wait for MFA verification
         # This prevents bypassing lockout by triggering MFA flow
@@ -231,10 +252,8 @@ def login_for_access_token(
 
     # Password authentication successful and no MFA required
     # Reset failed login attempts counter
-    try:
+    with _translate_store_outage():
         failed_attempts.reset_attempts(form_data.username)
-    except jafaal_security_stores.AuthSecurityStoreUnavailableError as err:
-        _raise_auth_security_store_unavailable(err)
 
     # Mobile clients with PKCE use secure token exchange flow
     # Web clients don't need PKCE - they have httpOnly cookies and same-origin protection
@@ -334,7 +353,7 @@ def verify_mfa_and_login(
     username_log_id = jafaal_security_stores.username_log_identifier(mfa_request.username)
 
     # Check if user is locked out from too many failed attempts
-    try:
+    with _translate_store_outage():
         if pending_mfa_store.is_locked_out(mfa_request.username):
             lockout_until = pending_mfa_store.get_lockout_time(mfa_request.username)
             if lockout_until:
@@ -343,14 +362,10 @@ def verify_mfa_and_login(
                     f"Too many failed MFA attempts. Account locked for {seconds_remaining} seconds.",
                     retry_after=seconds_remaining,
                 )
-    except jafaal_security_stores.AuthSecurityStoreUnavailableError as err:
-        _raise_auth_security_store_unavailable(err)
 
     # Check if there's a pending MFA login for this username
-    try:
+    with _translate_store_outage():
         user_id = pending_mfa_store.get_pending_login(mfa_request.username)
-    except jafaal_security_stores.AuthSecurityStoreUnavailableError as err:
-        _raise_auth_security_store_unavailable(err)
     if user_id is None:
         # Run a dummy Argon2 verify so the wall-clock latency of the
         # "no pending MFA login" branch matches the "pending login,
@@ -364,17 +379,22 @@ def verify_mfa_and_login(
     # Verify the MFA code (TOTP or backup code)
     if not mfa_service.verify_user_mfa(user_id, mfa_request.mfa_code, identity_service, db):
         # Record failed attempt and apply lockout if threshold exceeded
-        try:
+        with _translate_store_outage():
             failed_count = pending_mfa_store.record_failed_attempt(mfa_request.username)
-        except jafaal_security_stores.AuthSecurityStoreUnavailableError as err:
-            _raise_auth_security_store_unavailable(err)
         logger.warning(f"Invalid MFA code for {username_log_id}. Failed attempts: {failed_count}")
+        jafaal_audit.record(
+            jafaal_audit.Event.MFA_FAILURE,
+            outcome=jafaal_audit.Outcome.FAILURE,
+            level=logging.WARNING,
+            user_id=user_id,
+            username=mfa_request.username,
+            ip=request.client.host if request.client else None,
+            failed_attempts=failed_count,
+        )
         raise jafaal_exceptions.InvalidMFACodeError("Invalid MFA code, backup code or backup code already used.")
 
-    try:
+    with _translate_store_outage():
         claimed_user_id = pending_mfa_store.claim_pending_login(mfa_request.username)
-    except jafaal_security_stores.AuthSecurityStoreUnavailableError as err:
-        _raise_auth_security_store_unavailable(err)
     if claimed_user_id != user_id:
         logger.warning(f"Pending MFA login for {username_log_id} was missing or already claimed")
         raise jafaal_exceptions.InvalidRequestError("No pending MFA login found for this username")
@@ -389,11 +409,9 @@ def verify_mfa_and_login(
     jafaal_user_guards.check_user_is_active(user)
 
     # MFA verification successful - reset both MFA and login failed attempts counters
-    try:
+    with _translate_store_outage():
         pending_mfa_store.reset_attempts(mfa_request.username)
         failed_attempts.reset_attempts(mfa_request.username)
-    except jafaal_security_stores.AuthSecurityStoreUnavailableError as err:
-        _raise_auth_security_store_unavailable(err)
 
     # Mobile clients with PKCE use secure token exchange flow
     # Web clients don't need PKCE - they have httpOnly cookies and same-origin protection

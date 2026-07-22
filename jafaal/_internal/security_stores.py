@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from typing import NoReturn, Protocol, runtime_checkable
 from urllib.parse import unquote
 
+import jafaal.audit as jafaal_audit
 import jafaal.settings as jafaal_settings
 from jafaal._core import hashing
 from jafaal.exceptions import StoreUnavailableError
@@ -148,6 +149,16 @@ def _log_lockout(display_name: str, duration_label: str, username: str, failed_c
             "username_hash": _username_digest(username),
             "failed_attempts": failed_count,
         },
+    )
+    jafaal_audit.record(
+        jafaal_audit.Event.LOCKOUT_APPLIED,
+        outcome=jafaal_audit.Outcome.BLOCKED,
+        level=logging.WARNING,
+        store=display_name,
+        username=username,
+        username_hash=_username_digest(username),
+        failed_attempts=failed_count,
+        lockout=duration_label,
     )
 
 

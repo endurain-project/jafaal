@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 import jafaal._internal.password_hasher as jafaal_password_hasher
 import jafaal._internal.token_manager as jafaal_token_manager
 import jafaal._internal.user_guards as jafaal_user_guards
+import jafaal.audit as jafaal_audit
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_providers.crud as idp_crud
 import jafaal.identity_providers.schema as idp_schema
@@ -293,6 +294,13 @@ async def handle_callback(
         # do not leak whether the state existed but was already consumed.
         if not oauth_state_crud.mark_oauth_state_used(state, db):
             logger.warning(f"OAuth state replay/race rejected: {state[:8]}...")
+            jafaal_audit.record(
+                jafaal_audit.Event.OAUTH_STATE_REPLAY_REJECTED,
+                outcome=jafaal_audit.Outcome.BLOCKED,
+                level=logging.WARNING,
+                idp=idp.slug,
+                ip=request.client.host if request.client else None,
+            )
             raise jafaal_exceptions.InvalidRequestError("Invalid or expired OAuth state")
 
         logger.debug(f"OAuth callback received for state {state[:8]}... (client_type={oauth_state.client_type})")

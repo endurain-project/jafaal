@@ -82,6 +82,27 @@ them. Choose an integer or UUID primary key with
 [`IntPKUserMixin`][jafaal.IntPKUserMixin] or
 [`UUIDPKUserMixin`][jafaal.UUIDPKUserMixin].
 
+### Supported databases
+
+JAFAAL is database-agnostic — it owns no engine and uses only portable
+SQLAlchemy types. The test suite runs on **SQLite**, **PostgreSQL**, and
+**MySQL** in CI on every change, so cross-dialect portability is a guarantee
+rather than an accident. Use whichever backend your host app already uses (e.g.
+`postgresql+psycopg://…`, `mysql+pymysql://…`, or `sqlite:///…`).
+
+!!! warning "SQLite caveats"
+    SQLite is ideal for development, tests, and small single-node deployments,
+    but it has **no real write concurrency** (writes serialize on a
+    database-level lock). Combined with the default in-memory
+    [`StateStore`][jafaal.StateStore], a SQLite deployment is effectively
+    **single-process**: run a single worker, or move to PostgreSQL/MySQL **and**
+    a distributed `StateStore` (e.g.
+    [`RedisStateStore`](ports-and-adapters.md#redisstatestore)) for multi-worker
+    setups. Note that `Uuid` primary keys and `DateTime(timezone=True)` columns
+    are stored differently across dialects (SQLite keeps UUIDs as 32-char hex and
+    can return naive datetimes); JAFAAL normalizes timestamps back to
+    timezone-aware UTC on read, so this stays transparent to callers.
+
 ## Scopes
 
 JAFAAL ships only auth/identity scopes. Layer your application scopes on top of

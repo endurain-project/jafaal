@@ -198,3 +198,35 @@ def test_verify_configuration_reports_all_missing_required_components():
     finally:
         jafaal.configure_user_repository(repo)
         jafaal.configure_settings_provider(provider)
+
+
+# --------------------------------------------------------------------------- #
+# RouterPrefixes / AuthSettings path consistency
+# --------------------------------------------------------------------------- #
+
+
+def test_warns_on_router_prefix_settings_mismatch(caplog):
+    # Changing RouterPrefixes.auth without updating the settings paths leaves
+    # login_token_url / refresh_cookie_path pointing at the old prefix.
+    jafaal.configure_rate_limiter(_DummyLimiter())
+    try:
+        with caplog.at_level(logging.WARNING, logger=FACTORY_LOGGER):
+            jafaal.create_auth_router(prefixes=jafaal.RouterPrefixes(auth="/authentication"))
+        text = caplog.text
+        assert "login_token_url" in text
+        assert "refresh_cookie_path" in text
+    finally:
+        jafaal_rate_limit.reset_rate_limiter()
+
+
+def test_no_prefix_warning_with_default_prefixes(caplog):
+    # The session settings' default paths line up with the default prefixes.
+    jafaal.configure_rate_limiter(_DummyLimiter())
+    try:
+        with caplog.at_level(logging.WARNING, logger=FACTORY_LOGGER):
+            jafaal.create_auth_router()
+        text = caplog.text
+        assert "login_token_url" not in text
+        assert "refresh_cookie_path" not in text
+    finally:
+        jafaal_rate_limit.reset_rate_limiter()

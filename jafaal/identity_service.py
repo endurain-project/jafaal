@@ -46,6 +46,7 @@ import jafaal._internal.token_manager as jafaal_token_manager
 import jafaal._internal.user_guards as jafaal_user_guards
 import jafaal.api_keys.crud as jafaal_api_keys_crud
 import jafaal.api_keys.utils as jafaal_api_keys_utils
+import jafaal.audit as jafaal_audit
 import jafaal.credentials.crud as jafaal_credentials_crud
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.mfa.crud as jafaal_mfa_crud
@@ -860,6 +861,14 @@ class DefaultIdentityService:
             db_key = None
 
         if db_key is None:
+            jafaal_audit.record(
+                jafaal_audit.Event.API_KEY_AUTH_FAILURE,
+                outcome=jafaal_audit.Outcome.FAILURE,
+                level=logging.WARNING,
+                ip=request.client.host if request.client else None,
+                endpoint=request.url.path,
+                reason="unknown_or_invalid_key",
+            )
             raise jafaal_exceptions.InvalidApiKeyError("Invalid API key")
 
         user = jafaal_user_guards.get_user_by_id_or_404(db_key.user_id, self._db)
@@ -885,6 +894,13 @@ class DefaultIdentityService:
                 "endpoint": request.url.path,
                 "ip": (request.client.host if request.client else "unknown"),
             },
+        )
+        jafaal_audit.record(
+            jafaal_audit.Event.API_KEY_AUTH_SUCCESS,
+            user_id=db_key.user_id,
+            key_prefix=db_key.key_prefix,
+            endpoint=request.url.path,
+            ip=request.client.host if request.client else None,
         )
 
         scopes = jafaal_api_keys_utils.json_to_scopes(db_key.scopes)

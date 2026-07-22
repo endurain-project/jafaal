@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 import jafaal._internal.password_hasher as jafaal_password_hasher
 import jafaal._internal.token_manager as jafaal_token_manager
+import jafaal.audit as jafaal_audit
 import jafaal.credentials.crud as jafaal_credentials_crud
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_providers.utils as idp_utils
@@ -356,6 +357,14 @@ def complete_login(
     # Token delivery based on client type (web cookie vs mobile body) is
     # centralised in build_token_response so login, /refresh, and SSO
     # token exchange share one delivery contract.
+    jafaal_audit.record(
+        jafaal_audit.Event.LOGIN_SUCCESS,
+        user_id=user.id,
+        username=user.username,
+        session_id=session_id,
+        client_type=client_type,
+        ip=request.client.host if request.client else None,
+    )
     return build_token_response(
         response,
         client_type,

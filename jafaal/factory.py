@@ -90,6 +90,39 @@ def _warn_on_insecure_defaults() -> None:
         )
 
 
+def _warn_on_router_prefix_mismatch(prefixes: RouterPrefixes) -> None:
+    """Warn when the auth-path settings drift from the router prefixes.
+
+    :attr:`~jafaal.settings.AuthSettings.login_token_url` (the Swagger password-
+    flow URL) and :attr:`~jafaal.settings.AuthSettings.refresh_cookie_path` (the
+    scope of the refresh cookie) must line up with where the auth router is
+    actually mounted — i.e. end with :attr:`RouterPrefixes.auth`. A host that
+    changes one without the other gets a silent, hard-to-debug break: Swagger's
+    ``Authorize`` posts to the wrong URL, or the refresh cookie is scoped to a
+    path that ``/refresh`` and ``/logout`` are not served under, so web sessions
+    never refresh. Only the relative suffix is checked here (the host's mount
+    root is applied later by ``include_router(prefix=...)``), which is exactly
+    the coupling that drifts.
+    """
+    if not jafaal_settings.is_configured():
+        return
+    settings = jafaal_settings.get_settings()
+    expected_login_suffix = f"{prefixes.auth}/login"
+    if not settings.login_token_url.endswith(expected_login_suffix):
+        logger.warning(
+            f"AuthSettings.login_token_url={settings.login_token_url!r} does not end with the auth router "
+            f"prefix {expected_login_suffix!r}; Swagger's 'Authorize' password flow will POST to the wrong "
+            "URL. Keep login_token_url in lockstep with RouterPrefixes.auth."
+        )
+    if not settings.refresh_cookie_path.endswith(prefixes.auth):
+        logger.warning(
+            f"AuthSettings.refresh_cookie_path={settings.refresh_cookie_path!r} does not end with the auth "
+            f"router prefix {prefixes.auth!r}; the refresh cookie will be scoped to a path that the /refresh "
+            "and /logout endpoints are not served under, so web sessions will silently fail to refresh. Keep "
+            "refresh_cookie_path in lockstep with RouterPrefixes.auth."
+        )
+
+
 def _ensure_state_store_safe_for_deployment() -> None:
     """Refuse to run on the in-memory state store in a deployed environment.
 
@@ -188,6 +221,7 @@ def create_auth_router(
     prefixes = prefixes or RouterPrefixes()
 
     _warn_on_insecure_defaults()
+    _warn_on_router_prefix_mismatch(prefixes)
     _ensure_state_store_safe_for_deployment()
 
     # Import the sub-routers lazily: the rate-limit decorators bind the

@@ -84,7 +84,16 @@ def is_enforcing() -> bool:
 
 
 def reset_rate_limiter() -> None:
-    """Reset to the no-op limiter. Intended for tests."""
+    """Reset to the no-op limiter. Intended for tests.
+
+    Caveat: :func:`limit` resolves the configured limiter at *decoration*
+    (import) time, so router modules already imported keep the limiter they bound
+    at import. Resetting (or reconfiguring) the limiter afterwards does **not**
+    re-bind those decorated routes. A host whose tests need a different limiter
+    must configure it *before* importing the router modules
+    (``create_auth_router`` installs it in the right order); swapping it
+    afterwards only affects routers imported later.
+    """
     _rate_limiter.reset()
 
 

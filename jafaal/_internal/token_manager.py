@@ -37,30 +37,17 @@ class TokenType(Enum):
 
 
 class TokenManager:
-    """
-    TokenManager is a utility class for managing JSON Web Tokens (JWT) in user
-    sessions.
+    """Issue, decode, and validate JWTs (and mint CSRF tokens) for user sessions.
 
-    This class provides methods for creating, decoding, validating, and
-    extracting claims from JWTs, as well as generating secure CSRF tokens. It
-    signs tokens with HMAC-SHA256 (``HS256`` only — the algorithm is pinned via
-    :data:`jafaal.settings.ALLOWED_ALGORITHMS`) and integrates with application
-    logging and exception handling for robust security and error reporting.
+    Tokens are signed with HMAC-SHA256 (``HS256`` only — the algorithm is pinned
+    via :data:`jafaal.settings.ALLOWED_ALGORITHMS`, and the same allow-list is
+    passed to ``jwt.decode`` so it cannot drift). Validation failures raise a
+    :class:`~jafaal.exceptions.JafaalError` (mapped to HTTP 401 at the router
+    edge); the constructor raises :class:`ValueError` for an algorithm outside
+    the allow-list.
 
     Attributes:
-        algorithm (str): The algorithm used for token operations (default: "HS256").
-            _key: The imported key object used for cryptographic operations.
-
-    Methods:
-        __init__(secret_key: str, algorithm: str = "HS256"):
-        get_token_claim(token: str, claim: str) -> str | list[str] | int:
-        decode_token(token: str) -> dict:
-        validate_token_expiration(token: str, expected_type: TokenType) -> None:
-        create_token(session_id: str, user: jafaal_ports.UserProtocol, token_type: TokenType) -> tuple[datetime, str]:
-        create_csrf_token() -> str:
-            Generates a secure random CSRF (Cross-Site Request Forgery) token.
-        JafaalError: Raised for invalid, expired, or missing claims in JWT tokens.
-        ValueError: Raised for missing or invalid parameters during token creation.
+        algorithm: The JWT signing algorithm (``"HS256"``).
     """
 
     def __init__(

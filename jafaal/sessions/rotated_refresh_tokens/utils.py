@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.orm import Session
 
+import jafaal.audit as jafaal_audit
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.rotated_refresh_tokens.crud as rotated_token_crud
 import jafaal.sessions.rotated_refresh_tokens.schema as rotated_token_schema
@@ -136,6 +137,12 @@ def check_token_reuse(raw_token: str, db: Session) -> tuple[bool, bool]:
                 "rotation_count": rotated_token.rotation_count,
             },
         )
+        jafaal_audit.record(
+            jafaal_audit.Event.TOKEN_REUSE_GRACE,
+            outcome=jafaal_audit.Outcome.SUCCESS,
+            token_family_id=rotated_token.token_family_id,
+            rotation_count=rotated_token.rotation_count,
+        )
         return (True, True)
 
     # Past grace period - likely theft!
@@ -146,6 +153,13 @@ def check_token_reuse(raw_token: str, db: Session) -> tuple[bool, bool]:
             "rotation_count": rotated_token.rotation_count,
             "rotated_at": rotated_token.rotated_at.isoformat(),
         },
+    )
+    jafaal_audit.record(
+        jafaal_audit.Event.TOKEN_THEFT_DETECTED,
+        outcome=jafaal_audit.Outcome.BLOCKED,
+        level=logging.ERROR,
+        token_family_id=rotated_token.token_family_id,
+        rotation_count=rotated_token.rotation_count,
     )
     return (True, False)
 

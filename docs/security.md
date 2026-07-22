@@ -49,6 +49,34 @@ The core raises framework-agnostic `JafaalError` subclasses (no `fastapi`
 import) that a single edge handler maps to HTTP once, at the boundary. Each
 error carries a stable machine-readable `code` alongside its HTTP `status_code`.
 
+### Audit logging
+
+Every security-relevant event — login success/failure, progressive lockouts, MFA
+failures, refresh-token reuse/theft, API-key authentication, and OAuth state
+replay — is emitted as a **structured record** on the dedicated `jafaal.audit`
+logger, separate from the human-readable `jafaal.*` application logs. Wire a SIEM
+or audit sink by attaching a handler and reading the fields off each record — no
+message-string parsing:
+
+```python
+import logging
+
+audit = logging.getLogger("jafaal.audit")
+audit.addHandler(my_json_handler)   # e.g. python-json-logger
+audit.setLevel(logging.INFO)
+audit.propagate = False             # keep audit off the app log if you prefer
+```
+
+Each record carries `event` (a stable slug such as `login.failure`), `outcome`
+(`success` / `failure` / `blocked`), and event-specific fields (`user_id`,
+`username`, `ip`, `session_id`, `key_prefix`, `token_family_id`, …). The log
+message is the event slug, so even a plain-text handler stays readable.
+
+!!! warning "Audit records are sensitive"
+    To be useful for a SIEM, audit records contain identifiers the application
+    logs deliberately omit — plaintext usernames from failed logins and client
+    IPs. Treat the `jafaal.audit` stream as sensitive and route it accordingly.
+
 ## Deployment hardening
 
 JAFAAL runs out of the box in a single process, but a production deployment
