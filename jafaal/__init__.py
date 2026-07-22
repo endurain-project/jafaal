@@ -37,6 +37,9 @@ Exports:
       ``UUIDPKUserMixin`` (extensible base for the host app's user table)
 """
 
+from importlib.metadata import PackageNotFoundError as _PackageNotFoundError
+from importlib.metadata import version as _version
+
 # Register every JAFAAL ORM model on ``jafaal.orm.Base`` at import time so that
 # their relationships — and the reverse relationships a host user model inherits
 # from ``UserMixin`` — all resolve at mapper-configuration time. Importing each
@@ -182,7 +185,14 @@ from .utils import (
     create_tokens,
 )
 
+try:
+    __version__ = _version("jafaal")
+except _PackageNotFoundError:  # pragma: no cover - running from an unbuilt source tree
+    __version__ = "0.0.0+unknown"
+
 __all__ = [
+    # Package metadata
+    "__version__",
     # Configuration
     "AuthSettings",
     "Base",

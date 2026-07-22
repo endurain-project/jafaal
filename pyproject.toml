@@ -228,3 +228,73 @@ forbidden_modules = [
     "jafaal.sessions",
     "jafaal.sign_up_tokens",
 ]
+
+# The batteries-included adapters depend on the core (ports/orm/state_store),
+# never the reverse: the core must resolve everything through the ports so a host
+# can drop any adapter — and so ``import jafaal`` never pulls an adapter's
+# optional dependency (e.g. redis). Enumerated (not "jafaal") so adapters'
+# internal imports are not self-flagged.
+[[tool.importlinter.contracts]]
+name = "Batteries-included adapters stay optional (core never imports them)"
+type = "forbidden"
+source_modules = [
+    "jafaal._core",
+    "jafaal._internal",
+    "jafaal.api_keys",
+    "jafaal.credentials",
+    "jafaal.dependencies",
+    "jafaal.error_handler",
+    "jafaal.exceptions",
+    "jafaal.factory",
+    "jafaal.identity_providers",
+    "jafaal.identity_service",
+    "jafaal.maintenance",
+    "jafaal.mfa",
+    "jafaal.oauth_state",
+    "jafaal.orm",
+    "jafaal.password_policy",
+    "jafaal.password_reset_tokens",
+    "jafaal.ports",
+    "jafaal.principal",
+    "jafaal.rate_limit",
+    "jafaal.router",
+    "jafaal.schema",
+    "jafaal.scopes",
+    "jafaal.sessions",
+    "jafaal.settings",
+    "jafaal.sign_up_tokens",
+    "jafaal.state_store",
+    "jafaal.token_hashing",
+    "jafaal.user_model",
+    "jafaal.utils",
+]
+forbidden_modules = ["jafaal.adapters"]
+
+# The framework-agnostic boundary types the host consumes must stay pure value
+# types: they may lean on low-level core (``_core``/``orm``) but must not reach
+# up into internals, feature packages, orchestration, or the adapters.
+[[tool.importlinter.contracts]]
+name = "Host-facing boundary types stay pure"
+type = "forbidden"
+source_modules = [
+    "jafaal.ports",
+    "jafaal.principal",
+    "jafaal.exceptions",
+]
+forbidden_modules = [
+    "jafaal._internal",
+    "jafaal.adapters",
+    "jafaal.api_keys",
+    "jafaal.credentials",
+    "jafaal.dependencies",
+    "jafaal.factory",
+    "jafaal.identity_providers",
+    "jafaal.identity_service",
+    "jafaal.mfa",
+    "jafaal.oauth_state",
+    "jafaal.password_reset_tokens",
+    "jafaal.router",
+    "jafaal.sessions",
+    "jafaal.sign_up_tokens",
+    "jafaal.utils",
+]

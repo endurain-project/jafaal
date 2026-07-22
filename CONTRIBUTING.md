@@ -1,10 +1,10 @@
-# Contributing to Endurain
+# Contributing to JAFAAL
  
-Thank you for considering contributing to Endurain! Before diving in, please read these guidelines carefully. They exist to make the process sustainable for everyone.
+Thank you for considering contributing to JAFAAL! Before diving in, please read these guidelines carefully. They exist to make the process sustainable for everyone.
 
 ## A Note on Maintainership
  
-Endurain is maintained by a single person in their spare time. This means review bandwidth is genuinely limited. Following these guidelines isn't bureaucracy, it's what allows contributions to actually get merged rather than sitting in a queue indefinitely.
+JAFAAL is maintained by a single person in their spare time. This means review bandwidth is genuinely limited. Following these guidelines isn't bureaucracy, it's what allows contributions to actually get merged rather than sitting in a queue indefinitely.
 
 ## Before You Write Any Code
  
@@ -57,7 +57,7 @@ PRs that are too large to review efficiently will be asked to be split before th
 1. **Fork the repository** on Codeberg
 2. **Clone your fork** locally:
    ```bash
-   git clone https://codeberg.org/YOUR_USERNAME/endurain.git
+   git clone https://codeberg.org/YOUR_USERNAME/JAFAAL.git
    ```
 3. **Create a branch** and use a descriptive name:
    ```bash
@@ -79,4 +79,4 @@ Reviews may take days to weeks depending on availability. A PR sitting without a
 
 ## Thank You
  
-Even small contributions make a real difference. Thank you for taking the time to improve Endurain for everyone who self-hosts it.
+Even small contributions make a real difference. Thank you for taking the time to improve JAFAAL for everyone who self-hosts it.
