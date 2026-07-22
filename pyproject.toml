@@ -31,11 +31,17 @@ mfa = [
 sso = [
     "authlib>=1.6.11",
 ]
+# Distributed state store (shared lockout / MFA-replay across workers) via the
+# jafaal.adapters.RedisStateStore adapter.
+redis = [
+    "redis>=5.0.0",
+]
 # Convenience: every optional feature at once.
 all = [
     "pyotp>=2.9.0",
     "qrcode[pil]>=8.2",
     "authlib>=1.6.11",
+    "redis>=5.0.0",
 ]
 
 [dependency-groups]
@@ -60,6 +66,9 @@ test = [
     "pyotp>=2.9.0",
     "qrcode[pil]>=8.2",
     "authlib>=1.6.11",
+    # The Redis state-store adapter is tested hermetically against fakeredis.
+    "redis>=5.0.0",
+    "fakeredis>=2.21.0",
 ]
 dev = [
     "hatch>=1.16.5",
@@ -146,6 +155,8 @@ exclude = ["tests/"]
 module = [
     "pyotp",
     "user_agents",
+    "redis",
+    "redis.exceptions",
 ]
 ignore_missing_imports = true
 
@@ -184,6 +195,7 @@ ignore = [
 "jafaal/identity_providers/public_router.py" = ["S105", "S106"]  # false positive on token_type
 "jafaal/schema.py" = ["S105", "S106"]  # false positive on token_type Literal defaults
 "jafaal/utils.py" = ["S105", "S106"]  # false positive on cookie name constants
+"jafaal/adapters/static_settings.py" = ["S106"]  # false positive on the password_type policy default
 ".forgejo/scripts/check_conventional_commits.py" = ["T201", "W291"]  # CLI helper prints; regex string carries an intentional escaped space
 
 [tool.ruff.format]

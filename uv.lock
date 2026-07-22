@@ -544,6 +544,19 @@ wheels = [
 ]
 
 [[package]]
+name = "fakeredis"
+version = "2.36.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "redis" },
+    { name = "sortedcontainers" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0a/ed/86ed74d8829c3bc565025c1c9efaf8518c9165fbf8c9cc2c026c8ed21bd9/fakeredis-2.36.2.tar.gz", hash = "sha256:c37a0b307fae3f27ec7c19e59519e57b8c52782e00303df9075361b5ba441be6", size = 213336, upload-time = "2026-06-17T13:25:38.934Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fd/4d/e6e40f93031adbf654d34e542bd396e9f3bc1c6209b40c920d58c9e1317a/fakeredis-2.36.2-py3-none-any.whl", hash = "sha256:84cbb9c74ca8946c0d2499daadf3a5d0bfe3cfbac71e3398316d1a1eab3421c4", size = 141039, upload-time = "2026-06-17T13:25:36.638Z" },
+]
+
+[[package]]
 name = "fastapi"
 version = "0.138.0"
 source = { registry = "https://pypi.org/simple" }
@@ -863,30 +876,51 @@ name = "jafaal"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "authlib" },
+    { name = "cryptography" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "joserfc" },
     { name = "pwdlib", extra = ["argon2", "bcrypt"] },
     { name = "pydantic", extra = ["email"] },
-    { name = "pyotp" },
     { name = "python-multipart" },
-    { name = "qrcode", extra = ["pil"] },
     { name = "sqlalchemy" },
     { name = "user-agents" },
 ]
 
+[package.optional-dependencies]
+all = [
+    { name = "authlib" },
+    { name = "pyotp" },
+    { name = "qrcode", extra = ["pil"] },
+    { name = "redis" },
+]
+mfa = [
+    { name = "pyotp" },
+    { name = "qrcode", extra = ["pil"] },
+]
+redis = [
+    { name = "redis" },
+]
+sso = [
+    { name = "authlib" },
+]
+
 [package.dev-dependencies]
 dev = [
+    { name = "authlib" },
     { name = "faker" },
+    { name = "fakeredis" },
     { name = "hatch" },
     { name = "httpx" },
     { name = "hypothesis" },
     { name = "import-linter" },
     { name = "mypy" },
+    { name = "pyotp" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
+    { name = "qrcode", extra = ["pil"] },
+    { name = "redis" },
     { name = "ruff" },
     { name = "types-authlib" },
     { name = "types-qrcode" },
@@ -900,12 +934,17 @@ lint = [
     { name = "ruff" },
 ]
 test = [
+    { name = "authlib" },
     { name = "faker" },
+    { name = "fakeredis" },
     { name = "httpx" },
     { name = "hypothesis" },
+    { name = "pyotp" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
+    { name = "qrcode", extra = ["pil"] },
+    { name = "redis" },
 ]
 typecheck = [
     { name = "mypy" },
@@ -915,30 +954,42 @@ typecheck = [
 
 [package.metadata]
 requires-dist = [
-    { name = "authlib", specifier = ">=1.6.11" },
+    { name = "authlib", marker = "extra == 'all'", specifier = ">=1.6.11" },
+    { name = "authlib", marker = "extra == 'sso'", specifier = ">=1.6.11" },
+    { name = "cryptography", specifier = ">=45.0.1" },
     { name = "fastapi", specifier = ">=0.136.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "joserfc", specifier = ">=1.6.4" },
     { name = "pwdlib", extras = ["argon2", "bcrypt"], specifier = ">=0.3.0" },
     { name = "pydantic", extras = ["email"], specifier = ">=2.12.5" },
-    { name = "pyotp", specifier = ">=2.9.0" },
+    { name = "pyotp", marker = "extra == 'all'", specifier = ">=2.9.0" },
+    { name = "pyotp", marker = "extra == 'mfa'", specifier = ">=2.9.0" },
     { name = "python-multipart", specifier = ">=0.0.9" },
-    { name = "qrcode", extras = ["pil"], specifier = ">=8.2" },
+    { name = "qrcode", extras = ["pil"], marker = "extra == 'all'", specifier = ">=8.2" },
+    { name = "qrcode", extras = ["pil"], marker = "extra == 'mfa'", specifier = ">=8.2" },
+    { name = "redis", marker = "extra == 'all'", specifier = ">=5.0.0" },
+    { name = "redis", marker = "extra == 'redis'", specifier = ">=5.0.0" },
     { name = "sqlalchemy", specifier = ">=2.0.49" },
     { name = "user-agents", specifier = ">=2.2.0" },
 ]
+provides-extras = ["mfa", "sso", "redis", "all"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "authlib", specifier = ">=1.6.11" },
     { name = "faker", specifier = ">=40.15.0" },
+    { name = "fakeredis", specifier = ">=2.21.0" },
     { name = "hatch", specifier = ">=1.16.5" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "hypothesis", specifier = ">=6.150.0" },
     { name = "import-linter", specifier = ">=2.5" },
     { name = "mypy", specifier = ">=1.20.2" },
+    { name = "pyotp", specifier = ">=2.9.0" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "pytest-asyncio", specifier = ">=1.3.0" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
+    { name = "qrcode", extras = ["pil"], specifier = ">=8.2" },
+    { name = "redis", specifier = ">=5.0.0" },
     { name = "ruff", specifier = ">=0.15.12" },
     { name = "types-authlib" },
     { name = "types-qrcode" },
@@ -952,12 +1003,17 @@ lint = [
     { name = "ruff", specifier = ">=0.15.12" },
 ]
 test = [
+    { name = "authlib", specifier = ">=1.6.11" },
     { name = "faker", specifier = ">=40.15.0" },
+    { name = "fakeredis", specifier = ">=2.21.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "hypothesis", specifier = ">=6.150.0" },
+    { name = "pyotp", specifier = ">=2.9.0" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "pytest-asyncio", specifier = ">=1.3.0" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
+    { name = "qrcode", extras = ["pil"], specifier = ">=8.2" },
+    { name = "redis", specifier = ">=5.0.0" },
 ]
 typecheck = [
     { name = "mypy", specifier = ">=1.20.2" },
@@ -1774,6 +1830,15 @@ wheels = [
 [package.optional-dependencies]
 pil = [
     { name = "pillow" },
+]
+
+[[package]]
+name = "redis"
+version = "8.0.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/cc/c3/928b290c2c0ca99ab96eea5b4ff8f30be8112b075301a7d3ba214a3c8c12/redis-8.0.1.tar.gz", hash = "sha256:afc5a7a2f5a084f5b1880dec548dd45be17db7e43c82a30d84f952aefb05cfb0", size = 5114170, upload-time = "2026-06-23T14:52:37.728Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fd/0a/c2345ebf1ebe70840ce3f6c6ee612f8fa749cfbd1b03069c53bf0c62aaad/redis-8.0.1-py3-none-any.whl", hash = "sha256:47daa35a058c23468d6437f17a8c76882cb316b838ef763036af99b96cedd743", size = 502406, upload-time = "2026-06-23T14:52:36.137Z" },
 ]
 
 [[package]]

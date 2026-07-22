@@ -52,6 +52,7 @@ __all__ = [
     "configure_sessionmaker",
     "get_db",
     "get_sessionmaker",
+    "get_user_model",
     "session_scope",
     "user_id_python_type",
 ]
@@ -159,6 +160,20 @@ def _resolve_user_mapper() -> Mapper[Any]:
 def user_id_python_type() -> type:
     """Return the Python type of the host user table's primary key (``int``/``UUID``)."""
     return _resolve_user_mapper().primary_key[0].type.python_type
+
+
+def get_user_model() -> type:
+    """Return the host's user class (the class mapped to the ``users`` table).
+
+    Resolves the single class the host built on :data:`Base` and mapped to
+    ``users`` (see :mod:`jafaal.user_model`). Useful for reference adapters such
+    as :class:`jafaal.adapters.SqlAlchemyUserRepository` that construct or query
+    the user row without the host wiring the class in explicitly.
+
+    Raises:
+        RuntimeError: If no class is mapped to the ``users`` table yet.
+    """
+    return _resolve_user_mapper().class_
 
 
 def coerce_user_id(value: Any) -> Any:
