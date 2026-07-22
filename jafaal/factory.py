@@ -23,16 +23,22 @@ with those settings.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter
 
+import jafaal.rate_limit as jafaal_rate_limit
+import jafaal.settings as jafaal_settings
+import jafaal.state_store as jafaal_state_store
 from jafaal.error_handler import register_exception_handlers
 from jafaal.rate_limit import RateLimiter, configure_rate_limiter
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -50,6 +56,35 @@ class RouterPrefixes:
     identity_providers_public: str = "/public/idp"
     password_reset: str = "/auth"
     sign_up: str = "/auth"
+
+
+def _warn_on_insecure_defaults() -> None:
+    """Log startup warnings when security-relevant defaults are still in effect.
+
+    Two silent-by-default footguns are surfaced here, at the single integration
+    entry point, so an operator sees them in the logs:
+
+    * the no-op rate limiter (endpoints are not rate-limited); and
+    * the process-local in-memory state store in a *deployed* environment (a
+      multi-worker / multi-replica deployment then keeps lockout and TOTP-replay
+      state per-worker, weakening both).
+    """
+    if not jafaal_rate_limit.is_enforcing():
+        logger.warning(
+            "JAFAAL rate limiting is not configured: the no-op limiter is active, so login / MFA / "
+            "password-reset / refresh endpoints are NOT rate-limited. Pass rate_limiter= to "
+            "create_auth_router() (or call jafaal.configure_rate_limiter(...)) with a real limiter in "
+            "production. Per-account progressive lockout still applies."
+        )
+
+    deployed = jafaal_settings.is_configured() and jafaal_settings.get_settings().is_deployed
+    if deployed and isinstance(jafaal_state_store.get_state_store(), jafaal_state_store.InMemoryStateStore):
+        logger.warning(
+            "JAFAAL is using the in-memory StateStore in a deployed environment. It is process-local, "
+            "so a multi-worker / multi-replica deployment keeps progressive-lockout counters and "
+            "TOTP-replay markers per-worker, weakening brute-force and replay protection. Configure a "
+            "distributed backend via jafaal.configure_state_store(...) (e.g. jafaal.adapters.RedisStateStore)."
+        )
 
 
 def create_auth_router(
@@ -81,6 +116,8 @@ def create_auth_router(
     if app is not None:
         register_exception_handlers(app)
     prefixes = prefixes or RouterPrefixes()
+
+    _warn_on_insecure_defaults()
 
     # Import the sub-routers lazily: the rate-limit decorators bind the
     # configured limiter at decoration (import) time, so the limiter must be

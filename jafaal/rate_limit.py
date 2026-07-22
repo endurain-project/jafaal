@@ -73,6 +73,16 @@ def get_rate_limiter() -> RateLimiter:
     return _rate_limiter.get()
 
 
+def is_enforcing() -> bool:
+    """Return whether a real (non-no-op) rate limiter is installed.
+
+    ``False`` means the :class:`NoOpRateLimiter` default is still in effect, so
+    JAFAAL's endpoints are not rate-limited. ``create_auth_router`` uses this to
+    warn at startup when enforcement is missing.
+    """
+    return not isinstance(_rate_limiter.get(), NoOpRateLimiter)
+
+
 def reset_rate_limiter() -> None:
     """Reset to the no-op limiter. Intended for tests."""
     _rate_limiter.reset()
