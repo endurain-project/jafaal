@@ -91,8 +91,9 @@ them explicitly. The core depends only on the ports, so any adapter is swappable
 
 ### `SqlAlchemyUserRepository`
 
-A generic `UserRepository` over a host user model built on `jafaal.orm.Base`.
-The user class is auto-resolved from the registry (or pass it explicitly).
+A generic `UserRepository` over the host's user model (mapped via
+`jafaal.map_models`). The user class is auto-resolved from the registry (or pass
+it explicitly).
 
 ```python
 from jafaal import configure_user_repository

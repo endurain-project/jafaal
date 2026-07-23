@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING
 
 from fastapi.responses import JSONResponse
 
-import jafaal.utils as jafaal_utils
 from jafaal.exceptions import JafaalError
 
 if TYPE_CHECKING:
@@ -34,6 +33,10 @@ async def jafaal_exception_handler(request: Request, exc: JafaalError) -> JSONRe
         headers=dict(exc.headers) if exc.headers else None,
     )
     if getattr(exc, "clear_refresh_cookie", False):
+        # Imported lazily: jafaal.utils pulls in the ORM layer, which is not
+        # mapped until jafaal.map_models() runs.
+        import jafaal.utils as jafaal_utils
+
         jafaal_utils.clear_refresh_token_cookies(response)
     return response
 

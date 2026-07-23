@@ -84,22 +84,40 @@ jafaal.configure(
 Once every token signed with — and every secret encrypted with — the old key has
 expired or been re-written, drop the fallback.
 
-## Database: `Base` and the session factory
+## Database: your `Base` and the session factory
 
-JAFAAL owns a single declarative registry so its companion tables and your user
-table share one metadata. Build your model on [`jafaal.orm.Base`][jafaal.Base]
-— it **must** be the class `Users` mapped to the `users` table — and register a
-session factory bound to your engine.
+You own the declarative registry; JAFAAL maps its companion tables into it with
+[`map_models`][jafaal.map_models], so both share one metadata. Build your model
+on your own `DeclarativeBase` — it **must** be the class `Users` mapped to the
+`users` table — call `map_models`, and register a session factory bound to your
+engine.
 
 ```python
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
 import jafaal
+from jafaal import IntPKUserMixin
+
+
+class Base(DeclarativeBase):
+    ...  # your own base — naming conventions, schema, your other models
+
+
+class Users(IntPKUserMixin, Base):
+    __tablename__ = "users"
+
+
+jafaal.map_models(Base)  # map JAFAAL's tables into your registry
 
 engine = create_engine("postgresql+psycopg://...")
 jafaal.configure_sessionmaker(sessionmaker(bind=engine, autoflush=False))
-jafaal.orm.Base.metadata.create_all(engine)  # or use migrations
+Base.metadata.create_all(engine)  # fine for dev/tests; use jafaal.migrations in production (below)
 ```
+
+`map_models(...)` must run once at startup, **after** you define `Users` and
+**before** `create_auth_router()` or any DB use (importing a JAFAAL model before
+it is a configuration error). Omit the argument — `jafaal.map_models()` — to use
+JAFAAL's own convenience `jafaal.orm.Base` instead of owning one.
 
 The reverse relationships (`users_sessions`, `local_credential`, `auth_mfa`, …)
 and the `mfa_enabled` property are supplied by the mixin — you declare none of
@@ -127,6 +145,26 @@ rather than an accident. Use whichever backend your host app already uses (e.g.
     are stored differently across dialects (SQLite keeps UUIDs as 32-char hex and
     can return naive datetimes); JAFAAL normalizes timestamps back to
     timezone-aware UTC on read, so this stays transparent to callers.
+
+### Migrations
+
+JAFAAL ships its schema as **Alembic** migrations (the `jafaal[migrations]`
+extra) so its companion tables can evolve across releases. They run on a
+dedicated version table (`jafaal_alembic_version`) and touch only JAFAAL's own
+tables — your `users` table and your Alembic history are left alone.
+
+```python
+from jafaal import migrations
+
+migrations.upgrade(engine)                  # create/upgrade JAFAAL's tables
+# migrations.stamp(engine)                  # existing DB whose tables already exist
+# migrations.verify_schema_current(engine)  # fail fast at startup if not migrated
+```
+
+Your `users` table must exist first (JAFAAL's tables reference `users.id`), so
+run your own migrations before JAFAAL's. Prefer a single, unified Alembic
+history? Point your `env.py` at `jafaal.orm.Base.metadata` and add the package's
+`versions` directory to your `version_locations` instead.
 
 ## Scopes
 

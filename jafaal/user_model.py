@@ -5,14 +5,19 @@ SQLAlchemy *mixins* that carry only the columns the authentication layer needs,
 leaving the table name, the primary-key type, and every profile column to the
 host application.
 
-A host app composes a primary-key mixin with JAFAAL's ``Base`` and adds
-whatever extra profile columns it needs::
+A host app composes a primary-key mixin with its **own** declarative ``Base``,
+adds whatever extra profile columns it needs, then maps JAFAAL's companion tables
+into that base with :func:`jafaal.map_models`::
 
     from sqlalchemy import String
-    from sqlalchemy.orm import Mapped, mapped_column
+    from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-    from jafaal.orm import Base
+    import jafaal
     from jafaal import IntPKUserMixin
+
+
+    class Base(DeclarativeBase):
+        ...  # the host owns the base (naming conventions, schema, other models)
 
 
     class Users(IntPKUserMixin, Base):
@@ -22,12 +27,16 @@ whatever extra profile columns it needs::
         display_name: Mapped[str | None] = mapped_column(String(250))
         city: Mapped[str | None] = mapped_column(String(250))
 
+
+    jafaal.map_models(Base)  # map JAFAAL's tables into the host's registry
+
 For a UUID primary key, subclass :class:`UUIDPKUserMixin` instead.
 
 **Conventions (required).** JAFAAL's companion tables resolve their
 relationships and foreign keys by name, so the host model **must** be the class
-``Users`` mapped to the ``users`` table, built on :data:`jafaal.orm.Base` (so it
-shares JAFAAL's single registry — see :mod:`jafaal.orm`). The reverse
+``Users`` mapped to the ``users`` table, built on the base passed to
+:func:`jafaal.map_models` (so JAFAAL's tables share the host's single registry —
+see :mod:`jafaal.orm`). The reverse
 relationships to JAFAAL's tables (``users_sessions``, ``local_credential``,
 ``auth_mfa`` …) and the ``mfa_enabled`` property are supplied by the mixin; the
 host does not declare them.

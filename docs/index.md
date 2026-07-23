@@ -67,11 +67,10 @@ import jafaal
 from cryptography.fernet import Fernet
 from fastapi import FastAPI
 from sqlalchemy import String, create_engine
-from sqlalchemy.orm import Mapped, mapped_column, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 from jafaal import IntPKUserMixin
 from jafaal.adapters import SqlAlchemyUserRepository, StaticSettingsProvider
-from jafaal.orm import Base
 
 # 1. Configure the library (you build settings; JAFAAL reads no env itself).
 jafaal.configure(
@@ -85,11 +84,17 @@ jafaal.configure(
 )
 
 
-# 2. Build your user model on JAFAAL's Base (must be named `Users`, table `users`).
+# 2. You own the Base; build `Users` on it (must be named `Users`, table `users`).
+class Base(DeclarativeBase):
+    pass
+
+
 class Users(IntPKUserMixin, Base):
     __tablename__ = "users"
     display_name: Mapped[str | None] = mapped_column(String(250))
 
+
+jafaal.map_models(Base)  # map JAFAAL's companion tables into your registry
 
 engine = create_engine("postgresql+psycopg://...")
 jafaal.configure_sessionmaker(sessionmaker(bind=engine, autoflush=False))

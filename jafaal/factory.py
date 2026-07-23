@@ -162,10 +162,11 @@ def verify_configuration() -> None:
     once at startup (e.g. in a FastAPI lifespan handler) to fail fast with a
     single, clear message listing everything that is missing.
 
-    Checks the components JAFAAL cannot default: the settings object, the session
-    factory, the user repository, and the settings provider. The event sink,
-    state store, rate limiter, and scope catalog all have working defaults and so
-    are not required here. Also enforces
+    Checks the components JAFAAL cannot default: the ORM model mapping
+    (:func:`jafaal.map_models`), the settings object, the session factory, the
+    user repository, and the settings provider. The event sink, state store,
+    rate limiter, and scope catalog all have working defaults and so are not
+    required here. Also enforces
     :func:`_ensure_state_store_safe_for_deployment`.
 
     Raises:
@@ -174,6 +175,8 @@ def verify_configuration() -> None:
             deployed environment without the opt-out.
     """
     missing: list[str] = []
+    if not jafaal_orm.is_models_mapped():
+        missing.append("ORM models — call jafaal.map_models(YourBase) after defining your Users model")
     if not jafaal_settings.is_configured():
         missing.append("AuthSettings — call jafaal.configure(AuthSettings(...))")
     if not jafaal_orm.is_sessionmaker_configured():

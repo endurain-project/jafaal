@@ -7,7 +7,10 @@ from sqlalchemy import JSON, Boolean, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
-from jafaal.orm import Base
+from jafaal.orm import get_active_base
+
+# JAFAAL's models bind to the host-owned declarative base at map_models() time.
+Base = get_active_base()
 
 if TYPE_CHECKING:
     from jafaal.identity_providers.links.models import IdentityLink

@@ -37,26 +37,17 @@ Exports:
       ``UUIDPKUserMixin`` (extensible base for the host app's user table)
 """
 
+from importlib import import_module as _import_module
 from importlib.metadata import PackageNotFoundError as _PackageNotFoundError
 from importlib.metadata import version as _version
+from typing import TYPE_CHECKING
 
-# Register every JAFAAL ORM model on ``jafaal.orm.Base`` at import time so that
-# their relationships — and the reverse relationships a host user model inherits
-# from ``UserMixin`` — all resolve at mapper-configuration time. Importing each
-# ``models`` module is what registers its mapped classes on the shared registry.
-from ._internal.internal_dependencies import (
-    AuthContext,
-    get_sid_from_access_token,
-    get_sid_from_refresh_token,
-    get_sub_from_access_token,
-    get_sub_from_refresh_token,
-    header_client_type_scheme,
-    header_csrf_token_scheme,
-    oauth2_scheme,
-    validate_access_token_expiration,
-    validate_access_token_or_api_key,
-    validate_refresh_token,
-)
+# Eager, model-free foundation — safe to import before ``jafaal.map_models()``.
+# The model-touching public API (security dependencies, login helpers, API-key
+# scope config) transitively imports the ORM model layer, which does not exist
+# until the host calls ``jafaal.map_models(...)``. That API is therefore loaded
+# lazily via ``__getattr__`` (see the TYPE_CHECKING / ``_LAZY_EXPORTS`` block
+# near the bottom of this module).
 from ._internal.password_hasher import (
     PasswordHasher,
     PasswordPolicyError,
@@ -74,14 +65,6 @@ from ._internal.security_stores import (
     get_step_up_attempts,
 )
 from ._internal.token_manager import TokenManager, TokenType, get_token_manager
-from .api_keys import models as _api_keys_models  # noqa: F401
-from .api_keys.utils import (
-    configure_api_key_scopes,
-    get_api_key_scopes,
-    reset_api_key_scopes,
-)
-from .credentials import models as _credentials_models  # noqa: F401
-from .dependencies import check_auth_scopes
 from .error_handler import jafaal_exception_handler, register_exception_handlers
 from .exceptions import (
     AuthenticationError,
@@ -110,14 +93,13 @@ from .exceptions import (
     UpstreamTimeoutError,
 )
 from .factory import RouterPrefixes, create_auth_router, verify_configuration
-from .identity_providers import models as _idp_models  # noqa: F401
-from .identity_providers.link_tokens import models as _idp_link_token_models  # noqa: F401
-from .identity_providers.links import models as _idp_link_models  # noqa: F401
-from .mfa import models as _mfa_models  # noqa: F401
-from .mfa.backup_codes import models as _mfa_backup_codes_models  # noqa: F401
-from .oauth_state import models as _oauth_state_models  # noqa: F401
-from .orm import Base, configure_sessionmaker
-from .password_reset_tokens import models as _password_reset_tokens_models  # noqa: F401
+from .orm import (
+    Base,
+    configure_sessionmaker,
+    get_active_base,
+    is_models_mapped,
+    map_models,
+)
 from .ports import (
     AuthEventSink,
     EmailVerificationRequested,
@@ -164,10 +146,7 @@ from .scopes import (
     get_scope_catalog,
     reset_scopes,
 )
-from .sessions import models as _sessions_models  # noqa: F401
-from .sessions.rotated_refresh_tokens import models as _rotated_token_models  # noqa: F401
 from .settings import AuthSettings, configure, get_settings, reset
-from .sign_up_tokens import models as _sign_up_tokens_models  # noqa: F401
 from .state_store import (
     InMemoryStateStore,
     StateStore,
@@ -178,12 +157,75 @@ from .state_store import (
     reset_state_store,
 )
 from .user_model import IntPKUserMixin, UserMixin, UUIDPKUserMixin
-from .utils import (
-    authenticate_user,
-    complete_login,
-    create_mobile_pkce_session_response,
-    create_tokens,
-)
+
+# ---------------------------------------------------------------------------
+# Lazy, model-touching public API.
+#
+# These symbols transitively import the ORM model layer, which is not defined
+# until the host calls ``jafaal.map_models(...)``. They are therefore imported
+# on first access via ``__getattr__`` (by which time the host has mapped the
+# models). Declared under TYPE_CHECKING so static type checkers still see their
+# real signatures.
+# ---------------------------------------------------------------------------
+if TYPE_CHECKING:
+    from ._internal.internal_dependencies import (
+        AuthContext,
+        get_sid_from_access_token,
+        get_sid_from_refresh_token,
+        get_sub_from_access_token,
+        get_sub_from_refresh_token,
+        header_client_type_scheme,
+        header_csrf_token_scheme,
+        oauth2_scheme,
+        validate_access_token_expiration,
+        validate_access_token_or_api_key,
+        validate_refresh_token,
+    )
+    from .api_keys.utils import (
+        configure_api_key_scopes,
+        get_api_key_scopes,
+        reset_api_key_scopes,
+    )
+    from .dependencies import check_auth_scopes
+    from .utils import (
+        authenticate_user,
+        complete_login,
+        create_mobile_pkce_session_response,
+        create_tokens,
+    )
+
+_LAZY_EXPORTS: dict[str, str] = {
+    "AuthContext": "jafaal._internal.internal_dependencies",
+    "get_sid_from_access_token": "jafaal._internal.internal_dependencies",
+    "get_sid_from_refresh_token": "jafaal._internal.internal_dependencies",
+    "get_sub_from_access_token": "jafaal._internal.internal_dependencies",
+    "get_sub_from_refresh_token": "jafaal._internal.internal_dependencies",
+    "header_client_type_scheme": "jafaal._internal.internal_dependencies",
+    "header_csrf_token_scheme": "jafaal._internal.internal_dependencies",
+    "oauth2_scheme": "jafaal._internal.internal_dependencies",
+    "validate_access_token_expiration": "jafaal._internal.internal_dependencies",
+    "validate_access_token_or_api_key": "jafaal._internal.internal_dependencies",
+    "validate_refresh_token": "jafaal._internal.internal_dependencies",
+    "check_auth_scopes": "jafaal.dependencies",
+    "authenticate_user": "jafaal.utils",
+    "complete_login": "jafaal.utils",
+    "create_mobile_pkce_session_response": "jafaal.utils",
+    "create_tokens": "jafaal.utils",
+    "configure_api_key_scopes": "jafaal.api_keys.utils",
+    "get_api_key_scopes": "jafaal.api_keys.utils",
+    "reset_api_key_scopes": "jafaal.api_keys.utils",
+}
+
+
+def __getattr__(name: str) -> object:
+    """Lazily import the model-touching public API on first access (PEP 562)."""
+    module_name = _LAZY_EXPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(_import_module(module_name), name)
+    globals()[name] = value  # cache so later access skips __getattr__
+    return value
+
 
 try:
     __version__ = _version("jafaal")
@@ -200,7 +242,10 @@ __all__ = [
     "configure",
     "configure_sessionmaker",
     "create_auth_router",
+    "get_active_base",
     "get_settings",
+    "is_models_mapped",
+    "map_models",
     "reset",
     "verify_configuration",
     # Ports (host-implemented boundary)

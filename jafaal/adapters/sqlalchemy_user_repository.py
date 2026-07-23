@@ -1,6 +1,6 @@
 """Reference SQLAlchemy :class:`~jafaal.ports.UserRepository`.
 
-A generic adapter over a host user model built on :data:`jafaal.orm.Base` (see
+A generic adapter over a host user model mapped via :func:`jafaal.map_models` (see
 :mod:`jafaal.user_model`). It covers the common case where the auth-relevant
 columns (``username``, ``email``, ``is_active``, ``is_verified``) are enough to
 create a row.

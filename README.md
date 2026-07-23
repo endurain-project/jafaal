@@ -77,18 +77,21 @@ jafaal.configure(
 )
 ```
 
-### 2. Build your user model on JAFAAL's `Base` and register a session factory
+### 2. Own your `Base`, map JAFAAL's tables in, and register a session factory
 
-JAFAAL owns a single declarative registry so its companion tables and your user
-table share one metadata. Your model **must** be named `Users`, mapped to the
-`users` table.
+You own the declarative registry; JAFAAL maps its companion tables into it with
+`map_models`, so both share one metadata. Your model **must** be named `Users`,
+mapped to the `users` table.
 
 ```python
 from sqlalchemy import String, create_engine
-from sqlalchemy.orm import Mapped, mapped_column, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
-from jafaal.orm import Base
 from jafaal import IntPKUserMixin
+
+
+class Base(DeclarativeBase):      # you own the base
+    pass
 
 
 class Users(IntPKUserMixin, Base):
@@ -96,6 +99,8 @@ class Users(IntPKUserMixin, Base):
     # Add any app-specific profile columns — JAFAAL never touches them:
     display_name: Mapped[str | None] = mapped_column(String(250))
 
+
+jafaal.map_models(Base)            # map JAFAAL's companion tables into your registry
 
 engine = create_engine("postgresql+psycopg://...")
 jafaal.configure_sessionmaker(sessionmaker(bind=engine, autoflush=False))

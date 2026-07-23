@@ -6,7 +6,10 @@ from typing import TYPE_CHECKING
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from jafaal.orm import Base, UserId
+from jafaal.orm import UserId, get_active_base
+
+# JAFAAL's models bind to the host-owned declarative base at map_models() time.
+Base = get_active_base()
 
 if TYPE_CHECKING:
     from jafaal.user_model import UserMixin as Users

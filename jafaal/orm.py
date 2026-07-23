@@ -1,41 +1,55 @@
-"""JAFAAL's SQLAlchemy declarative base and database-session plumbing.
+"""JAFAAL's SQLAlchemy registry plumbing and database-session helpers.
 
-**Option A (jafaal owns the Base).** JAFAAL's companion tables and the host
+**Option B (the host owns the ``Base``).** JAFAAL's companion tables and the host
 application's user model must live in a *single* declarative registry so that
-string relationships (``relationship("Users", ...)``) and cross-table foreign
-keys (``ForeignKey("users.id")``) resolve. JAFAAL provides that registry here.
+string relationships (``relationship("Users", ...)``) and cross-table foreign keys
+(``ForeignKey("users.id")``) resolve. The host owns that registry; JAFAAL maps its
+models **into** it.
 
 Host applications:
 
-1. Build their user model on this ``Base``::
+1. Own a declarative base and build their ``Users`` model on it::
 
-       from jafaal.orm import Base
+       from sqlalchemy.orm import DeclarativeBase
        from jafaal import IntPKUserMixin
+
+       class Base(DeclarativeBase):
+           ...  # the host's own base (naming conventions, schema, ...)
 
        class Users(IntPKUserMixin, Base):
            __tablename__ = "users"
            # ...app-specific profile columns...
 
-   The class **must** be named ``Users`` and mapped to the ``users`` table —
-   that is how JAFAAL's models resolve their relationships/foreign keys. The
-   reverse relationships (``users_sessions``, ``local_credential`` …) are
-   supplied by the mixin, so the host does not declare them.
+   The class **must** be named ``Users`` and mapped to the ``users`` table — that
+   is how JAFAAL's models resolve their relationships/foreign keys. The reverse
+   relationships (``users_sessions``, ``local_credential`` …) are supplied by the
+   mixin, so the host does not declare them. (A host that does not want to own a
+   base may build ``Users`` on JAFAAL's convenience :data:`Base` and call
+   :func:`map_models` with no argument.)
 
-2. Register a session factory bound to their own engine::
+2. Map JAFAAL's tables into that base's registry, once, at startup::
+
+       import jafaal
+       jafaal.map_models(Base)   # define + map JAFAAL's companion tables
+
+   This must happen **before** :func:`jafaal.create_auth_router` or any DB use —
+   importing a JAFAAL model (or CRUD/router) before it is a configuration error.
+
+3. Register a session factory bound to their own engine::
 
        from sqlalchemy import create_engine
        from sqlalchemy.orm import sessionmaker
-       import jafaal
 
        engine = create_engine(...)
        jafaal.configure_sessionmaker(sessionmaker(bind=engine, autoflush=False))
-       jafaal.orm.Base.metadata.create_all(engine)  # or use migrations
+       Base.metadata.create_all(engine)  # dev/tests; use jafaal.migrations in prod
 
 JAFAAL never creates the engine itself; the host owns the connection.
 """
 
 from __future__ import annotations
 
+import importlib
 import uuid
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -50,10 +64,15 @@ __all__ = [
     "UserId",
     "coerce_user_id",
     "configure_sessionmaker",
+    "get_active_base",
     "get_db",
     "get_sessionmaker",
     "get_user_model",
+    "is_models_mapped",
     "is_sessionmaker_configured",
+    "jafaal_table_names",
+    "map_models",
+    "mapper_registry",
     "session_scope",
     "user_id_python_type",
 ]
@@ -66,7 +85,102 @@ UserId = int | uuid.UUID
 
 
 class Base(DeclarativeBase):
-    """Declarative base shared by JAFAAL models and the host's user model."""
+    """JAFAAL's convenience declarative base.
+
+    Under Option B the **host** owns the registry: define your own
+    :class:`~sqlalchemy.orm.DeclarativeBase`, build ``Users`` on it, and pass it
+    to :func:`map_models`. Use this default base only if you would rather not own
+    one — build ``Users`` on it and call ``map_models()`` with no argument.
+    """
+
+
+#: JAFAAL's default registry (the one behind :data:`Base`). Exposed so a host may
+#: build its own base on the *same* registry (``class Base(DeclarativeBase):
+#: registry = jafaal.orm.mapper_registry``) instead of passing a base to
+#: :func:`map_models`, if it prefers that style.
+mapper_registry = Base.registry
+
+# The active declarative base JAFAAL's models are mapped onto; ``None`` until
+# ``map_models`` runs. Host-owned under Option B, or :data:`Base` by default.
+_active_base: type[DeclarativeBase] | None = None
+
+# Every module that defines a JAFAAL companion model. ``map_models`` imports each
+# (order-independent — relationships resolve by name at ``registry.configure()``),
+# and each module binds its classes to the active base via ``get_active_base()``.
+_MODEL_MODULES: tuple[str, ...] = (
+    "jafaal.credentials.models",
+    "jafaal.sessions.models",
+    "jafaal.sessions.rotated_refresh_tokens.models",
+    "jafaal.api_keys.models",
+    "jafaal.mfa.models",
+    "jafaal.mfa.backup_codes.models",
+    "jafaal.identity_providers.models",
+    "jafaal.identity_providers.links.models",
+    "jafaal.identity_providers.link_tokens.models",
+    "jafaal.oauth_state.models",
+    "jafaal.password_reset_tokens.models",
+    "jafaal.sign_up_tokens.models",
+)
+
+
+def get_active_base() -> type[DeclarativeBase]:
+    """Return the declarative base JAFAAL's models are mapped onto.
+
+    Model modules call this at import time to obtain their base, so importing a
+    model module (or any CRUD/router that imports one) before :func:`map_models`
+    is a configuration error.
+
+    Raises:
+        RuntimeError: If :func:`map_models` has not been called yet.
+    """
+    if _active_base is None:
+        raise RuntimeError(
+            "JAFAAL's models are not mapped yet. Call jafaal.map_models(YourBase) "
+            "(or jafaal.map_models() to use jafaal.orm.Base) once at startup — after "
+            "defining your Users model and before create_auth_router() or any DB use."
+        )
+    return _active_base
+
+
+def is_models_mapped() -> bool:
+    """Return whether :func:`map_models` has been called."""
+    return _active_base is not None
+
+
+def map_models(base: type[DeclarativeBase] | None = None) -> None:
+    """Define and map JAFAAL's companion tables into ``base``'s registry.
+
+    Call once at startup, **after** defining your ``Users`` model and **before**
+    :func:`jafaal.create_auth_router` or any database use. JAFAAL's models are
+    mapped onto the base you pass, so your ``Users`` model and JAFAAL's tables
+    share one registry — which is what resolves ``relationship("Users")`` and the
+    ``users.id`` foreign keys.
+
+    Args:
+        base: The host's :class:`~sqlalchemy.orm.DeclarativeBase` subclass; your
+            ``Users`` model must be built on it. Omit it to use JAFAAL's own
+            :data:`Base` (the convenience default).
+
+    Raises:
+        RuntimeError: If called again with a different base, or if a model
+            references a class (e.g. ``Users``) that is not mapped on ``base``.
+    """
+    global _active_base
+    target = base if base is not None else Base
+    if _active_base is not None:
+        if _active_base is not target:
+            raise RuntimeError("jafaal.map_models() was already called with a different base; call it once at startup.")
+        return
+    _active_base = target
+    try:
+        for module_name in _MODEL_MODULES:
+            importlib.import_module(module_name)
+        # Resolve every mapper/relationship now so misconfiguration (e.g. no
+        # Users mapped on this base) fails fast at startup, not on first query.
+        target.registry.configure()
+    except Exception:
+        _active_base = None  # let the host fix the problem and retry
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -147,19 +261,21 @@ def _resolve_user_mapper() -> Mapper[Any]:
     """Return the mapper of the host's user class (the class mapped to ``users``).
 
     JAFAAL requires the host user model to be mapped to the ``users`` table on
-    this ``Base`` (see :mod:`jafaal.user_model`), so it is unambiguous within the
-    process.
+    the active base (see :mod:`jafaal.user_model`), so it is unambiguous within
+    the process.
 
     Raises:
-        RuntimeError: If no class is mapped to the ``users`` table yet.
+        RuntimeError: If models are not mapped, or no class is mapped to the
+            ``users`` table.
     """
-    for mapper in Base.registry.mappers:
+    for mapper in get_active_base().registry.mappers:
         table = mapper.local_table
         if table is not None and getattr(table, "name", None) == "users":
             return mapper
     raise RuntimeError(
         "JAFAAL could not find a mapped class for the 'users' table. Build your "
-        "user model on jafaal.orm.Base (see jafaal.user_model)."
+        "Users model on your declarative base and pass it to jafaal.map_models(...) "
+        "(see jafaal.user_model)."
     )
 
 
@@ -180,6 +296,28 @@ def get_user_model() -> type:
         RuntimeError: If no class is mapped to the ``users`` table yet.
     """
     return _resolve_user_mapper().class_
+
+
+def jafaal_table_names() -> frozenset[str]:
+    """Return the names of the tables owned by JAFAAL's own models.
+
+    Every table mapped by a class defined under the ``jafaal`` package — i.e. all
+    of JAFAAL's companion tables, but **not** the host's ``users`` table (whose
+    model lives in the host application, outside ``jafaal.*``) nor any other host
+    table sharing the registry.
+
+    The migration tooling (:mod:`jafaal.migrations`) uses this to scope its
+    operations to JAFAAL's tables and leave the host-owned ``users`` table alone.
+    """
+    names: set[str] = set()
+    for mapper in get_active_base().registry.mappers:
+        if not mapper.class_.__module__.startswith("jafaal."):
+            continue
+        table = mapper.local_table
+        name = getattr(table, "name", None)
+        if name:
+            names.add(name)
+    return frozenset(names)
 
 
 def coerce_user_id(value: Any) -> Any:

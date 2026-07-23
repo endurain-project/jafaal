@@ -3,7 +3,7 @@
 Provides a fully-wired, standalone JAFAAL for functional tests:
 
 * an in-memory SQLite database shared across sessions/threads (``StaticPool``),
-* a real host ``Users`` model built on :data:`jafaal.orm.Base`,
+* a real host ``Users`` model built on the host's own ``Base`` (Option B),
 * in-memory ``UserRepository`` / static ``SettingsProvider`` / recording
   ``AuthEventSink`` adapters, and
 * per-test schema + state-store isolation.
@@ -20,19 +20,20 @@ import os
 import pytest
 from cryptography.fernet import Fernet
 from sqlalchemy import String, create_engine
-from sqlalchemy.orm import Mapped, mapped_column, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import jafaal
-import jafaal.credentials.crud as credentials_crud
 import jafaal.orm as jafaal_orm
 from jafaal import IntPKUserMixin
-from jafaal._internal.password_hasher import password_hasher
-from jafaal.orm import Base
 
 # --------------------------------------------------------------------------- #
 # Host user model (built on JAFAAL's single declarative registry)
 # --------------------------------------------------------------------------- #
+
+
+class Base(DeclarativeBase):
+    """Host-owned declarative base (Option B: the host owns the registry)."""
 
 
 class Users(IntPKUserMixin, Base):
@@ -41,6 +42,11 @@ class Users(IntPKUserMixin, Base):
     __tablename__ = "users"
 
     display_name: Mapped[str | None] = mapped_column(String(250), nullable=True)
+
+
+# Map JAFAAL's companion tables into the host-owned registry once, at import time
+# — before any JAFAAL model / CRUD module is imported (below or by test modules).
+jafaal.map_models(Base)
 
 
 # --------------------------------------------------------------------------- #
@@ -218,6 +224,9 @@ def make_user():
         is_superuser=False,
         is_verified=True,
     ):
+        import jafaal.credentials.crud as credentials_crud
+        from jafaal._internal.password_hasher import password_hasher
+
         session = jafaal_orm.get_sessionmaker()()
         try:
             user = Users(

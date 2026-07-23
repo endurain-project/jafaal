@@ -13,8 +13,8 @@ dependencies and the dependency direction only ever points *inward*
 Provided:
 
 * :class:`~jafaal.adapters.sqlalchemy_user_repository.SqlAlchemyUserRepository`
-  — a generic ``UserRepository`` over a host user model built on
-  :data:`jafaal.orm.Base`.
+  — a generic ``UserRepository`` over the host's user model (mapped via
+  :func:`jafaal.map_models`).
 * :class:`~jafaal.adapters.static_settings.StaticSettingsProvider` — a
   ``SettingsProvider`` backed by in-code constants (the simple, non-DB
   password-policy / sign-up-config mode).

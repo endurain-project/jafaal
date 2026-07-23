@@ -49,12 +49,17 @@ sso = [
 redis = [
     "redis>=5.0.0",
 ]
+# Alembic migrations for JAFAAL's companion tables (jafaal.migrations).
+migrations = [
+    "alembic>=1.13",
+]
 # Convenience: every optional feature at once.
 all = [
     "pyotp>=2.9.0",
     "qrcode[pil]>=8.2",
     "authlib>=1.6.11",
     "redis>=5.0.0",
+    "alembic>=1.13",
 ]
 
 [dependency-groups]
@@ -82,6 +87,8 @@ test = [
     # The Redis state-store adapter is tested hermetically against fakeredis.
     "redis>=5.0.0",
     "fakeredis>=2.21.0",
+    # The migrations suite drives the packaged Alembic revisions.
+    "alembic>=1.13",
 ]
 # Real database drivers for the CI database matrix (Postgres + MySQL). The
 # default test run uses in-memory SQLite (built into Python) and needs neither;
@@ -169,7 +176,12 @@ incremental = false
 check_untyped_defs = true
 mypy_path = ["."]
 files = ["jafaal"]
-exclude = ["tests/"]
+# The Alembic env script and revision files are convention-driven (executed by
+# Alembic, not imported) and are not type-checked. The ORM model modules bind to
+# a runtime-resolved base (Option B: the host owns the base), so they cannot be
+# statically typed and are excluded here (and treated as untyped by importers via
+# the follow_imports override below).
+exclude = ["tests/", "jafaal/migrations/env\\.py$", "jafaal/migrations/versions/", "jafaal/.*/models\\.py$"]
 
 [[tool.mypy.overrides]]
 module = [
@@ -177,8 +189,29 @@ module = [
     "user_agents",
     "redis",
     "redis.exceptions",
+    "alembic",
+    "alembic.*",
 ]
 ignore_missing_imports = true
+
+# ORM model modules bind to a host-owned base resolved at runtime, so they are
+# not statically typed; importers see their classes as ``Any``.
+[[tool.mypy.overrides]]
+module = [
+    "jafaal.api_keys.models",
+    "jafaal.credentials.models",
+    "jafaal.identity_providers.models",
+    "jafaal.identity_providers.link_tokens.models",
+    "jafaal.identity_providers.links.models",
+    "jafaal.mfa.backup_codes.models",
+    "jafaal.mfa.models",
+    "jafaal.oauth_state.models",
+    "jafaal.password_reset_tokens.models",
+    "jafaal.sessions.models",
+    "jafaal.sessions.rotated_refresh_tokens.models",
+    "jafaal.sign_up_tokens.models",
+]
+follow_imports = "skip"
 
 [tool.ruff]
 target-version = "py312"

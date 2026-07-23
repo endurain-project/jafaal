@@ -73,21 +73,29 @@ _UUID_E2E = textwrap.dedent(
 
     from cryptography.fernet import Fernet
     from sqlalchemy import String, create_engine
-    from sqlalchemy.orm import Mapped, mapped_column, sessionmaker
+    from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
     import jafaal
-    import jafaal.credentials.crud as credentials_crud
     import jafaal.orm as jafaal_orm
     from jafaal import UUIDPKUserMixin
-    from jafaal._internal.password_hasher import password_hasher
-    from jafaal._internal.token_manager import TokenType, get_token_manager
-    from jafaal.identity_service import DefaultIdentityService
-    from jafaal.orm import Base
+
+
+    class Base(DeclarativeBase):
+        pass
 
 
     class Users(UUIDPKUserMixin, Base):
         __tablename__ = "users"
         display_name: Mapped[str | None] = mapped_column(String(250), nullable=True)
+
+
+    # Host owns the base; map JAFAAL's tables into it before any model/CRUD import.
+    jafaal.map_models(Base)
+
+    import jafaal.credentials.crud as credentials_crud
+    from jafaal._internal.password_hasher import password_hasher
+    from jafaal._internal.token_manager import TokenType, get_token_manager
+    from jafaal.identity_service import DefaultIdentityService
 
 
     class Repo:
