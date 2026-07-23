@@ -3,15 +3,23 @@
 from collections.abc import Callable
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Security, status
+from fastapi import APIRouter, Depends, Request, Security, status
 from sqlalchemy.orm import Session
 
 import jafaal.dependencies as jafaal_dependencies
+import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_providers.crud as idp_crud
 import jafaal.identity_providers.dependencies as idp_dependencies
+import jafaal.identity_providers.links.crud as links_crud
 import jafaal.identity_providers.schema as idp_schema
+import jafaal.identity_providers.service as idp_service
 import jafaal.identity_providers.utils as idp_utils
+import jafaal.oauth_state.crud as oauth_state_crud
+import jafaal.oauth_state.utils as oauth_state_utils
 import jafaal.orm as jafaal_orm
+import jafaal.rate_limit as jafaal_rate_limit
+import jafaal.settings as jafaal_settings
+from jafaal._core import network
 
 # Define the API router
 router = APIRouter()
@@ -160,3 +168,79 @@ def delete_identity_provider(
             are still linked to the provider.
     """
     idp_crud.delete_identity_provider(idp_id, db)
+
+
+@router.post("/step-up/reauth/{idp_id}", status_code=status.HTTP_200_OK)
+@jafaal_rate_limit.limit(jafaal_rate_limit.SENSITIVE)
+async def initiate_step_up_reauth(
+    idp_id: int,
+    request: Request,
+    token_user_id: Annotated[
+        jafaal_orm.UserId,
+        Depends(jafaal_dependencies.get_sub_from_access_token),
+    ],
+    db: Annotated[Session, Depends(jafaal_orm.get_db)],
+) -> dict[str, str]:
+    """Begin a fresh IdP re-authentication to satisfy step-up (SSO accounts).
+
+    For an SSO-only account (no local password or MFA), sensitive operations
+    raise ``step_up_reauth_required``. The client calls this endpoint for one of
+    its linked providers, then navigates (top-level) to the returned
+    ``authorization_url``. After the user re-authenticates at the IdP, the SSO
+    callback verifies the fresh sign-in and mints a single-use step-up grant;
+    the client then retries the original operation, which consumes the grant.
+
+    The caller must already be linked to the target identity provider (you can
+    only re-authenticate an identity you own). ``prompt=login`` and ``max_age``
+    are sent so the provider re-prompts the user, and the callback verifies the
+    ID token's ``auth_time`` is recent.
+
+    Args:
+        idp_id: The linked identity provider to re-authenticate against.
+        request: The current HTTP request (for client IP capture).
+        token_user_id: The authenticated user (from the access token ``sub``).
+        db: SQLAlchemy database session.
+
+    Returns:
+        ``{"authorization_url": ...}`` for the client to navigate to.
+
+    Raises:
+        JafaalError: 400 if IdP step-up re-auth is disabled or the provider is
+            not linked to the caller; 404 if the provider is missing or disabled.
+    """
+    settings = jafaal_settings.get_settings()
+    if not settings.step_up_idp_reauth_enabled:
+        raise jafaal_exceptions.InvalidRequestError("Identity-provider step-up re-authentication is disabled.")
+
+    idp = idp_crud.get_identity_provider(idp_id, db)
+    if not idp or not idp.enabled:
+        raise jafaal_exceptions.NotFoundError("Identity provider not found or disabled")
+
+    link = links_crud.get_user_identity_provider_by_user_id_and_idp_id(token_user_id, idp_id, db)
+    if not link:
+        raise jafaal_exceptions.InvalidRequestError("This identity provider is not linked to your account.")
+
+    state_id, nonce = oauth_state_utils.create_state_id_and_nonce()
+    oauth_state_crud.create_oauth_state(
+        db=db,
+        state_id=state_id,
+        nonce=nonce,
+        client_type="web",
+        ip_address=network.get_ip_address(request),
+        idp_id=idp_id,
+        user_id=token_user_id,
+        purpose="stepup",
+    )
+
+    authorization_url = await idp_service.idp_service.initiate_link(
+        idp,
+        request,
+        token_user_id,
+        db,
+        oauth_state_id=state_id,
+        authorize_extra_params={
+            "prompt": "login",
+            "max_age": str(settings.step_up_reauth_max_age_seconds),
+        },
+    )
+    return {"authorization_url": authorization_url}

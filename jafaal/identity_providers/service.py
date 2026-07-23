@@ -24,6 +24,7 @@ from joserfc.jwk import ECKey, OctKey, RSAKey
 from sqlalchemy.orm import Session
 
 import jafaal._internal.password_hasher as jafaal_password_hasher
+import jafaal._internal.security_stores as jafaal_security_stores
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_providers.crud as idp_crud
 import jafaal.identity_providers.links.crud as jafaal_identity_links_crud
@@ -52,6 +53,11 @@ MAX_IDP_TOKEN_AGE_DAYS = 90
 TOKEN_EXPIRY_THRESHOLD_MINUTES = 5
 TOKEN_REFRESH_RATE_LIMIT_MINUTES = 1
 DEFAULT_TOKEN_EXPIRY_SECONDS = 300
+
+# Clock-skew tolerance (seconds) allowed when checking the IdP-asserted
+# ``auth_time`` for step-up re-authentication freshness (auth_time slightly
+# ahead of the local clock is tolerated up to this bound).
+_REAUTH_CLOCK_SKEW_LEEWAY_SECONDS = 30
 
 
 def _oauth_client_cls() -> Any:
@@ -752,11 +758,18 @@ class IdentityProviderService:
         user_id: UserId,
         db: Session,
         oauth_state_id: str | None = None,
+        *,
+        authorize_extra_params: dict[str, str] | None = None,
     ) -> str:
         """
-        Initiates the OAuth/OIDC authorization flow for linking an identity provider to an existing user account.
-        This method generates the authorization URL that redirects the user to the identity provider's
-        login page. Uses database-backed OAuth state for security and replay protection.
+        Initiates an authenticated OAuth/OIDC authorization flow for an existing user account.
+
+        Used both for linking a new identity provider and for step-up
+        re-authentication (which passes ``authorize_extra_params={"prompt":
+        "login", "max_age": ...}`` to force a fresh IdP sign-in). This method
+        generates the authorization URL that redirects the user to the identity
+        provider's login page. Uses database-backed OAuth state for security and
+        replay protection.
 
         Args:
             idp (idp_models.IdentityProvider): The identity provider configuration object containing
@@ -766,6 +779,9 @@ class IdentityProviderService:
                 identity provider.
             db (Session): The database session for database operations.
             oauth_state_id (str | None): Database OAuth state ID (required for secure linking).
+            authorize_extra_params (dict[str, str] | None): Extra query parameters appended to the
+                authorization request (e.g. ``prompt=login`` and ``max_age`` for step-up
+                re-authentication).
 
         Returns:
             str: The authorization URL to redirect the user to for identity provider authentication.
@@ -824,7 +840,9 @@ class IdentityProviderService:
 
             client = _oauth_client_cls()(client_id=client_id, redirect_uri=redirect_uri, scope=scopes)
 
-            authorization_url, _ = client.create_authorization_url(authorization_endpoint, state=state, nonce=nonce)
+            authorization_url, _ = client.create_authorization_url(
+                authorization_endpoint, state=state, nonce=nonce, **(authorize_extra_params or {})
+            )
 
             return authorization_url
 
@@ -891,14 +909,19 @@ class IdentityProviderService:
 
             logger.debug(f"Using database OAuth state for IdP {idp.name} (client_type={client_type})")
 
-            # Detect link mode from OAuth state (user_id indicates authenticated user linking)
-            is_link_mode = oauth_state.user_id is not None
+            # Detect the flow purpose. A user_id on the state marks an
+            # authenticated flow (link or step-up re-auth); ``purpose``
+            # discriminates them (both carry user_id).
             link_user_id = oauth_state.user_id
+            is_step_up_mode = oauth_state.purpose == "stepup" and link_user_id is not None
+            is_link_mode = link_user_id is not None and not is_step_up_mode
 
             if is_link_mode:
                 # Link mode: OAuth state was created during authenticated linking request
                 # The user_id in oauth_state proves the user initiated this link
                 logger.debug(f"Link mode detected for IdP {idp.name}, user_id={link_user_id}")
+            elif is_step_up_mode:
+                logger.debug(f"Step-up re-auth mode detected for IdP {idp.name}, user_id={link_user_id}")
 
             # Decrypt credentials and resolve endpoints using helper methods
             client_id = self._decrypt_client_id(idp)
@@ -993,6 +1016,10 @@ class IdentityProviderService:
                 )
 
             # Handle link mode differently from login mode
+            if is_step_up_mode and link_user_id is not None:
+                # STEP-UP RE-AUTH MODE: verify a fresh IdP sign-in and mint a grant
+                return await self._handle_step_up_callback(idp, link_user_id, subject, userinfo, db)
+
             if is_link_mode and link_user_id:
                 # LINK MODE: Associate IdP with existing authenticated user
 
@@ -1064,6 +1091,88 @@ class IdentityProviderService:
             raise jafaal_exceptions.InternalError(
                 f"An unexpected error occurred during authentication with {idp.name}. Please try again or contact administrator."
             ) from err
+
+    async def _handle_step_up_callback(
+        self,
+        idp: idp_models.IdentityProvider,
+        user_id: UserId,
+        subject: str,
+        claims: dict[str, Any],
+        db: Session,
+    ) -> dict[str, Any]:
+        """Verify a fresh IdP re-authentication and mint a single-use step-up grant.
+
+        Confirms that (1) the user still exists, (2) the re-authenticated IdP
+        subject is the one already linked to this user — re-authentication must
+        be the *same* identity, not a different account at the same provider —
+        and (3) the provider asserted a recent ``auth_time``. On success a
+        single-use step-up grant is recorded (consumed by the next sensitive
+        operation via :func:`jafaal._internal.services.step_up_service.verify_step_up_credentials`).
+
+        Args:
+            idp: The identity provider the user re-authenticated against.
+            user_id: The user that initiated the step-up (from the OAuth state).
+            subject: The IdP ``sub`` from the verified claims.
+            claims: The verified ID-token/userinfo claims (must carry ``auth_time``).
+            db: Active database session.
+
+        Returns:
+            A callback result dict with ``mode='stepup'`` and the resolved user.
+
+        Raises:
+            JafaalError: 404 if the user is gone; 403 if the re-authenticated
+                identity is not linked to this account; 401 if the provider did
+                not assert a sufficiently recent ``auth_time``.
+        """
+        user = jafaal_ports.get_user_repository().get_by_id(user_id, db)
+        if not user:
+            raise jafaal_exceptions.NotFoundError("User not found")
+
+        link = jafaal_identity_links_crud.get_user_identity_provider_by_subject_and_idp_id(idp.id, subject, db)
+        if link is None or link.user_id != user_id:
+            logger.warning(
+                f"Step-up re-auth identity mismatch for user {user_id}, idp {idp.id}: "
+                "the re-authenticated subject is not linked to this account"
+            )
+            raise jafaal_exceptions.AuthorizationError(
+                "The identity you re-authenticated with is not linked to your account."
+            )
+
+        self._verify_reauth_freshness(claims)
+
+        settings = jafaal_settings.get_settings()
+        jafaal_security_stores.grant_step_up_reauth(
+            user_id, idp_id=idp.id, ttl_seconds=settings.step_up_grant_ttl_seconds
+        )
+        logger.info(f"User {user_id} completed IdP step-up re-authentication via {idp.name}")
+        return {"user": user, "userinfo": claims, "mode": "stepup"}
+
+    def _verify_reauth_freshness(self, claims: dict[str, Any]) -> None:
+        """Assert the IdP asserted a recent ``auth_time`` for step-up.
+
+        ``prompt=login`` and ``max_age`` are requested on re-authentication, but
+        not every provider honours them, so the ID token's ``auth_time`` claim
+        is the authoritative freshness check. A missing or stale ``auth_time``
+        fails closed (the step-up grant is not minted).
+
+        Args:
+            claims: The verified ID-token/userinfo claims.
+
+        Raises:
+            JafaalError: 401 if ``auth_time`` is missing, malformed, or older
+                than ``AuthSettings.step_up_reauth_max_age_seconds``.
+        """
+        settings = jafaal_settings.get_settings()
+        auth_time = claims.get("auth_time")
+        if isinstance(auth_time, bool) or not isinstance(auth_time, (int, float)):
+            raise jafaal_exceptions.AuthenticationError(
+                "The identity provider did not assert a fresh authentication time; step-up could not be verified."
+            )
+        age = datetime.now(UTC).timestamp() - float(auth_time)
+        if age < -_REAUTH_CLOCK_SKEW_LEEWAY_SECONDS or age > settings.step_up_reauth_max_age_seconds:
+            raise jafaal_exceptions.AuthenticationError(
+                "Your identity-provider sign-in was not recent enough for this action. Please try again."
+            )
 
     async def _get_userinfo(
         self,

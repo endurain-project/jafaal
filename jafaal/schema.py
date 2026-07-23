@@ -66,13 +66,16 @@ class StepUpVerification(BaseModel):
 
     Used by sensitive account-level operations (API-key creation, MFA
     backup-code regeneration, IdP unlink, ...) to require fresh proof of
-    identity beyond a valid access token. For SSO-only accounts (no local
-    password) the ``current_password`` field may be omitted and the password
-    check is skipped.
+    identity beyond a valid access token. Accounts with a local password must
+    supply ``current_password``; when MFA is enabled an ``mfa_code`` is also
+    required. An SSO-only account with no MFA has no factor to verify, so these
+    operations are refused until MFA is enrolled — step-up fails closed rather
+    than passing on a valid access token alone.
 
     Attributes:
         current_password: Caller's existing password. Required when the account
-            has a local password; may be omitted for SSO-only accounts.
+            has a local password; may be omitted for SSO-only accounts (which
+            must then satisfy step-up via MFA).
         mfa_code: TOTP or backup code, required when MFA is enabled.
     """
 

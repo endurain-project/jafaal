@@ -8,6 +8,8 @@ from jafaal._internal.security_stores import (
     FailedLoginAttempts,
     PendingMFALogin,
     StepUpAttempts,
+    consume_step_up_reauth_grant,
+    grant_step_up_reauth,
     normalize_username_key,
     username_log_identifier,
 )
@@ -24,6 +26,17 @@ def test_username_log_identifier_is_hashed():
     ident = username_log_identifier("alice")
     assert ident.startswith("username_hash=")
     assert "alice" not in ident  # non-reversible
+
+
+def test_step_up_reauth_grant_is_single_use():
+    grant_step_up_reauth(42, idp_id=7, ttl_seconds=120)
+    assert consume_step_up_reauth_grant(42) is True
+    # Consumed: a second read finds nothing.
+    assert consume_step_up_reauth_grant(42) is False
+
+
+def test_step_up_reauth_grant_absent_returns_false():
+    assert consume_step_up_reauth_grant(999) is False
 
 
 # --------------------------------------------------------------------------- #

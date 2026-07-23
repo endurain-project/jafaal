@@ -625,3 +625,63 @@ def clear_pending_mfa_for_user(user_id: UserId) -> int:
             exc_info=err,
         )
         return 0
+
+
+# ---------------------------------------------------------------------------
+# Step-up re-authentication grants
+#
+# A fresh IdP re-authentication (OIDC prompt=login with a verified, recent
+# auth_time) mints a short-lived, single-use grant here. It lets an SSO-only
+# account (no local password, no MFA) satisfy step-up without local MFA — the
+# second factor is delegated to the identity provider. The grant lives in the
+# ephemeral StateStore (TTL-expiring, distributed when Redis is configured) and
+# is consumed atomically on use.
+# ---------------------------------------------------------------------------
+
+
+def _step_up_grant_key(user_id: UserId) -> str:
+    """Return the state-store key holding a user's step-up re-auth grant."""
+    return f"{_key_prefix()}:stepup:grant:{hashing.sha256_hex(str(user_id))}"
+
+
+def grant_step_up_reauth(user_id: UserId, *, idp_id: int, ttl_seconds: int) -> None:
+    """Record a single-use step-up grant from a fresh IdP re-authentication.
+
+    Called by the SSO callback after it has verified the re-authenticated
+    identity matches the user's linked account and that the provider asserted a
+    recent ``auth_time``. The stored value is the originating ``idp_id`` (audit
+    only); presence of the key is what authorises the next step-up.
+
+    Args:
+        user_id: The re-authenticated user.
+        idp_id: The identity provider the user re-authenticated against.
+        ttl_seconds: Grant lifetime; the caller must retry within this window.
+
+    Raises:
+        AuthSecurityStoreUnavailableError: 503 if the state store is unreachable.
+    """
+    try:
+        get_state_store().set(_step_up_grant_key(user_id), str(idp_id).encode(), ttl_seconds=ttl_seconds)
+    except StateStoreUnavailableError as err:
+        _raise_store_unavailable("grant step-up reauth", err)
+
+
+def consume_step_up_reauth_grant(user_id: UserId) -> bool:
+    """Atomically consume a user's step-up re-auth grant, if present.
+
+    Single-use: one fresh IdP re-authentication authorises exactly one
+    subsequent sensitive operation. A state-store outage is treated as "no
+    grant" so step-up falls through to another factor (fail closed) rather than
+    granting access on unverifiable state.
+
+    Args:
+        user_id: The user attempting a step-up-protected operation.
+
+    Returns:
+        True if a valid grant existed and was consumed, False otherwise.
+    """
+    try:
+        return get_state_store().get_and_delete(_step_up_grant_key(user_id)) is not None
+    except StateStoreUnavailableError as err:
+        logger.warning("Step-up grant check skipped; state store unavailable", exc_info=err)
+        return False

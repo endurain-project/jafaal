@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime, timedelta
 
+import pyotp
 import pytest
 from starlette.requests import Request
 
@@ -14,6 +15,7 @@ import jafaal.identity_providers.link_tokens.utils as link_token_utils
 import jafaal.identity_providers.links.crud as links_crud
 import jafaal.identity_providers.links.utils as links_utils
 import jafaal.identity_providers.schema as idp_schema
+import jafaal.mfa.crud as mfa_crud
 import jafaal.schema as jafaal_schema
 from jafaal._core import crypto
 from jafaal._internal.password_hasher import get_password_hasher
@@ -129,12 +131,34 @@ def test_delete_link_success_with_password(db, make_user):
 
 
 def test_delete_link_blocks_last_auth_method(db, make_user):
-    # SSO-only account (no password) with a single link cannot unlink it.
+    # SSO-only account whose only login method is a single IdP link cannot
+    # unlink it (anti-lockout guard). MFA is enrolled here so step-up is
+    # satisfiable — proving the unlink is blocked by the last-auth-method guard,
+    # not by the fail-closed step-up check (MFA is a second factor, not a
+    # primary login method, so it does not count as a remaining auth method).
+    secret = pyotp.random_base32()
     user = make_user(password=None)
+    mfa_crud.update_user_mfa(user.id, db, encrypted_secret=crypto.encrypt_token_fernet(secret))
     idp = _create_idp(db)
     links_crud.create_user_identity_provider(user.id, idp.id, "sub", db)
-    step_up = jafaal_schema.StepUpVerification(current_password=None, mfa_code=None)
+    step_up = jafaal_schema.StepUpVerification(current_password=None, mfa_code=pyotp.TOTP(secret).now())
     with pytest.raises(exc.InvalidRequestError):
+        link_service.delete_identity_provider_link(idp.id, step_up, user.id, _svc(db), StepUpAttempts(), db)
+
+
+def test_delete_link_challenges_reauth_for_sso_only_without_local_factor(db, make_user):
+    # An SSO-only account with no password and no MFA cannot satisfy step-up with
+    # a bare access token. Because it has usable IdP links, step-up challenges
+    # the caller to re-authenticate (rather than silently allowing the unlink).
+    # A second link is present so the denial comes from step-up, not from the
+    # anti-lockout last-auth-method guard.
+    user = make_user(password=None)
+    idp = _create_idp(db, slug="first")
+    idp2 = _create_idp(db, slug="second")
+    links_crud.create_user_identity_provider(user.id, idp.id, "sub", db)
+    links_crud.create_user_identity_provider(user.id, idp2.id, "sub2", db)
+    step_up = jafaal_schema.StepUpVerification(current_password=None, mfa_code=None)
+    with pytest.raises(exc.StepUpReauthRequiredError):
         link_service.delete_identity_provider_link(idp.id, step_up, user.id, _svc(db), StepUpAttempts(), db)
 
 

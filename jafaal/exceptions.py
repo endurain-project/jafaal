@@ -221,6 +221,35 @@ class MissingScopeError(AuthorizationError):
         super().__init__(detail, headers=headers)
 
 
+class StepUpReauthRequiredError(AuthenticationError):
+    """Step-up needs a fresh identity-provider re-authentication.
+
+    Raised for an SSO-only account (no local password and no MFA) that has at
+    least one usable identity-provider link: a valid access token alone cannot
+    satisfy step-up, so the caller must complete a fresh IdP re-authentication
+    to obtain a single-use step-up grant and then retry the operation.
+    ``reauth_idp_ids`` lists the linked providers eligible for re-authentication.
+
+    Aligns with RFC 9470 (OAuth 2.0 Step-Up Authentication): the
+    ``WWW-Authenticate`` header advertises ``insufficient_user_authentication``
+    so a standards-aware client knows to trigger a stronger authentication.
+    """
+
+    code = "step_up_reauth_required"
+    default_detail = "Re-authenticate with your identity provider to continue."
+    headers = {"WWW-Authenticate": 'Bearer error="insufficient_user_authentication"'}
+
+    def __init__(
+        self,
+        detail: str | None = None,
+        *,
+        reauth_idp_ids: list[int] | tuple[int, ...] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        self.reauth_idp_ids: list[int] = list(reauth_idp_ids or ())
+        super().__init__(detail, headers=headers)
+
+
 class InvalidMFACodeError(InvalidRequestError):
     """A supplied TOTP/backup MFA code did not verify (400)."""
 
@@ -281,6 +310,7 @@ __all__ = [
     "ServiceUnavailableError",
     "SessionExpiredError",
     "StaleRefreshTokenError",
+    "StepUpReauthRequiredError",
     "StoreUnavailableError",
     "TokenExpiredError",
     "UnprocessableError",

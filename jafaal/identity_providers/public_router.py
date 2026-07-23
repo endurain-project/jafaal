@@ -313,6 +313,19 @@ async def handle_callback(
         user = result["user"]
         is_link_mode = result.get("mode") == "link"
 
+        # STEP-UP RE-AUTH MODE: the single-use grant was already minted inside
+        # handle_callback after verifying the fresh IdP sign-in. Return the
+        # browser to the app's security page with a success flag; the client
+        # then retries the sensitive operation, which consumes the grant.
+        if result.get("mode") == "stepup":
+            settings = jafaal_settings.get_settings()
+            redirect_url = f"{settings.base_url}{settings.sso_link_result_path}?step_up=success"
+            logger.info(f"IdP step-up re-authentication successful for user {user.username} via {idp.name}")
+            return RedirectResponse(
+                url=redirect_url,
+                status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+            )
+
         # Handle link mode differently - redirect to the originating page (the
         # caller's validated return path) without creating a new session.
         if is_link_mode:

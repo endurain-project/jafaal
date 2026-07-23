@@ -30,6 +30,7 @@ class OAuthState(Base):
         id: Primary key, state parameter itself (random URL-safe token).
         idp_id: Foreign key to identity_provider.
         user_id: Foreign key to users (for link mode, nullable).
+        purpose: Flow purpose (``login``, ``link``, or ``stepup``).
         code_challenge: PKCE challenge (base64url-encoded).
         code_challenge_method: PKCE method (always S256).
         nonce: OIDC nonce for ID token validation.
@@ -66,6 +67,13 @@ class OAuthState(Base):
         nullable=True,
         index=True,
         comment="User ID (for link mode)",
+    )
+
+    purpose: Mapped[str] = mapped_column(
+        String(20),
+        default="login",
+        nullable=False,
+        comment="Flow purpose: login | link | stepup",
     )
 
     code_challenge: Mapped[str | None] = mapped_column(

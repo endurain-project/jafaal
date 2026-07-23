@@ -6,6 +6,9 @@ from contextlib import contextmanager
 import pyotp
 
 import jafaal
+import jafaal.identity_providers.crud as idp_crud
+import jafaal.identity_providers.links.crud as links_crud
+import jafaal.identity_providers.schema as idp_schema
 import jafaal.mfa.crud as mfa_crud
 import jafaal.orm as jafaal_orm
 import jafaal.ports as ports
@@ -54,6 +57,60 @@ def _login(client, username, password):
         data={"username": username, "password": password},
         headers=WEB,
     )
+
+
+def _auth_headers(client, username, password):
+    access = _login(client, username, password).json()["access_token"]
+    return {"X-Client-Type": "web", "Authorization": f"Bearer {access}"}
+
+
+def _create_linked_idp(user_id, *, slug, link=True):
+    session = jafaal_orm.get_sessionmaker()()
+    try:
+        idp = idp_crud.create_identity_provider(
+            idp_schema.IdentityProviderCreate(
+                name=f"IdP {slug}",
+                slug=slug,
+                client_id="cid",
+                client_secret="secret",
+                enabled=True,
+                authorization_endpoint="https://idp.example/authorize",
+            ),
+            session,
+        )
+        if link:
+            links_crud.create_user_identity_provider(user_id, idp.id, f"sub-{slug}", session)
+        session.commit()
+        return idp.id
+    finally:
+        session.close()
+
+
+def test_step_up_reauth_initiate_returns_authorization_url(client, make_user):
+    # An authenticated user linked to an IdP gets an authorization URL that
+    # forces a fresh sign-in (prompt=login) with the configured max_age.
+    user = make_user(username="ssoinit", password="Str0ng!Pass")
+    idp_id = _create_linked_idp(user.id, slug="reauth")
+    r = client.post(
+        f"/api/v1/auth/idp/step-up/reauth/{idp_id}",
+        headers=_auth_headers(client, "ssoinit", "Str0ng!Pass"),
+    )
+    assert r.status_code == 200
+    url = r.json()["authorization_url"]
+    assert url.startswith("https://idp.example/authorize")
+    assert "prompt=login" in url
+    assert "max_age=300" in url
+
+
+def test_step_up_reauth_initiate_requires_link(client, make_user):
+    # You can only re-authenticate an identity provider you are linked to.
+    user = make_user(username="nolink", password="Str0ng!Pass")
+    idp_id = _create_linked_idp(user.id, slug="unlinked", link=False)
+    r = client.post(
+        f"/api/v1/auth/idp/step-up/reauth/{idp_id}",
+        headers=_auth_headers(client, "nolink", "Str0ng!Pass"),
+    )
+    assert r.status_code == 400
 
 
 # --------------------------------------------------------------------------- #

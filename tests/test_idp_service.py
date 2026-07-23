@@ -21,6 +21,7 @@ import jafaal.identity_providers.links.crud as links_crud
 import jafaal.identity_providers.schema as idp_schema
 import jafaal.oauth_state.crud as oauth_state_crud
 from jafaal._internal.password_hasher import password_hasher
+from jafaal._internal.security_stores import consume_step_up_reauth_grant
 from jafaal.identity_providers.service import IdentityProviderService
 
 JWKS_URI = "https://idp.example.com/jwks"
@@ -367,6 +368,109 @@ def test_handle_callback_link_mode(db, make_user, monkeypatch):
     assert result["mode"] == "link"
     assert result["user"].id == user.id
     assert links_crud.get_user_identity_provider_by_user_id_and_idp_id(user.id, idp.id, db) is not None
+
+
+def _stepup_state(db, idp, user, *, state_id):
+    oauth_state_crud.create_oauth_state(
+        db=db,
+        state_id=state_id,
+        nonce="n",
+        client_type="web",
+        ip_address=None,
+        idp_id=idp.id,
+        user_id=user.id,
+        purpose="stepup",
+    )
+    return oauth_state_crud.get_oauth_state_by_id(state_id, db)
+
+
+def test_handle_callback_step_up_success(db, make_user, monkeypatch):
+    user = make_user(username="ssostepup", password=None)
+    svc = IdentityProviderService()
+    idp = _create_idp(db, token_endpoint=f"{ISSUER}/token", userinfo_endpoint=f"{ISSUER}/userinfo")
+    links_crud.create_user_identity_provider(user.id, idp.id, "idp-sub-su", db)
+    now = int(datetime.now(UTC).timestamp())
+    userinfo = {"sub": "idp-sub-su", "email": "ssostepup@test.dev", "auth_time": now}
+    _prepare_callback_idp(db, monkeypatch, svc, userinfo=userinfo)
+    state_obj = _stepup_state(db, idp, user, state_id="s-su")
+
+    result = asyncio.run(svc.handle_callback(idp, "auth-code", "s-su", _request(), password_hasher, db, state_obj))
+    assert result["mode"] == "stepup"
+    assert result["user"].id == user.id
+    # A single-use step-up grant was minted for the user.
+    assert consume_step_up_reauth_grant(user.id) is True
+
+
+def test_handle_callback_step_up_stale_auth_time(db, make_user, monkeypatch):
+    user = make_user(username="ssostale", password=None)
+    svc = IdentityProviderService()
+    idp = _create_idp(db, token_endpoint=f"{ISSUER}/token", userinfo_endpoint=f"{ISSUER}/userinfo")
+    links_crud.create_user_identity_provider(user.id, idp.id, "idp-sub-stale", db)
+    stale = int(datetime.now(UTC).timestamp()) - 4000  # older than the 300s freshness window
+    userinfo = {"sub": "idp-sub-stale", "auth_time": stale}
+    _prepare_callback_idp(db, monkeypatch, svc, userinfo=userinfo)
+    state_obj = _stepup_state(db, idp, user, state_id="s-stale")
+
+    with pytest.raises(exc.AuthenticationError):
+        asyncio.run(svc.handle_callback(idp, "auth-code", "s-stale", _request(), password_hasher, db, state_obj))
+    assert consume_step_up_reauth_grant(user.id) is False
+
+
+def test_handle_callback_step_up_missing_auth_time(db, make_user, monkeypatch):
+    user = make_user(username="ssonoat", password=None)
+    svc = IdentityProviderService()
+    idp = _create_idp(db, token_endpoint=f"{ISSUER}/token", userinfo_endpoint=f"{ISSUER}/userinfo")
+    links_crud.create_user_identity_provider(user.id, idp.id, "idp-sub-noat", db)
+    userinfo = {"sub": "idp-sub-noat"}  # provider did not assert auth_time
+    _prepare_callback_idp(db, monkeypatch, svc, userinfo=userinfo)
+    state_obj = _stepup_state(db, idp, user, state_id="s-noat")
+
+    with pytest.raises(exc.AuthenticationError):
+        asyncio.run(svc.handle_callback(idp, "auth-code", "s-noat", _request(), password_hasher, db, state_obj))
+    assert consume_step_up_reauth_grant(user.id) is False
+
+
+def test_handle_callback_step_up_identity_mismatch(db, make_user, monkeypatch):
+    user = make_user(username="ssomm", password=None)
+    svc = IdentityProviderService()
+    idp = _create_idp(db, token_endpoint=f"{ISSUER}/token", userinfo_endpoint=f"{ISSUER}/userinfo")
+    # The user is NOT linked to the subject the IdP returns.
+    now = int(datetime.now(UTC).timestamp())
+    userinfo = {"sub": "someone-elses-sub", "auth_time": now}
+    _prepare_callback_idp(db, monkeypatch, svc, userinfo=userinfo)
+    state_obj = _stepup_state(db, idp, user, state_id="s-mm")
+
+    with pytest.raises(exc.AuthorizationError):
+        asyncio.run(svc.handle_callback(idp, "auth-code", "s-mm", _request(), password_hasher, db, state_obj))
+    assert consume_step_up_reauth_grant(user.id) is False
+
+
+def test_initiate_link_forwards_extra_authorize_params(db, make_user):
+    user = make_user(username="linkparams")
+    svc = IdentityProviderService()
+    idp = _create_idp(db, authorization_endpoint=f"{ISSUER}/authorize")
+    oauth_state_crud.create_oauth_state(
+        db=db,
+        state_id="s-xtra",
+        nonce="n",
+        client_type="web",
+        ip_address=None,
+        idp_id=idp.id,
+        user_id=user.id,
+        purpose="stepup",
+    )
+    url = asyncio.run(
+        svc.initiate_link(
+            idp,
+            _request(),
+            user.id,
+            db,
+            oauth_state_id="s-xtra",
+            authorize_extra_params={"prompt": "login", "max_age": "300"},
+        )
+    )
+    assert "prompt=login" in url
+    assert "max_age=300" in url
 
 
 def test_handle_callback_missing_subject(db, monkeypatch):

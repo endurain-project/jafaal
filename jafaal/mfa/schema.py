@@ -68,11 +68,11 @@ class MFADisableRequest(MFARequest):
     the supplied input only and do not impose a policy on the
     stored password.
 
-    For SSO-only accounts (no local password set), the password
-    field may be omitted and the password check is skipped — see
-    :func:`jafaal._internal.services.step_up_service.verify_step_up_credentials`
-    and ``docs/developer-guide/auth-boundary.md`` for the rationale
-    and the tracked SSO-only step-up gap.
+    For SSO-only accounts (no local password set) the password
+    field may be omitted; the enabled MFA factor is what step-up
+    verifies here (disabling MFA always requires the current code).
+    See
+    :func:`jafaal._internal.services.step_up_service.verify_step_up_credentials`.
 
     Attributes:
         current_password: Caller's existing password (step-up
@@ -101,11 +101,11 @@ class MFASetupRequest(BaseModel):
     re-prove their current password in addition to the freshly
     enrolled TOTP code.
 
-    For SSO-only accounts (no local password set), the password
-    field may be omitted and the password check is skipped — see
-    :func:`jafaal._internal.services.step_up_service.verify_step_up_credentials`
-    and ``docs/developer-guide/auth-boundary.md`` for the rationale
-    and the tracked SSO-only step-up gap.
+    For SSO-only accounts (no local password set) the password
+    field may be omitted: enrolment is the permitted bootstrap for
+    establishing a first factor, and confirming the freshly enrolled
+    TOTP code is itself the proof of possession. See
+    :func:`jafaal._internal.services.step_up_service.verify_step_up_credentials`.
 
     Attributes:
         mfa_code: The 6-digit TOTP code generated from the secret

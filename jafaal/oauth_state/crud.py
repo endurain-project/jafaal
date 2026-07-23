@@ -128,6 +128,7 @@ def create_oauth_state(
     code_challenge: str | None = None,
     code_challenge_method: str | None = None,
     user_id: UserId | None = None,
+    purpose: str = "login",
 ) -> oauth_state_models.OAuthState:
     """Create and persist a new OAuth state with a 10-minute expiry.
 
@@ -142,6 +143,7 @@ def create_oauth_state(
         code_challenge: PKCE challenge (required for mobile).
         code_challenge_method: PKCE method (S256).
         user_id: User ID for link mode.
+        purpose: Flow purpose (``login``, ``link``, or ``stepup``).
 
     Returns:
         The persisted OAuthState instance.
@@ -161,6 +163,7 @@ def create_oauth_state(
         code_challenge=code_challenge,
         code_challenge_method=code_challenge_method,
         user_id=user_id,
+        purpose=purpose,
         expires_at=expires_at,
         used=False,
     )

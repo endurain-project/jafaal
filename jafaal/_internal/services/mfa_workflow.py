@@ -96,6 +96,11 @@ def enable_mfa(
     mfa_secret_store: MFASecretStoreBackend,
 ) -> dict:
     """Enable MFA using pending secret and verification code."""
+    # MFA enrolment is the one step-up operation permitted for an SSO-only
+    # account that has no factor yet: it is the bootstrap that establishes the
+    # first factor, and enable_user_mfa() below independently verifies the
+    # freshly-enrolled TOTP code. Accounts that DO have a password still have it
+    # verified here (the flag only relaxes the no-factor fail-closed check).
     step_up_service.verify_step_up_credentials(
         token_user_id,
         request.current_password,
@@ -103,6 +108,7 @@ def enable_mfa(
         identity_service,
         step_up_store,
         db,
+        allow_sso_only_bootstrap=True,
     )
 
     secret = mfa_secret_store.get_secret(token_user_id)

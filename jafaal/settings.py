@@ -132,6 +132,17 @@ class AuthSettings:
             header).
         ssrf_allowed_hosts: Hosts/CIDRs exempted from the SSRF private-address
             guard on outbound OIDC calls.
+        step_up_idp_reauth_enabled: Whether an SSO-only account (no local
+            password and no MFA) may satisfy step-up verification by
+            re-authenticating at a linked identity provider. When ``False`` such
+            accounts are refused sensitive operations (step-up fails closed).
+        step_up_reauth_max_age_seconds: Maximum age, in seconds, of the IdP
+            authentication (the ID token ``auth_time`` claim) accepted as
+            "fresh" for step-up. Also sent as the OIDC ``max_age`` on the
+            re-authentication request so the provider re-prompts the user.
+        step_up_grant_ttl_seconds: Lifetime, in seconds, of the single-use
+            step-up grant minted after a successful IdP re-authentication;
+            the caller must retry the sensitive operation within this window.
     """
 
     # --- secrets (required; the host provides them) ---
@@ -206,6 +217,15 @@ class AuthSettings:
     trusted_proxies: tuple[str, ...] = ()
     ssrf_allowed_hosts: tuple[str, ...] = ()
 
+    # --- step-up (IdP re-authentication) ---
+    # Lets an SSO-only account (no local password, no MFA) satisfy step-up by
+    # re-authenticating at a linked IdP (OIDC prompt=login + a verified, fresh
+    # auth_time), so hosts can delegate the second factor entirely to the IdP.
+    # When disabled, such accounts fail closed for sensitive operations.
+    step_up_idp_reauth_enabled: bool = True
+    step_up_reauth_max_age_seconds: int = 300
+    step_up_grant_ttl_seconds: int = 120
+
     def __post_init__(self) -> None:
         if not self.secret_key:
             raise ValueError("AuthSettings.secret_key is required")
@@ -238,6 +258,10 @@ class AuthSettings:
             raise ValueError("AuthSettings.argon2_memory_cost must be positive")
         if self.argon2_parallelism <= 0:
             raise ValueError("AuthSettings.argon2_parallelism must be positive")
+        if self.step_up_reauth_max_age_seconds <= 0:
+            raise ValueError("AuthSettings.step_up_reauth_max_age_seconds must be positive")
+        if self.step_up_grant_ttl_seconds <= 0:
+            raise ValueError("AuthSettings.step_up_grant_ttl_seconds must be positive")
         for index, fallback in enumerate(self.secret_key_fallbacks):
             if len(fallback) < MIN_SECRET_KEY_LENGTH:
                 raise ValueError(
