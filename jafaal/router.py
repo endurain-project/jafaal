@@ -30,6 +30,7 @@ import jafaal.ports as jafaal_ports
 import jafaal.rate_limit as jafaal_rate_limit
 import jafaal.schema as jafaal_schema
 import jafaal.sessions.crud as jafaal_sessions_crud
+import jafaal.sessions.models as jafaal_sessions_models
 import jafaal.sessions.rotated_refresh_tokens.utils as jafaal_sessions_rotated_tokens_utils
 import jafaal.sessions.utils as jafaal_sessions_utils
 import jafaal.utils as jafaal_utils
@@ -108,6 +109,82 @@ def _translate_store_outage() -> Generator[None]:
         _raise_auth_security_store_unavailable(err)
 
 
+def _replay_in_grace_refresh(
+    response: Response,
+    client_type: str,
+    session: jafaal_sessions_models.UsersSessions,
+    token_user_id: jafaal_orm.UserId,
+    refresh_token_value: str,
+    token_manager: jafaal_token_manager.TokenManager,
+    db: Session,
+) -> dict:
+    """Replay the replacement token for an idempotent in-grace refresh retry.
+
+    The presented refresh token was already rotated but is still inside the grace
+    window (a lost rotation response, or a racing/duplicate refresh), so instead
+    of a 401 the exact replacement minted on the original rotation is replayed.
+    The session is NOT re-rotated (no new rotated record, no ``rotation_count``
+    bump), so duplicate/concurrent refreshes converge on one outcome. A fresh
+    access token is minted (stateless, safe to re-issue) and, for web clients, a
+    fresh CSRF token is bound to the otherwise-unchanged session.
+
+    Args:
+        response: HTTP response used to set the web refresh cookie.
+        client_type: ``"web"`` or ``"mobile"``.
+        session: The session whose token is being replayed.
+        token_user_id: User ID from the refresh token's ``sub`` claim.
+        refresh_token_value: The raw refresh token presented for replay.
+        token_manager: Token manager for minting the access/CSRF tokens.
+        db: Database session.
+
+    Returns:
+        The token-response body for the client type.
+
+    Raises:
+        JafaalError: 401 if the replacement is gone, or the user is missing or
+            inactive.
+    """
+    replay = jafaal_sessions_rotated_tokens_utils.get_grace_replay_token(refresh_token_value, db)
+    if replay is None:
+        # Replacement was cleaned up (or never stored); fall back to the
+        # standard invalid-token response.
+        raise jafaal_exceptions.InvalidTokenError("Invalid refresh token")
+
+    replay_refresh_token, replay_refresh_token_exp = replay
+
+    # Validate the user is still present and active before re-issuing.
+    replay_user = jafaal_ports.get_user_repository().get_by_id(token_user_id, db)
+    if replay_user is None:
+        logger.warning(f"User ID {token_user_id} not found during token refresh replay")
+        raise jafaal_exceptions.AuthenticationError("Unable to authenticate")
+
+    jafaal_user_guards.check_user_is_active(replay_user)
+
+    # Mint a fresh, stateless access token (safe to re-issue every retry).
+    replay_access_token_exp, replay_access_token = jafaal_utils.mint_access_token(
+        replay_user, token_manager, session.id
+    )
+
+    # Web clients lost their CSRF token along with the rotation response, so mint
+    # a fresh one and bind it to the session (the refresh token itself is
+    # unchanged). Mobile clients do not use CSRF.
+    replay_csrf_token: str | None = None
+    if client_type == "web":
+        replay_csrf_token = token_manager.create_csrf_token()
+        jafaal_sessions_utils.update_session_csrf_token(session.id, replay_csrf_token, db)
+
+    return jafaal_utils.build_token_response(
+        response,
+        client_type,
+        session.id,
+        replay_access_token,
+        replay_access_token_exp,
+        replay_refresh_token,
+        replay_refresh_token_exp,
+        replay_csrf_token,
+    )
+
+
 @router.post(
     "/login",
     response_model=(
@@ -122,7 +199,9 @@ def login_for_access_token(
     response: Response,
     request: Request,
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
-    client_type: Annotated[jafaal_internal_dependencies.ClientType, Depends(jafaal_internal_dependencies.get_client_type)],
+    client_type: Annotated[
+        jafaal_internal_dependencies.ClientType, Depends(jafaal_internal_dependencies.get_client_type)
+    ],
     failed_attempts: Annotated[
         jafaal_security_stores.FailedLoginStore,
         Depends(jafaal_security_stores.get_failed_login_attempts),
@@ -303,7 +382,9 @@ def verify_mfa_and_login(
     response: Response,
     request: Request,
     mfa_request: jafaal_schema.MFALoginRequest,
-    client_type: Annotated[jafaal_internal_dependencies.ClientType, Depends(jafaal_internal_dependencies.get_client_type)],
+    client_type: Annotated[
+        jafaal_internal_dependencies.ClientType, Depends(jafaal_internal_dependencies.get_client_type)
+    ],
     failed_attempts: Annotated[
         jafaal_security_stores.FailedLoginStore,
         Depends(jafaal_security_stores.get_failed_login_attempts),
@@ -484,7 +565,9 @@ async def refresh_token(
         Session,
         Depends(jafaal_orm.get_db),
     ],
-    client_type: Annotated[jafaal_internal_dependencies.ClientType, Depends(jafaal_internal_dependencies.get_client_type)],
+    client_type: Annotated[
+        jafaal_internal_dependencies.ClientType, Depends(jafaal_internal_dependencies.get_client_type)
+    ],
     x_csrf_token: Annotated[str | None, Depends(jafaal_internal_dependencies.header_csrf_token_scheme)] = None,
 ):
     """
@@ -586,54 +669,20 @@ async def refresh_token(
         raise jafaal_exceptions.InvalidTokenError("Token reuse detected. All sessions invalidated.")
 
     if is_reused and in_grace:
-        # Idempotent in-grace replay. The presented refresh token was already
-        # rotated, but we are still inside the grace window, so this is a
-        # legitimate retry: a lost rotation response, or a racing/duplicate
-        # refresh from a background uploader. The presented token no longer
-        # matches the session's current refresh-token hash, so instead of a
-        # 401 we replay the exact replacement minted on the original rotation.
-        # The session is NOT re-rotated (no new rotated record, no
-        # rotation_count bump), so duplicate/concurrent refreshes converge.
-        replay = jafaal_sessions_rotated_tokens_utils.get_grace_replay_token(refresh_token_value, db)
-
-        if replay is None:
-            # Replacement was cleaned up (or never stored); fall back to the
-            # standard invalid-token response.
-            raise jafaal_exceptions.InvalidTokenError("Invalid refresh token")
-
-        replay_refresh_token, replay_refresh_token_exp = replay
-
-        # Validate the user is still present and active before re-issuing.
-        replay_user = jafaal_ports.get_user_repository().get_by_id(token_user_id, db)
-
-        if replay_user is None:
-            logger.warning(f"User ID {token_user_id} not found during token refresh replay")
-            raise jafaal_exceptions.AuthenticationError("Unable to authenticate")
-
-        jafaal_user_guards.check_user_is_active(replay_user)
-
-        # Mint a fresh, stateless access token (safe to re-issue every retry).
-        replay_access_token_exp, replay_access_token = jafaal_utils.mint_access_token(
-            replay_user, token_manager, session.id
-        )
-
-        # Web clients lost their CSRF token along with the rotation response, so
-        # mint a fresh one and bind it to the session (the refresh token itself
-        # is unchanged). Mobile clients do not use CSRF.
-        replay_csrf_token: str | None = None
-        if client_type == "web":
-            replay_csrf_token = token_manager.create_csrf_token()
-            jafaal_sessions_utils.update_session_csrf_token(session.id, replay_csrf_token, db)
-
-        return jafaal_utils.build_token_response(
+        # Idempotent in-grace replay: the presented token was already rotated but
+        # is still inside the grace window (a lost rotation response, or a
+        # racing/duplicate refresh from a background uploader). Replay the
+        # original replacement instead of re-rotating so duplicate/concurrent
+        # refreshes converge. See _replay_in_grace_refresh for the full
+        # rationale and the CSRF/access-token handling.
+        return _replay_in_grace_refresh(
             response,
             client_type,
-            session.id,
-            replay_access_token,
-            replay_access_token_exp,
-            replay_refresh_token,
-            replay_refresh_token_exp,
-            replay_csrf_token,
+            session,
+            token_user_id,
+            refresh_token_value,
+            token_manager,
+            db,
         )
 
     is_valid = password_hasher.verify_password(refresh_token_value, session.refresh_token)
@@ -719,7 +768,9 @@ async def logout(
         str,
         Depends(jafaal_internal_dependencies.get_and_return_refresh_token),
     ],
-    client_type: Annotated[jafaal_internal_dependencies.ClientType, Depends(jafaal_internal_dependencies.get_client_type)],
+    client_type: Annotated[
+        jafaal_internal_dependencies.ClientType, Depends(jafaal_internal_dependencies.get_client_type)
+    ],
     token_user_id: Annotated[
         int,
         Depends(jafaal_internal_dependencies.get_sub_from_refresh_token),

@@ -193,7 +193,7 @@ def set_refresh_token_cookie(
     settings = jafaal_settings.get_settings()
     clear_refresh_token_cookies(response)
     response.set_cookie(
-        key=settings.refresh_cookie_name,
+        key=settings.effective_refresh_cookie_name,
         value=refresh_token,
         expires=datetime.now(UTC) + timedelta(days=settings.refresh_token_expire_days),
         httponly=True,
@@ -217,14 +217,19 @@ def clear_refresh_token_cookies(response: Response) -> None:
     """
     settings = jafaal_settings.get_settings()
     clear_paths = (*LEGACY_REFRESH_TOKEN_COOKIE_PATHS, settings.refresh_cookie_path)
-    for path in clear_paths:
-        response.delete_cookie(
-            key=settings.refresh_cookie_name,
-            path=path,
-            secure=_is_secure_cookie_environment(),
-            httponly=True,
-            samesite="strict",
-        )
+    # Clear both the effective (possibly ``__Secure-``/``__Host-`` prefixed) name
+    # and the plain name, so a deployment that later adds a cookie-name prefix
+    # still evicts the previously-set unprefixed cookie.
+    cookie_names = {settings.effective_refresh_cookie_name, settings.refresh_cookie_name}
+    for name in cookie_names:
+        for path in clear_paths:
+            response.delete_cookie(
+                key=name,
+                path=path,
+                secure=_is_secure_cookie_environment(),
+                httponly=True,
+                samesite="strict",
+            )
 
 
 def build_token_response(

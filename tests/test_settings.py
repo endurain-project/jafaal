@@ -66,6 +66,44 @@ def test_positive_argon2_cost():
         _valid(argon2_parallelism=-1)
 
 
+def test_rejects_negative_jwt_leeway():
+    with pytest.raises(ValueError, match="jwt_leeway_seconds"):
+        _valid(jwt_leeway_seconds=-1)
+    assert _valid(jwt_leeway_seconds=30).jwt_leeway_seconds == 30
+
+
+def test_rejects_short_password_max_length():
+    # NIST SP 800-63B: allow at least 64 characters for passphrases.
+    with pytest.raises(ValueError, match="password_max_length"):
+        _valid(password_max_length=32)
+    assert _valid(password_max_length=64) is not None
+
+
+def test_rejects_invalid_refresh_cookie_prefix():
+    with pytest.raises(ValueError, match="refresh_cookie_prefix"):
+        _valid(refresh_cookie_prefix="__Bogus-")
+
+
+def test_host_cookie_prefix_requires_root_path():
+    # __Host- mandates Path=/, so it is rejected with the default scoped path...
+    with pytest.raises(ValueError, match="__Host-"):
+        _valid(refresh_cookie_prefix="__Host-")
+    # ...and accepted once the path is "/".
+    assert _valid(refresh_cookie_prefix="__Host-", refresh_cookie_path="/") is not None
+
+
+def test_effective_refresh_cookie_name():
+    # No prefix → plain name.
+    assert _valid().effective_refresh_cookie_name == "jafaal_refresh_token"
+    # Prefix only applies in a deployed environment (browsers require Secure).
+    dev = _valid(refresh_cookie_prefix="__Secure-", environment="test")
+    assert dev.effective_refresh_cookie_name == "jafaal_refresh_token"
+    prod = _valid(refresh_cookie_prefix="__Secure-", environment="production")
+    assert prod.effective_refresh_cookie_name == "__Secure-jafaal_refresh_token"
+    host = _valid(refresh_cookie_prefix="__Host-", refresh_cookie_path="/", environment="production")
+    assert host.effective_refresh_cookie_name == "__Host-jafaal_refresh_token"
+
+
 def test_secure_defaults():
     s = _valid()
     # trusted_proxies is empty by default: trust only the direct peer, so a

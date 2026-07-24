@@ -247,6 +247,7 @@ class IdentityService(Protocol):
         password: str,
         min_length: int,
         password_type: str,
+        max_length: int | None = None,
     ) -> str:
         """Validate password policy and return a secure hash.
 
@@ -254,6 +255,7 @@ class IdentityService(Protocol):
             password: Plaintext password to validate and hash.
             min_length: Minimum configured password length.
             password_type: Configured password policy type.
+            max_length: Maximum accepted length, or ``None`` for no maximum.
 
         Returns:
             Secure password hash.
@@ -1047,6 +1049,7 @@ class DefaultIdentityService:
         password: str,
         min_length: int,
         password_type: str,
+        max_length: int | None = None,
     ) -> str:
         """Validate password policy and return a secure hash.
 
@@ -1054,6 +1057,7 @@ class DefaultIdentityService:
             password: Plaintext password to validate and hash.
             min_length: Minimum configured password length.
             password_type: Configured password policy type.
+            max_length: Maximum accepted length, or ``None`` for no maximum.
 
         Returns:
             Secure password hash.
@@ -1065,6 +1069,7 @@ class DefaultIdentityService:
             password,
             min_length,
             password_type,
+            max_length,
         )
         return self._password_hasher.hash_password(password)
 

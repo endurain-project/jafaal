@@ -175,6 +175,52 @@ def test_no_state_store_error_when_not_deployed():
 
 
 # --------------------------------------------------------------------------- #
+# Rate-limiter guard (deployed environments)
+# --------------------------------------------------------------------------- #
+
+
+def test_raises_without_rate_limiter_when_deployed():
+    original = jafaal.get_settings()
+    jafaal.configure(_production_settings())
+    jafaal.configure_state_store(_FakeDistributedStore())  # satisfy the state-store guard
+    jafaal_rate_limit.reset_rate_limiter()  # no-op limiter active
+    try:
+        with pytest.raises(RuntimeError, match="without a rate limiter in a deployed environment"):
+            jafaal.create_auth_router()
+    finally:
+        jafaal.configure(original)
+        jafaal_rate_limit.reset_rate_limiter()
+        jafaal.reset_state_store()
+
+
+def test_no_rate_limiter_allowed_when_opted_in():
+    original = jafaal.get_settings()
+    jafaal.configure(dataclasses.replace(_production_settings(), allow_no_rate_limit_when_deployed=True))
+    jafaal.configure_state_store(_FakeDistributedStore())
+    jafaal_rate_limit.reset_rate_limiter()  # no-op limiter active
+    try:
+        jafaal.create_auth_router()  # opt-out set → does not raise
+    finally:
+        jafaal.configure(original)
+        jafaal_rate_limit.reset_rate_limiter()
+        jafaal.reset_state_store()
+
+
+def test_verify_configuration_raises_without_rate_limiter_when_deployed():
+    original = jafaal.get_settings()
+    jafaal.configure(_production_settings())
+    jafaal.configure_state_store(_FakeDistributedStore())
+    jafaal_rate_limit.reset_rate_limiter()
+    try:
+        with pytest.raises(RuntimeError, match="without a rate limiter"):
+            jafaal.verify_configuration()
+    finally:
+        jafaal.configure(original)
+        jafaal_rate_limit.reset_rate_limiter()
+        jafaal.reset_state_store()
+
+
+# --------------------------------------------------------------------------- #
 # verify_configuration
 # --------------------------------------------------------------------------- #
 

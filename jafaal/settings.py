@@ -154,6 +154,25 @@ class AuthSettings:
         step_up_grant_ttl_seconds: Lifetime, in seconds, of the single-use
             step-up grant minted after a successful IdP re-authentication;
             the caller must retry the sensitive operation within this window.
+        jwt_leeway_seconds: Clock-skew tolerance (seconds) applied to the
+            ``exp``/``nbf`` claims of JAFAAL's own JWTs. ``0`` (default) is
+            strict; a small value avoids spurious 401s across skewed nodes.
+        password_max_length: Maximum accepted password length, enforced before
+            hashing (defaults to 128; must be at least 64). The legacy bcrypt
+            verifier truncates at 72 bytes — Argon2 (used for all new hashes)
+            does not.
+        mfa_totp_replay_fail_open: When ``False`` (default), TOTP replay
+            protection fails closed on a state-store outage (the code is
+            rejected as a 503); ``True`` accepts the code and logs the degraded
+            check instead.
+        allow_no_rate_limit_when_deployed: Permit a deployed environment to run
+            with the no-op rate limiter. Off by default: ``create_auth_router``
+            / ``verify_configuration`` refuse to start deployed without an
+            enforcing limiter unless this is set.
+        refresh_cookie_prefix: Optional refresh-cookie name-prefix hardening
+            (``""``, ``"__Secure-"``, or ``"__Host-"``), applied only in a
+            deployed environment. ``"__Host-"`` requires ``refresh_cookie_path``
+            to be ``"/"``. See :attr:`effective_refresh_cookie_name`.
     """
 
     # --- secrets (required; the host provides them) ---
@@ -173,6 +192,12 @@ class AuthSettings:
     refresh_token_expire_days: int = 7
     issuer: str = ""
     audience: str = ""
+    # Clock-skew tolerance (seconds) applied when validating the ``exp`` / ``nbf``
+    # claims of JAFAAL's own JWTs. 0 keeps validation strict (the historical
+    # behaviour); a small value (e.g. 30) avoids spurious 401s when issuing and
+    # validating nodes have slightly skewed clocks. Kept small so an expired
+    # token is not honoured for long.
+    jwt_leeway_seconds: int = 0
 
     # --- sessions ---
     session_idle_timeout_enabled: bool = False
@@ -195,6 +220,14 @@ class AuthSettings:
     # on the process-local in-memory state store (which would fragment lockout /
     # TOTP-replay state). create_auth_router() enforces this.
     allow_in_memory_state_store_when_deployed: bool = False
+
+    # Off by default so a deployed environment cannot silently run without a real
+    # rate limiter (the no-op default enforces nothing on login / MFA / password
+    # reset / refresh, leaving only per-account progressive lockout).
+    # create_auth_router() / verify_configuration() refuse to start in a deployed
+    # environment when no enforcing limiter is installed unless this is set. Mirror
+    # of allow_in_memory_state_store_when_deployed: both fail closed by default.
+    allow_no_rate_limit_when_deployed: bool = False
 
     # When True, every access-token-authenticated request also verifies that the
     # token's session (its ``sid`` claim) still exists and is valid, so logout and
@@ -225,6 +258,21 @@ class AuthSettings:
     argon2_time_cost: int = 3
     argon2_memory_cost: int = 65536
     argon2_parallelism: int = 4
+    # Maximum accepted password length. Enforced before hashing (NIST SP 800-63B
+    # recommends accepting at least 64 characters so passphrases are allowed,
+    # while bounding input to avoid unbounded work). Note: the legacy bcrypt
+    # verifier truncates at 72 bytes; Argon2 (the default and only algorithm used
+    # for new hashes) has no such limit.
+    password_max_length: int = 128
+
+    # --- MFA ---
+    # TOTP single-use replay protection is defense-in-depth layered on top of the
+    # (unchanged) TOTP signature check, but it needs the shared state store. When
+    # the store is unreachable this fails *closed* by default: the MFA code is
+    # rejected (surfaced as a 503) rather than accepted without replay protection.
+    # Set True to prefer availability (accept the code, log + audit the degraded
+    # check) over the stronger single-use guarantee.
+    mfa_totp_replay_fail_open: bool = False
 
     # --- rate limiting (canonical budgets for the host's RateLimiter) ---
     rate_limit_sensitive: str = "10/minute"
@@ -235,6 +283,12 @@ class AuthSettings:
     user_agent: str = "Jafaal (OIDC Client)"
     refresh_cookie_name: str = "jafaal_refresh_token"
     refresh_cookie_path: str = "/api/v1/auth"
+    # Optional cookie-name prefix hardening applied to the refresh cookie in a
+    # *deployed* environment: "__Secure-" asserts the cookie was set with Secure
+    # (compatible with the path-scoped refresh cookie), "__Host-" additionally
+    # binds it to the exact host with Path=/ and no Domain (requires
+    # refresh_cookie_path="/"). Empty by default. See effective_refresh_cookie_name.
+    refresh_cookie_prefix: str = ""
     login_token_url: str = "/api/v1/auth/login"
     api_key_prefix: str = "jafaal"
     store_key_prefix: str = "jafaal:auth"
@@ -291,6 +345,24 @@ class AuthSettings:
             raise ValueError("AuthSettings.step_up_reauth_max_age_seconds must be positive")
         if self.step_up_grant_ttl_seconds <= 0:
             raise ValueError("AuthSettings.step_up_grant_ttl_seconds must be positive")
+        if self.jwt_leeway_seconds < 0:
+            raise ValueError("AuthSettings.jwt_leeway_seconds must be non-negative")
+        if self.password_max_length < 64:
+            raise ValueError(
+                "AuthSettings.password_max_length must be at least 64 so long passphrases are "
+                "accepted (NIST SP 800-63B recommends allowing at least 64 characters)."
+            )
+        if self.refresh_cookie_prefix not in ("", "__Secure-", "__Host-"):
+            raise ValueError(
+                "AuthSettings.refresh_cookie_prefix must be '', '__Secure-', or '__Host-' "
+                f"(got {self.refresh_cookie_prefix!r})."
+            )
+        if self.refresh_cookie_prefix == "__Host-" and self.refresh_cookie_path != "/":
+            raise ValueError(
+                "AuthSettings.refresh_cookie_prefix='__Host-' requires refresh_cookie_path='/': "
+                "the __Host- prefix mandates Path=/ and no Domain. Use '__Secure-' to keep a "
+                "path-scoped refresh cookie."
+            )
         for index, fallback in enumerate(self.secret_key_fallbacks):
             if len(fallback) < MIN_SECRET_KEY_LENGTH:
                 raise ValueError(
@@ -317,6 +389,20 @@ class AuthSettings:
     def is_deployed(self) -> bool:
         """Whether the environment is a deployed one (``production``/``demo``)."""
         return self.environment in ("production", "demo")
+
+    @property
+    def effective_refresh_cookie_name(self) -> str:
+        """Refresh-cookie name including any ``__Secure-`` / ``__Host-`` prefix.
+
+        The prefix is applied only in a *deployed* environment, where the cookie
+        is served with ``Secure`` — browsers reject ``__Secure-`` / ``__Host-``
+        cookies that arrive without it, which would otherwise break local http
+        development. Reads and writes of the refresh cookie must go through this
+        name so the set/clear/read sides stay in lockstep.
+        """
+        if self.refresh_cookie_prefix and self.is_deployed:
+            return f"{self.refresh_cookie_prefix}{self.refresh_cookie_name}"
+        return self.refresh_cookie_name
 
 
 # ---------------------------------------------------------------------------

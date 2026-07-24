@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy.orm import Session
 
 import jafaal._internal.user_guards as jafaal_user_guards
+import jafaal.audit as jafaal_audit
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.mfa.backup_codes.crud as mfa_backup_codes_crud
 import jafaal.mfa.backup_codes.utils as mfa_backup_codes_utils
@@ -139,18 +140,47 @@ def _totp_used_key(user_id: UserId, timestep: int) -> str:
     return f"{prefix}:mfa:totp_used:{user_id}:{timestep}"
 
 
+def _replay_store_unavailable(err: StateStoreUnavailableError) -> None:
+    """React to a state-store outage during TOTP replay bookkeeping.
+
+    Fails **closed** by default: a TOTP code is never accepted without single-use
+    replay protection, so the outage is surfaced as a 503
+    (:class:`~jafaal.exceptions.StoreUnavailableError`). Set
+    ``AuthSettings.mfa_totp_replay_fail_open=True`` to prefer availability, in
+    which case the caller proceeds without replay protection and the degraded
+    check is logged and audited. Either way the event is recorded on the audit
+    stream so operators notice the degradation.
+
+    Raises:
+        StoreUnavailableError: 503 unless replay fail-open is enabled.
+    """
+    jafaal_audit.record(
+        jafaal_audit.Event.MFA_REPLAY_CHECK_UNAVAILABLE,
+        outcome=jafaal_audit.Outcome.FAILURE,
+        level=logging.ERROR,
+        fail_open=jafaal_settings.get_settings().mfa_totp_replay_fail_open,
+    )
+    if jafaal_settings.get_settings().mfa_totp_replay_fail_open:
+        logger.warning("TOTP replay protection degraded: state store unavailable (fail-open)", exc_info=err)
+        return
+    logger.error("TOTP replay protection unavailable: state store down (failing closed)", exc_info=err)
+    raise jafaal_exceptions.StoreUnavailableError("MFA verification temporarily unavailable") from err
+
+
 def _totp_timestep_already_used(user_id: UserId, timestep: int) -> bool:
     """Return ``True`` if this TOTP timestep was already consumed (a replay).
 
-    Fails open on a state-store outage: replay protection is defense-in-depth
-    layered on top of the (unchanged) TOTP verification, so an unavailable
-    backend must not lock users out of MFA entirely.
+    Fails closed on a state-store outage by default (see
+    :func:`_replay_store_unavailable`): replay protection is defense-in-depth on
+    top of the (unchanged) TOTP signature check, but accepting a code without it
+    reopens the replay window, so the outage is surfaced as a 503 unless
+    ``mfa_totp_replay_fail_open`` is set.
     """
     try:
         return get_state_store().get(_totp_used_key(user_id, timestep)) is not None
     except StateStoreUnavailableError as err:
-        logger.warning("TOTP replay check skipped; state store unavailable", exc_info=err)
-        return False
+        _replay_store_unavailable(err)
+        return False  # only reached when replay fail-open is enabled
 
 
 def _mark_totp_timestep_used(user_id: UserId, timestep: int) -> None:
@@ -162,7 +192,7 @@ def _mark_totp_timestep_used(user_id: UserId, timestep: int) -> None:
             ttl_seconds=_TOTP_REPLAY_TTL_SECONDS,
         )
     except StateStoreUnavailableError as err:
-        logger.warning("Could not record consumed TOTP timestep; replay protection degraded", exc_info=err)
+        _replay_store_unavailable(err)
 
 
 def generate_qr_code(secret: str, username: str, app_name: str = "Jafaal") -> str:

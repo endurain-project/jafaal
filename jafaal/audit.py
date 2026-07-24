@@ -79,6 +79,7 @@ class Event:
     LOGIN_FAILURE: Final = "login.failure"
     LOCKOUT_APPLIED: Final = "lockout.applied"
     MFA_FAILURE: Final = "mfa.failure"
+    MFA_REPLAY_CHECK_UNAVAILABLE: Final = "mfa.replay_check_unavailable"
     TOKEN_REUSE_GRACE: Final = "token.reuse_grace"
     TOKEN_THEFT_DETECTED: Final = "token.theft_detected"
     API_KEY_AUTH_SUCCESS: Final = "api_key.auth_success"

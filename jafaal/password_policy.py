@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import jafaal.ports as jafaal_ports
+import jafaal.settings as jafaal_settings
 
 if TYPE_CHECKING:
     import jafaal.identity_service as jafaal_identity_service
@@ -37,4 +38,5 @@ def validate_and_hash_for_user(
     """
     policy = jafaal_ports.get_settings_provider().get_password_policy()
     min_length = policy.min_length_for(is_superuser=is_superuser)
-    return identity_service.validate_and_hash_password(password, min_length, policy.password_type)
+    max_length = jafaal_settings.get_settings().password_max_length
+    return identity_service.validate_and_hash_password(password, min_length, policy.password_type, max_length)

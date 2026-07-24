@@ -63,6 +63,17 @@ def test_validate_password_length_only():
         PasswordHasher.validate_password("abc", min_length=8, policy_type="length_only")
 
 
+def test_validate_password_max_length():
+    # Both policies reject a password over the maximum (checked before hashing).
+    with pytest.raises(PasswordPolicyError, match="too long"):
+        PasswordHasher.validate_password("a" * 40, min_length=8, policy_type="length_only", max_length=32)
+    with pytest.raises(PasswordPolicyError, match="too long"):
+        PasswordHasher.validate_password("Str0ng!" + "a" * 40, min_length=8, max_length=32)
+    # Within the bound is accepted; None (the default) means no maximum.
+    PasswordHasher.validate_password("abcdefgh", min_length=8, policy_type="length_only", max_length=32)
+    PasswordHasher.validate_password("a" * 500, min_length=8, policy_type="length_only")
+
+
 def test_validate_password_unknown_policy():
     with pytest.raises(PasswordPolicyError, match="Unknown password policy"):
         PasswordHasher.validate_password("Str0ng!Pass", min_length=8, policy_type="bogus")

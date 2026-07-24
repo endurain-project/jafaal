@@ -367,7 +367,7 @@ def get_refresh_token(
     Raises:
         JafaalError: If no valid refresh token is found or the client type is invalid.
     """
-    cookie_refresh_token = request.cookies.get(jafaal_settings.get_settings().refresh_cookie_name)
+    cookie_refresh_token = request.cookies.get(jafaal_settings.get_settings().effective_refresh_cookie_name)
     return get_token(
         non_cookie_refresh_token, cookie_refresh_token, client_type, jafaal_token_manager.TokenType.REFRESH
     )

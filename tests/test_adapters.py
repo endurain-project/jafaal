@@ -548,4 +548,3 @@ class TestStateStoreRateLimiter:
                 assert endpoint(request=_make_request("1.1.1.1")) == "ok"
         finally:
             jafaal.configure(original)
-

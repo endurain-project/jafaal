@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import json
 import logging
 import secrets as secrets_module
@@ -89,6 +91,50 @@ ID_TOKEN_ALLOWED_ALGORITHMS: frozenset[str] = frozenset(
         "EdDSA",
     }
 )
+
+# Hash function used to compute ``at_hash`` for each signing algorithm (OIDC
+# Core 1.0 §3.1.3.6: the hash is the one used by the token's ``alg``). EdDSA in
+# OIDC uses Ed25519, whose hash is SHA-512.
+_AT_HASH_HASH_BY_ALG: dict[str, str] = {
+    "RS256": "sha256",
+    "ES256": "sha256",
+    "PS256": "sha256",
+    "RS384": "sha384",
+    "ES384": "sha384",
+    "PS384": "sha384",
+    "RS512": "sha512",
+    "ES512": "sha512",
+    "PS512": "sha512",
+    "EdDSA": "sha512",
+}
+
+
+def _verify_at_hash(access_token: str, alg: str, at_hash_claim: str) -> None:
+    """Verify an ID token ``at_hash`` against the issued access token.
+
+    ``at_hash`` is the base64url-encoded left-most half of the hash of the ASCII
+    access-token octets, using the hash of the token's signature ``alg``
+    (OIDC Core 1.0 §3.1.3.6). Validating it binds the ID token to the access
+    token, detecting a swapped/mismatched access token.
+
+    Args:
+        access_token: The access token returned alongside the ID token.
+        alg: The ID token's signature algorithm (already allow-listed).
+        at_hash_claim: The ``at_hash`` claim value from the ID token.
+
+    Raises:
+        InvalidTokenError: If the computed hash does not match ``at_hash_claim``.
+    """
+    hash_name = _AT_HASH_HASH_BY_ALG.get(alg)
+    if hash_name is None:
+        # Signature is already verified; skip if we cannot map the alg to a hash.
+        logger.debug(f"Skipping at_hash validation for unmapped algorithm {alg}")
+        return
+    digest = hashlib.new(hash_name, access_token.encode("ascii")).digest()
+    expected = base64.urlsafe_b64encode(digest[: len(digest) // 2]).rstrip(b"=").decode("ascii")
+    if not hmac.compare_digest(expected, at_hash_claim):
+        logger.warning("ID token at_hash does not match the issued access token")
+        raise jafaal_exceptions.InvalidTokenError("ID token at_hash mismatch")
 
 
 class TokenAction(Enum):
@@ -283,6 +329,7 @@ class IdentityProviderService:
         expected_issuer: str,
         expected_audience: str,
         expected_nonce: str | None = None,
+        access_token: str | None = None,
     ) -> dict[str, Any]:
         """
         Verifies the ID token's signature and claims using JWKS from the identity provider.
@@ -295,6 +342,7 @@ class IdentityProviderService:
         5. Verifies the JWT signature using joserfc
         6. Validates standard claims (iss, aud, exp, iat)
         7. Validates nonce if provided (required for implicit/hybrid flows)
+        8. Validates azp (authorized party) and at_hash when applicable
 
         This replaces the insecure manual JWT decode that was previously used.
 
@@ -304,6 +352,8 @@ class IdentityProviderService:
             expected_issuer: Expected 'iss' claim value (from OIDC discovery)
             expected_audience: Expected 'aud' claim value (client_id)
             expected_nonce: Expected nonce value from session (optional, but recommended)
+            access_token: The access token issued alongside the ID token, used to
+                verify the ``at_hash`` claim when present (optional).
 
         Returns:
             Dictionary containing the verified JWT claims (sub, email, name, etc.)
@@ -316,6 +366,8 @@ class IdentityProviderService:
             - ExpiredTokenError: Token is past its 'exp' claim
             - InvalidClaimError: iss/aud/nonce doesn't match expected values
             - MissingClaimError: Required claim is missing
+            - azp is enforced against client_id for multi-audience tokens
+            - at_hash binds the ID token to the issued access token when present
         """
         try:
             # Step 1: Parse JWT header without verification to get 'kid'
@@ -424,6 +476,28 @@ class IdentityProviderService:
                 if token_nonce != expected_nonce:
                     logger.warning(f"ID token nonce mismatch: expected {expected_nonce}, got {token_nonce}")
                     raise jafaal_exceptions.InvalidTokenError("ID token nonce mismatch")
+
+            # Step 7: Validate azp (authorized party) — OIDC Core 1.0 §3.1.3.7.
+            # If the ID token contains multiple audiences, azp MUST be present;
+            # and whenever azp is present it MUST equal the client_id. This stops
+            # a token minted for a different client (but listing us in aud) from
+            # being accepted here.
+            aud_claim = claims.get("aud")
+            azp = claims.get("azp")
+            if isinstance(aud_claim, list) and len(aud_claim) > 1 and not azp:
+                logger.warning("ID token has multiple audiences but no azp claim")
+                raise jafaal_exceptions.InvalidTokenError("ID token missing azp for multiple audiences")
+            if azp is not None and azp != expected_audience:
+                logger.warning(f"ID token azp mismatch: expected {expected_audience}, got {azp}")
+                raise jafaal_exceptions.InvalidTokenError("ID token azp mismatch")
+
+            # Step 8: Validate at_hash against the issued access token when both
+            # are present — OIDC Core 1.0 §3.1.3.6. Optional for the code flow,
+            # but verified opportunistically as defense-in-depth binding the ID
+            # token to the access token.
+            at_hash_claim = claims.get("at_hash")
+            if at_hash_claim and access_token:
+                _verify_at_hash(access_token, alg, at_hash_claim)
 
             # Return verified claims
             return claims
@@ -1271,6 +1345,7 @@ class IdentityProviderService:
                     expected_issuer=expected_issuer,
                     expected_audience=expected_audience,
                     expected_nonce=expected_nonce,
+                    access_token=token_response.get("access_token"),
                 )
 
                 logger.debug(f"Successfully verified ID token for sub={id_token_claims.get('sub')}")

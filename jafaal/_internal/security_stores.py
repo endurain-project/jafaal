@@ -696,9 +696,6 @@ def clear_pending_mfa_for_user(user_id: UserId) -> int:
 
     Returns:
         Number of pending MFA entries removed (zero on storage outage).
-
-    Raises:
-        None.
     """
     try:
         return pending_mfa_store.clear_for_user(user_id)

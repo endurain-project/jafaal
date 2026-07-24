@@ -224,6 +224,7 @@ class PasswordHasher:
         password: str,
         min_length: int = 8,
         policy_type: str = "strict",
+        max_length: int | None = None,
     ) -> None:
         """
         Validates whether the given password meets the required security policy.
@@ -233,16 +234,35 @@ class PasswordHasher:
             min_length (int, optional): The minimum required length for the password. Defaults to 8.
             policy_type (str, optional): The password policy type to enforce.
                 - "strict": Requires uppercase, lowercase, digit, and special character.
-                - "length_only": Only enforces minimum length requirement.
+                - "length_only": Only enforces minimum/maximum length.
                 Defaults to "strict".
+            max_length (int | None, optional): The maximum accepted length. When
+                provided, the password is rejected before hashing if it exceeds
+                this bound. ``None`` (the default) enforces no maximum.
 
         Raises:
             PasswordPolicyError: If the password does not meet the policy requirements.
+
+        Notes:
+            - NIST SP 800-63B advises against imposing composition rules and in
+              favour of length plus breach screening. ``"length_only"`` is the
+              standards-aligned choice; pair it with a longer ``min_length`` and,
+              ideally, a host-side breached-password check. ``"strict"`` remains
+              available for hosts bound by legacy composition requirements.
+            - The password is never truncated. The legacy bcrypt verifier
+              silently truncates at 72 bytes, so a ``max_length`` above 72 only
+              fully applies to Argon2 hashes (used for all new passwords).
         """
         if len(password) < min_length:
             raise PasswordPolicyError(f"Password is too short (got {len(password)}, need ≥ {min_length}).")
 
-        # For length_only policy, only min length is enforced
+        # Bound the length before any (deliberately slow) hashing work and to keep
+        # long passphrases supported (NIST SP 800-63B) without accepting unbounded
+        # input.
+        if max_length is not None and len(password) > max_length:
+            raise PasswordPolicyError(f"Password is too long (got {len(password)}, allowed ≤ {max_length}).")
+
+        # For length_only policy, only length is enforced
         if policy_type == "length_only":
             return
 
@@ -271,6 +291,7 @@ class PasswordHasher:
         password: str,
         min_length: int = 8,
         policy_type: str = "strict",
+        max_length: int | None = None,
     ) -> bool:
         """
         Checks if the provided password meets the specified minimum length and password policy requirements.
@@ -279,12 +300,13 @@ class PasswordHasher:
             password (str): The password string to validate.
             min_length (int, optional): The minimum required length for the password. Defaults to 8.
             policy_type (str, optional): The password policy type to enforce. Defaults to "strict".
+            max_length (int | None, optional): The maximum accepted length, or ``None`` for no maximum.
 
         Returns:
             bool: True if the password is valid according to the policy, False otherwise.
         """
         try:
-            PasswordHasher.validate_password(password, min_length, policy_type)
+            PasswordHasher.validate_password(password, min_length, policy_type, max_length)
             return True
         except PasswordPolicyError:
             return False

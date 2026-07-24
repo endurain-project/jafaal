@@ -63,6 +63,26 @@ def test_expired_token_raises_token_expired():
         tm.validate_token_expiration(token, TokenType.ACCESS)
 
 
+def test_leeway_tolerates_recently_expired_token():
+    # With a leeway wider than the token's overshoot, a just-expired token still
+    # validates; strict validation (leeway 0) rejects the same token.
+    lenient = TokenManager(
+        "k" * 32,
+        "HS256",
+        access_token_expire_minutes=-1,  # exp ~60s in the past
+        issuer="iss",
+        audience="aud",
+        leeway_seconds=120,
+    )
+    _, token = lenient.create_token("s", _user(), TokenType.ACCESS)
+    lenient.validate_token_expiration(token, TokenType.ACCESS)  # within leeway → no raise
+
+    strict = TokenManager("k" * 32, "HS256", access_token_expire_minutes=-1, issuer="iss", audience="aud")
+    _, strict_token = strict.create_token("s", _user(), TokenType.ACCESS)
+    with pytest.raises(exc.TokenExpiredError):
+        strict.validate_token_expiration(strict_token, TokenType.ACCESS)
+
+
 def test_tampered_signature_rejected():
     tm = get_token_manager()
     _, token = tm.create_token("s", _user(), TokenType.ACCESS)

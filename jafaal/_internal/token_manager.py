@@ -61,6 +61,7 @@ class TokenManager:
         issuer: str = "",
         audience: str = "",
         secret_key_fallbacks: tuple[str, ...] = (),
+        leeway_seconds: int = 0,
     ):
         """
         Initializes the TokenManager with the provided secret key and settings.
@@ -81,6 +82,10 @@ class TokenManager:
                 when *verifying* a token (never used to sign). Lets tokens
                 issued before a ``secret_key`` rotation keep validating during
                 the overlap window.
+            leeway_seconds (int): Clock-skew tolerance, in seconds, applied to
+                the ``exp`` / ``nbf`` claims during validation. ``0`` is strict;
+                a small value avoids spurious 401s when the issuing and
+                validating clocks differ slightly.
         """
         if algorithm not in jafaal_settings.ALLOWED_ALGORITHMS:
             raise ValueError(
@@ -92,6 +97,7 @@ class TokenManager:
         self.refresh_token_expire_days = refresh_token_expire_days
         self.issuer = issuer
         self.audience = audience
+        self.leeway_seconds = leeway_seconds
         self._key = OctKey.import_key(secret_key)
         # Verification accepts the primary key plus any rotation fallbacks, so a
         # token signed before a secret_key rotation still validates during the
@@ -213,8 +219,11 @@ class TokenManager:
                 not yet valid, contains invalid claims, or has the wrong type.
         """
         try:
-            # Define required claims
+            # Define required claims. ``leeway`` applies a small clock-skew
+            # tolerance to the time-based claims (``exp`` / ``nbf``) so slightly
+            # skewed nodes do not spuriously reject otherwise-valid tokens.
             claims_requests = jwt.JWTClaimsRegistry(
+                leeway=self.leeway_seconds,
                 sid={"essential": True},
                 iss={
                     "essential": True,
@@ -400,6 +409,7 @@ def get_token_manager() -> TokenManager:
             issuer=settings.resolved_issuer,
             audience=settings.resolved_audience,
             secret_key_fallbacks=settings.secret_key_fallbacks,
+            leeway_seconds=settings.jwt_leeway_seconds,
         )
         _token_manager_generation = generation
     return _token_manager

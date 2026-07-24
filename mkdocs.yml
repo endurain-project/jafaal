@@ -44,4 +44,6 @@ nav:
   - Configuration: configuration.md
   - Ports & Adapters: ports-and-adapters.md
   - Security: security.md
+  - Threat model: threat-model.md
+  - Key rotation: key-rotation.md
   - API Reference: api.md

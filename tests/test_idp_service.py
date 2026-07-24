@@ -7,6 +7,8 @@ the HTTP-mocking tests (it has its own dedicated tests) so they stay hermetic.
 """
 
 import asyncio
+import base64
+import hashlib
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -103,11 +105,17 @@ def _create_idp(db, *, slug="oidc", **overrides):
     return idp_crud.create_identity_provider(idp_schema.IdentityProviderCreate(**fields), db)
 
 
-def _id_token_claims(*, iss=ISSUER, aud=AUDIENCE, nonce=None, exp_delta=3600, sub="idp-subject"):
+def _id_token_claims(
+    *, iss=ISSUER, aud=AUDIENCE, nonce=None, exp_delta=3600, sub="idp-subject", azp=None, at_hash=None
+):
     now = int(datetime.now(UTC).timestamp())
     claims = {"iss": iss, "aud": aud, "sub": sub, "iat": now, "exp": now + exp_delta}
     if nonce is not None:
         claims["nonce"] = nonce
+    if azp is not None:
+        claims["azp"] = azp
+    if at_hash is not None:
+        claims["at_hash"] = at_hash
     return claims
 
 
@@ -232,6 +240,62 @@ def test_verify_id_token_unknown_kid():
     token = jwt.encode({"alg": "RS256", "kid": "unknown-kid"}, _id_token_claims(), key)
     with pytest.raises(exc.InvalidTokenError):
         asyncio.run(svc._verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
+
+
+def test_verify_id_token_azp_mismatch_rejected():
+    # A present azp naming a different client must be rejected (OIDC §3.1.3.7).
+    svc = IdentityProviderService()
+    key, jwks = _rsa_jwks()
+    svc._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
+    token = jwt.encode({"alg": "RS256", "kid": "test-key-1"}, _id_token_claims(azp="someone-else"), key)
+    with pytest.raises(exc.InvalidTokenError, match="azp"):
+        asyncio.run(svc._verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
+
+
+def test_verify_id_token_azp_match_accepted():
+    svc = IdentityProviderService()
+    key, jwks = _rsa_jwks()
+    svc._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
+    token = jwt.encode({"alg": "RS256", "kid": "test-key-1"}, _id_token_claims(azp=AUDIENCE), key)
+    claims = asyncio.run(svc._verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
+    assert claims["azp"] == AUDIENCE
+
+
+def test_verify_id_token_multiple_aud_requires_azp():
+    svc = IdentityProviderService()
+    key, jwks = _rsa_jwks()
+    svc._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
+    # Multiple audiences without azp is rejected...
+    token = jwt.encode({"alg": "RS256", "kid": "test-key-1"}, _id_token_claims(aud=[AUDIENCE, "other-client"]), key)
+    with pytest.raises(exc.InvalidTokenError, match="azp"):
+        asyncio.run(svc._verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
+    # ...but accepted when azp names our client.
+    token_ok = jwt.encode(
+        {"alg": "RS256", "kid": "test-key-1"},
+        _id_token_claims(aud=[AUDIENCE, "other-client"], azp=AUDIENCE),
+        key,
+    )
+    claims = asyncio.run(svc._verify_id_token(token_ok, JWKS_URI, ISSUER, AUDIENCE))
+    assert claims["sub"] == "idp-subject"
+
+
+def test_verify_id_token_at_hash_valid_and_mismatch():
+    svc = IdentityProviderService()
+    key, jwks = _rsa_jwks()
+    svc._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
+    access_token = "the-access-token-value"
+    # at_hash = base64url(left-most half of SHA-256(access_token)) for RS256.
+    digest = hashlib.sha256(access_token.encode("ascii")).digest()
+    at_hash = base64.urlsafe_b64encode(digest[: len(digest) // 2]).rstrip(b"=").decode("ascii")
+    token = jwt.encode({"alg": "RS256", "kid": "test-key-1"}, _id_token_claims(at_hash=at_hash), key)
+
+    # Matching access token verifies.
+    claims = asyncio.run(svc._verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE, access_token=access_token))
+    assert claims["sub"] == "idp-subject"
+
+    # A different access token fails the at_hash binding.
+    with pytest.raises(exc.InvalidTokenError, match="at_hash"):
+        asyncio.run(svc._verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE, access_token="different-token"))
 
 
 def test_verify_id_token_missing_kid():

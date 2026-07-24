@@ -1,15 +1,48 @@
 """Tests for MFA: TOTP verification, replay protection, and backup codes."""
 
+import dataclasses
 import time
 
 import pyotp
+import pytest
 
+import jafaal
 import jafaal.mfa.crud as mfa_crud
 import jafaal.mfa.service as mfa_service
 from jafaal._core import crypto
 from jafaal._internal.password_hasher import get_password_hasher
 from jafaal._internal.token_manager import get_token_manager
+from jafaal.exceptions import StoreUnavailableError
 from jafaal.identity_service import DefaultIdentityService
+from jafaal.state_store import StateStoreUnavailableError
+
+
+class _FailingStateStore:
+    """A ``StateStore`` whose reads/writes always raise (simulates an outage)."""
+
+    def get(self, key):
+        raise StateStoreUnavailableError("down")
+
+    def set(self, key, value, ttl_seconds=None):
+        raise StateStoreUnavailableError("down")
+
+    def delete(self, key):
+        raise StateStoreUnavailableError("down")
+
+    def delete_prefix(self, prefix):
+        raise StateStoreUnavailableError("down")
+
+    def get_and_delete(self, key):
+        raise StateStoreUnavailableError("down")
+
+    def increment(self, key, ttl_seconds):
+        raise StateStoreUnavailableError("down")
+
+    def iter_keys(self, prefix):
+        raise StateStoreUnavailableError("down")
+
+    def record_tiered_failure(self, counter_key, gate_key, tiers, counter_ttl_seconds):
+        raise StateStoreUnavailableError("down")
 
 
 def _identity_service(db):
@@ -53,6 +86,42 @@ def test_totp_replay_is_rejected(db, make_user):
     assert mfa_service.verify_user_mfa(user.id, code, identity_service, db) is True
     # Replaying the same code within its window is rejected.
     assert mfa_service.verify_user_mfa(user.id, code, identity_service, db) is False
+
+
+def test_totp_replay_fails_closed_on_store_outage(db, make_user):
+    # Default policy: if the replay-protection store is down, a TOTP code cannot
+    # be verified single-use, so the request fails closed (503) rather than
+    # accepting a potentially-replayed code.
+    user = make_user()
+    secret = pyotp.random_base32()
+    _enable_mfa(user.id, db, secret)
+    identity_service = _identity_service(db)
+    code = pyotp.TOTP(secret).now()
+
+    jafaal.configure_state_store(_FailingStateStore())
+    try:
+        with pytest.raises(StoreUnavailableError):
+            mfa_service.verify_user_mfa(user.id, code, identity_service, db)
+    finally:
+        jafaal.reset_state_store()
+
+
+def test_totp_replay_fail_open_when_configured(db, make_user):
+    # Opt-in policy: prefer availability — accept the code despite the outage.
+    user = make_user()
+    secret = pyotp.random_base32()
+    _enable_mfa(user.id, db, secret)
+    identity_service = _identity_service(db)
+    code = pyotp.TOTP(secret).now()
+
+    original = jafaal.get_settings()
+    jafaal.configure(dataclasses.replace(original, mfa_totp_replay_fail_open=True))
+    jafaal.configure_state_store(_FailingStateStore())
+    try:
+        assert mfa_service.verify_user_mfa(user.id, code, identity_service, db) is True
+    finally:
+        jafaal.configure(original)
+        jafaal.reset_state_store()
 
 
 def test_verify_user_mfa_rejects_wrong_code(db, make_user):

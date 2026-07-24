@@ -71,9 +71,14 @@ def _warn_on_insecure_defaults() -> None:
       can then spoof its source IP via ``X-Forwarded-For`` / ``X-Real-IP``).
 
     The in-memory state store in a deployed environment is a *hard error*, not a
-    warning — see :func:`_ensure_state_store_safe_for_deployment`.
+    warning — see :func:`_ensure_state_store_safe_for_deployment`. A missing rate
+    limiter is likewise a *hard error* when deployed
+    (:func:`_ensure_rate_limiter_safe_for_deployment`); the warning below covers
+    only non-deployed environments, where enforcement is optional.
     """
-    if not jafaal_rate_limit.is_enforcing():
+    deployed = jafaal_settings.is_configured() and jafaal_settings.get_settings().is_deployed
+
+    if not deployed and not jafaal_rate_limit.is_enforcing():
         logger.warning(
             "JAFAAL rate limiting is not configured: the no-op limiter is active, so login / MFA / "
             "password-reset / refresh endpoints are NOT rate-limited. Install a real limiter — the "
@@ -82,7 +87,6 @@ def _warn_on_insecure_defaults() -> None:
             "Per-account progressive lockout still applies."
         )
 
-    deployed = jafaal_settings.is_configured() and jafaal_settings.get_settings().is_deployed
     if deployed and tuple(jafaal_settings.get_settings().trusted_proxies) == ("*",):
         logger.warning(
             "JAFAAL trusted_proxies is set to ('*',) in a deployed environment: every peer is trusted, so "
@@ -121,6 +125,39 @@ def _warn_on_router_prefix_mismatch(prefixes: RouterPrefixes) -> None:
             f"router prefix {prefixes.auth!r}; the refresh cookie will be scoped to a path that the /refresh "
             "and /logout endpoints are not served under, so web sessions will silently fail to refresh. Keep "
             "refresh_cookie_path in lockstep with RouterPrefixes.auth."
+        )
+
+
+def _ensure_rate_limiter_safe_for_deployment() -> None:
+    """Refuse to run without an enforcing rate limiter in a deployed environment.
+
+    The default :class:`~jafaal.rate_limit.NoOpRateLimiter` enforces nothing, so
+    login / MFA / password-reset / refresh endpoints are not rate-limited (only
+    per-account progressive lockout applies). Leaving that in place in a deployed
+    environment is a silent brute-force / DoS exposure, so — mirroring
+    :func:`_ensure_state_store_safe_for_deployment` — this is a hard failure at
+    startup unless the host explicitly opts in via
+    :attr:`~jafaal.settings.AuthSettings.allow_no_rate_limit_when_deployed`.
+
+    Raises:
+        RuntimeError: If the environment is deployed, no enforcing limiter is
+            installed, and the opt-out flag is not set.
+    """
+    if not jafaal_settings.is_configured():
+        return
+    settings = jafaal_settings.get_settings()
+    if not settings.is_deployed or settings.allow_no_rate_limit_when_deployed:
+        return
+    if not jafaal_rate_limit.is_enforcing():
+        raise RuntimeError(
+            "JAFAAL is running without a rate limiter in a deployed environment "
+            f"(environment={settings.environment!r}). The no-op limiter enforces nothing, so "
+            "login / MFA / password-reset / refresh endpoints are not rate-limited (only "
+            "per-account progressive lockout applies), leaving a brute-force / DoS exposure. "
+            "Install a limiter via create_auth_router(rate_limiter=...) or "
+            "jafaal.configure_rate_limiter(...) — the batteries-included "
+            "jafaal.adapters.StateStoreRateLimiter needs no extra dependency — or set "
+            "AuthSettings.allow_no_rate_limit_when_deployed=True to accept the risk."
         )
 
 
@@ -192,6 +229,7 @@ def verify_configuration() -> None:
             + "\n".join(f"  - {item}" for item in missing)
         )
     _ensure_state_store_safe_for_deployment()
+    _ensure_rate_limiter_safe_for_deployment()
 
 
 def create_auth_router(
@@ -227,6 +265,7 @@ def create_auth_router(
     _warn_on_insecure_defaults()
     _warn_on_router_prefix_mismatch(prefixes)
     _ensure_state_store_safe_for_deployment()
+    _ensure_rate_limiter_safe_for_deployment()
 
     # Import the sub-routers here, after installing the limiter. The rate-limit
     # decorators bind the configured limiter lazily (on first request, re-binding
