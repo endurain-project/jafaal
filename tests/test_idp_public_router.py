@@ -19,7 +19,6 @@ import jafaal.oauth_state.crud as oauth_state_crud
 import jafaal.oauth_state.utils as oauth_state_utils
 import jafaal.orm as jafaal_orm
 import jafaal.sessions.utils as session_utils
-from jafaal._internal.password_hasher import password_hasher
 
 BASE = "/api/v1/public/idp"
 
@@ -86,9 +85,7 @@ def _create_oauth_state(idp_id, *, client_type="web", user_id=None, code_challen
 def _create_session_linked(user, state_id, session_id="sess-1"):
     session = _session()
     try:
-        session_utils.create_session(
-            session_id, user, _fake_request(), None, password_hasher, session, oauth_state_id=state_id
-        )
+        session_utils.create_session(session_id, user, _fake_request(), None, session, oauth_state_id=state_id)
         return session_id
     finally:
         session.close()

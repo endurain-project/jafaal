@@ -25,7 +25,7 @@ misconfiguration fails fast.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, fields
 from urllib.parse import urlparse
 
 from cryptography.fernet import Fernet
@@ -216,15 +216,20 @@ class AuthSettings:
     """
 
     # --- secrets (required; the host provides them) ---
-    secret_key: str
-    fernet_key: str
+    # ``repr=False`` on every field holding key material: the dataclass-generated
+    # ``__repr__`` would otherwise print the JWT signing key and the at-rest
+    # encryption key verbatim into any traceback frame dump, error-tracker
+    # payload, or ``logger.debug(settings)`` call. See the custom ``__repr__``
+    # below, which renders these as ``<redacted>``.
+    secret_key: str = field(repr=False)
+    fernet_key: str = field(repr=False)
 
     # --- key rotation (additional keys accepted for verification/decryption) ---
     # Older keys kept alongside the primary so secrets encrypted (or tokens
     # signed) before a rotation still validate. New material is always produced
     # with the primary key; these are decrypt-/verify-only.
-    secret_key_fallbacks: tuple[str, ...] = ()
-    fernet_key_fallbacks: tuple[str, ...] = ()
+    secret_key_fallbacks: tuple[str, ...] = field(default=(), repr=False)
+    fernet_key_fallbacks: tuple[str, ...] = field(default=(), repr=False)
 
     # --- JWT ---
     algorithm: str = "HS256"
@@ -235,8 +240,8 @@ class AuthSettings:
     # kept in the JWKS during a signing-key rotation overlap. ``secret_key`` is
     # still required regardless of ``algorithm`` — it keys the HMAC hashing of
     # refresh / CSRF tokens.
-    private_key: str = ""
-    private_key_fallbacks: tuple[str, ...] = ()
+    private_key: str = field(default="", repr=False)
+    private_key_fallbacks: tuple[str, ...] = field(default=(), repr=False)
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
     issuer: str = ""
@@ -505,6 +510,26 @@ class AuthSettings:
                 Fernet(fallback.encode())
             except Exception as err:
                 raise ValueError(f"AuthSettings.fernet_key_fallbacks[{index}] is not a valid Fernet key.") from err
+
+    def __repr__(self) -> str:
+        """Render the settings with every key-bearing field redacted.
+
+        Defined explicitly (a manual ``__repr__`` in the class body wins over the
+        dataclass-generated one) so that secrets can never reach a log line, a
+        traceback frame dump, or an error-tracker payload. Fields declared with
+        ``field(repr=False)`` — the JWT signing key, the Fernet at-rest key, the
+        asymmetric private key, and all their rotation fallbacks — are shown as
+        ``<redacted>`` rather than silently omitted, so the value is still
+        visibly *present* when debugging a configuration problem.
+
+        The ``repr=False`` flag on the field is the single source of truth: a new
+        secret field only has to be declared with it to be covered here.
+        """
+        rendered = ", ".join(
+            f"{spec.name}=<redacted>" if not spec.repr else f"{spec.name}={getattr(self, spec.name)!r}"
+            for spec in fields(self)
+        )
+        return f"{type(self).__name__}({rendered})"
 
     @property
     def resolved_issuer(self) -> str:

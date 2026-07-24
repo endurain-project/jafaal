@@ -8,10 +8,14 @@ detection with whole-family invalidation, and the web CSRF bootstrap rules.
 
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime, timedelta
 
 import jafaal.orm as jafaal_orm
+import jafaal.sessions.utils as session_utils
+from jafaal._internal.password_hasher import password_hasher
 from jafaal._internal.token_manager import TokenType, get_token_manager
+from jafaal.sessions.models import UsersSessions
 from jafaal.sessions.rotated_refresh_tokens.models import RotatedRefreshToken
 
 WEB = {"X-Client-Type": "web"}
@@ -220,3 +224,112 @@ def test_missing_csrf_header_still_allowed_after_binding(client, make_user):
 
     # Omitting the header on a later reload must still bootstrap (no lockout).
     assert client.post(REFRESH, headers=WEB).status_code == 200
+
+
+# --------------------------------------------------------------------------- #
+# Stored refresh-token digest format
+#
+# Refresh tokens are high-entropy signed JWTs, so the session stores a keyed
+# HMAC-SHA256 digest (microseconds) rather than a password KDF (~50 ms, paid
+# twice per /refresh). Legacy Argon2/bcrypt rows must keep verifying until they
+# are rotated away.
+# --------------------------------------------------------------------------- #
+
+
+def _session_row(session_id):
+    session = jafaal_orm.get_sessionmaker()()
+    try:
+        return session.get(UsersSessions, session_id)
+    finally:
+        session.close()
+
+
+def _stored_hash(session_id) -> str:
+    row = _session_row(session_id)
+    assert row is not None
+    return row.refresh_token
+
+
+def test_login_stores_refresh_token_as_keyed_hmac(client, make_user):
+    make_user()
+    body = _login(client).json()
+
+    stored = _stored_hash(body["session_id"])
+    # 64 lowercase hex characters == HMAC-SHA256, not an Argon2/bcrypt PHC string.
+    assert len(stored) == 64
+    assert set(stored) <= set("0123456789abcdef")
+    assert not stored.startswith("$")
+    # It is the keyed digest of the issued token, and nothing else matches.
+    assert stored == session_utils.hash_refresh_token(_refresh_cookie(client))
+    assert stored != session_utils.hash_refresh_token("not-the-token")
+
+
+def test_stored_digest_is_keyed_not_a_bare_sha256(client, make_user):
+    # A bare SHA-256 would let anyone with database read access verify a stolen
+    # token offline; the HMAC keys it to AuthSettings.secret_key.
+    make_user()
+    body = _login(client).json()
+    token = _refresh_cookie(client)
+
+    assert _stored_hash(body["session_id"]) != hashlib.sha256(token.encode()).hexdigest()
+
+
+def test_refresh_accepts_a_legacy_argon2_session_and_rehashes_it(client, make_user):
+    # Sessions written before the switch hold an Argon2 hash. They must keep
+    # working, and rotating one must rewrite it in the HMAC format so the
+    # fallback drains instead of persisting forever.
+    make_user()
+    body = _login(client).json()
+    session_id = body["session_id"]
+    token = _refresh_cookie(client)
+
+    session = jafaal_orm.get_sessionmaker()()
+    try:
+        row = session.get(UsersSessions, session_id)
+        row.refresh_token = password_hasher.hash_password(token)
+        session.commit()
+    finally:
+        session.close()
+
+    legacy = _stored_hash(session_id)
+    assert legacy.startswith("$")  # sanity: we really wrote a PHC-format hash
+
+    response = client.post(REFRESH, headers=WEB)
+    assert response.status_code == 200
+
+    # Rotation rewrote the digest in the new format, bound to the new token.
+    rotated = _stored_hash(session_id)
+    assert not rotated.startswith("$")
+    assert rotated == session_utils.hash_refresh_token(_refresh_cookie(client))
+
+
+def test_refresh_rejects_a_wrong_token_against_a_legacy_argon2_session(client, make_user):
+    make_user()
+    session_id = _login(client).json()["session_id"]
+
+    session = jafaal_orm.get_sessionmaker()()
+    try:
+        row = session.get(UsersSessions, session_id)
+        row.refresh_token = password_hasher.hash_password("a-different-token")
+        session.commit()
+    finally:
+        session.close()
+
+    assert client.post(REFRESH, headers=WEB).status_code == 401
+
+
+def test_refresh_rejects_an_unverifiable_stored_hash_without_a_500(client, make_user):
+    # A corrupt/unknown stored hash must fail the comparison (401), not blow up
+    # the request with a 500 out of the password library.
+    make_user()
+    session_id = _login(client).json()["session_id"]
+
+    session = jafaal_orm.get_sessionmaker()()
+    try:
+        row = session.get(UsersSessions, session_id)
+        row.refresh_token = "$totally-not-a-real-hash$"
+        session.commit()
+    finally:
+        session.close()
+
+    assert client.post(REFRESH, headers=WEB).status_code == 401

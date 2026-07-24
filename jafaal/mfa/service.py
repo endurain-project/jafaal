@@ -167,32 +167,41 @@ def _replay_store_unavailable(err: StateStoreUnavailableError) -> None:
     raise jafaal_exceptions.StoreUnavailableError("MFA verification temporarily unavailable") from err
 
 
-def _totp_timestep_already_used(user_id: UserId, timestep: int) -> bool:
-    """Return ``True`` if this TOTP timestep was already consumed (a replay).
+def _claim_totp_timestep(user_id: UserId, timestep: int) -> bool:
+    """Atomically claim a TOTP timestep for ``user_id``; ``True`` if we won it.
 
-    Fails closed on a state-store outage by default (see
+    Single-use enforcement is a *claim*, not a check followed by a write: a
+    ``get`` / ``set`` pair lets two concurrent verifications of the same code
+    both observe "unused" and both succeed, which is exactly the replay this
+    guard exists to stop. :meth:`~jafaal.state_store.StateStore.set_if_absent`
+    performs the whole operation atomically in the backend (a lock-held dict
+    write in-process, ``SET .. NX EX`` on Redis), so exactly one caller can ever
+    claim a given ``(user, timestep)`` pair.
+
+    Fails **closed** on a state-store outage by default (see
     :func:`_replay_store_unavailable`): replay protection is defense-in-depth on
     top of the (unchanged) TOTP signature check, but accepting a code without it
     reopens the replay window, so the outage is surfaced as a 503 unless
-    ``mfa_totp_replay_fail_open`` is set.
+    ``mfa_totp_replay_fail_open`` is set — in which case the code is accepted and
+    the degraded check is logged and audited.
+
+    Args:
+        user_id: The user verifying an MFA code.
+        timestep: The absolute TOTP timestep the code matched.
+
+    Returns:
+        True when this call consumed the timestep (accept the code), False when
+        it had already been consumed (reject as a replay).
     """
     try:
-        return get_state_store().get(_totp_used_key(user_id, timestep)) is not None
-    except StateStoreUnavailableError as err:
-        _replay_store_unavailable(err)
-        return False  # only reached when replay fail-open is enabled
-
-
-def _mark_totp_timestep_used(user_id: UserId, timestep: int) -> None:
-    """Record that ``timestep`` has been consumed for ``user_id`` (with TTL)."""
-    try:
-        get_state_store().set(
+        return get_state_store().set_if_absent(
             _totp_used_key(user_id, timestep),
             b"1",
-            ttl_seconds=_TOTP_REPLAY_TTL_SECONDS,
+            _TOTP_REPLAY_TTL_SECONDS,
         )
     except StateStoreUnavailableError as err:
         _replay_store_unavailable(err)
+        return True  # only reached when replay fail-open is enabled
 
 
 def generate_qr_code(secret: str, username: str, app_name: str = "Jafaal") -> str:
@@ -384,13 +393,14 @@ def verify_user_mfa(
 
             # Resolve which timestep the code matches so we can enforce
             # single-use (replay protection) rather than accepting the same
-            # code repeatedly while it stays inside the validity window.
+            # code repeatedly while it stays inside the validity window. The
+            # claim is atomic, so concurrent verifications of one code cannot
+            # both win.
             matched_timestep = _matched_totp_timestep(secret, normalized_code)
             if matched_timestep is not None:
-                if _totp_timestep_already_used(user.id, matched_timestep):
+                if not _claim_totp_timestep(user.id, matched_timestep):
                     logger.warning(f"Rejected replayed TOTP code for user {user_id}")
                     return False
-                _mark_totp_timestep_used(user.id, matched_timestep)
                 logger.debug(f"User {user_id} verified MFA with TOTP")
                 return True
         except ValueError as err:

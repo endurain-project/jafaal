@@ -354,7 +354,6 @@ async def handle_callback(
             user,
             request,
             None,
-            password_hasher,
             db,
             oauth_state_id=oauth_state.id,
         )
@@ -571,7 +570,7 @@ def exchange_tokens_for_session(
         # reload establishes the CSRF binding.
         claimed = jafaal_sessions_crud.claim_session_for_token_exchange(
             session_id,
-            password_hasher.hash_password(refresh_token),
+            jafaal_sessions_utils.hash_refresh_token(refresh_token),
             db,
         )
         if not claimed:

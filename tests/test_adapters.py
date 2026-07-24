@@ -330,6 +330,17 @@ class TestRedisStateStore:
         assert store.get("k") is None
         assert store.get_and_delete("absent") is None
 
+    def test_set_if_absent_claims_once(self, store):
+        # SET .. NX EX is atomic server-side, so only the first caller wins and
+        # the stored value is never overwritten by a loser.
+        assert store.set_if_absent("claim", b"1", 60) is True
+        assert store.set_if_absent("claim", b"2", 60) is False
+        assert store.get("claim") == b"1"
+
+    def test_set_if_absent_sets_a_ttl(self, store):
+        store.set_if_absent("claim", b"1", 60)
+        assert store._client.ttl("claim") > 0
+
     def test_prefix_iteration_and_delete(self, store):
         store.set("p:a", b"1")
         store.set("p:b", b"2")

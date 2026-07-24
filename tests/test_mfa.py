@@ -1,6 +1,7 @@
 """Tests for MFA: TOTP verification, replay protection, and backup codes."""
 
 import dataclasses
+import threading
 import time
 
 import pyotp
@@ -33,6 +34,9 @@ class _FailingStateStore:
         raise StateStoreUnavailableError("down")
 
     def get_and_delete(self, key):
+        raise StateStoreUnavailableError("down")
+
+    def set_if_absent(self, key, value, ttl_seconds):
         raise StateStoreUnavailableError("down")
 
     def increment(self, key, ttl_seconds):
@@ -104,6 +108,40 @@ def test_totp_replay_fails_closed_on_store_outage(db, make_user):
             mfa_service.verify_user_mfa(user.id, code, identity_service, db)
     finally:
         jafaal.reset_state_store()
+
+
+def test_concurrent_use_of_one_totp_code_has_exactly_one_winner(concurrent_db):
+    # Single-use enforcement must be a *claim*, not a check followed by a write:
+    # under genuine parallelism a get/set pair lets several callers all observe
+    # "unused" and all succeed, which is exactly the replay the guard exists to
+    # stop. The ``concurrent_db`` fixture gives each thread its own real
+    # connection, so the verifications genuinely overlap.
+    secret = pyotp.random_base32()
+    with concurrent_db.session() as setup:
+        _enable_mfa(concurrent_db.user_id, setup, secret)
+    code = pyotp.TOTP(secret).now()
+
+    workers = 16
+    barrier = threading.Barrier(workers)
+    results: list[bool] = []
+    lock = threading.Lock()
+
+    def attempt():
+        with concurrent_db.session() as session:
+            identity_service = _identity_service(session)
+            barrier.wait()  # maximise contention: all threads verify at once
+            outcome = mfa_service.verify_user_mfa(concurrent_db.user_id, code, identity_service, session)
+        with lock:
+            results.append(outcome)
+
+    threads = [threading.Thread(target=attempt) for _ in range(workers)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(results) == workers
+    assert sum(1 for accepted in results if accepted) == 1
 
 
 def test_totp_replay_fail_open_when_configured(db, make_user):

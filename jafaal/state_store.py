@@ -8,11 +8,11 @@ process); a host running multiple workers or replicas configures a distributed
 backend (e.g. Redis) via :func:`configure_state_store`.
 
 Beyond plain key/value access the port exposes the few *atomic* primitives the
-lockout stores need (:meth:`StateStore.get_and_delete`,
-:meth:`StateStore.record_tiered_failure`) so their correctness does not depend on
-the backend. Config delivery mirrors :mod:`jafaal.settings` and
-:mod:`jafaal.ports` — a configured module accessor — except the store has a
-working default, so :func:`get_state_store` never raises.
+lockout and single-use stores need (:meth:`StateStore.get_and_delete`,
+:meth:`StateStore.set_if_absent`, :meth:`StateStore.record_tiered_failure`) so
+their correctness does not depend on the backend. Config delivery mirrors
+:mod:`jafaal.settings` and :mod:`jafaal.ports` — a configured module accessor —
+except the store has a working default, so :func:`get_state_store` never raises.
 """
 
 from __future__ import annotations
@@ -103,6 +103,27 @@ class StateStore(Protocol):
 
     def get_and_delete(self, key: str) -> bytes | None: ...
 
+    def set_if_absent(self, key: str, value: bytes, ttl_seconds: int) -> bool:
+        """Atomically create ``key`` only if it does not already exist.
+
+        The single-writer primitive behind "claim this exactly once" semantics
+        (single-use TOTP timesteps, and any future one-shot marker). It must be
+        atomic in the backend: a check-then-``set`` pair in calling code lets two
+        concurrent requests both observe "absent" and both proceed, which is
+        precisely the race this primitive exists to remove.
+
+        Args:
+            key: The key to claim.
+            value: The value to store when the claim succeeds.
+            ttl_seconds: Lifetime of the claim; it expires automatically so the
+                key space stays bounded.
+
+        Returns:
+            True when *this* call created the key (the caller owns the claim),
+            False when it already existed (someone else claimed it first).
+        """
+        ...
+
     def increment(self, key: str, ttl_seconds: int) -> int:
         """Atomically add 1 to the counter at ``key`` and return the new value.
 
@@ -176,6 +197,15 @@ class InMemoryStateStore:
             if value is not None:
                 del self._data[key]
             return value
+
+    def set_if_absent(self, key: str, value: bytes, ttl_seconds: int) -> bool:
+        with self._lock:
+            # ``_live_value`` evicts an expired entry, so an expired claim is
+            # correctly treated as absent and can be re-claimed.
+            if self._live_value(key) is not None:
+                return False
+            self._data[key] = (value, time.monotonic() + ttl_seconds)
+            return True
 
     def increment(self, key: str, ttl_seconds: int) -> int:
         with self._lock:

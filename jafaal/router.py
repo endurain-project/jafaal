@@ -708,7 +708,7 @@ async def refresh_token(
             db,
         )
 
-    is_valid = password_hasher.verify_password(refresh_token_value, session.refresh_token)
+    is_valid = jafaal_sessions_utils.verify_refresh_token(refresh_token_value, session.refresh_token, password_hasher)
 
     if not is_valid:
         raise jafaal_exceptions.InvalidTokenError("Invalid refresh token")
@@ -754,7 +754,6 @@ async def refresh_token(
         session,
         request,
         new_refresh_token,
-        password_hasher,
         db,
         new_csrf_token=new_csrf_token,
     )
@@ -840,7 +839,9 @@ async def logout(
             )
 
         # Verify the refresh token
-        is_valid = password_hasher.verify_password(refresh_token_value, session.refresh_token)
+        is_valid = jafaal_sessions_utils.verify_refresh_token(
+            refresh_token_value, session.refresh_token, password_hasher
+        )
 
         # If the refresh token is not valid, raise an exception
         if not is_valid:

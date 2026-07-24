@@ -216,3 +216,65 @@ def test_configure_get_reset_and_generation():
 def test_configure_rejects_wrong_type():
     with pytest.raises(TypeError):
         settings_mod.configure({"secret_key": "x"})  # type: ignore[arg-type]
+
+
+# --------------------------------------------------------------------------- #
+# Secret redaction
+#
+# ``AuthSettings`` is a dataclass, so the generated ``__repr__`` would otherwise
+# print the JWT signing key and the Fernet at-rest key verbatim into any
+# traceback frame dump, error-tracker payload, or ``logger.debug(settings)``.
+# --------------------------------------------------------------------------- #
+
+_SECRET_FIELDS = (
+    "secret_key",
+    "fernet_key",
+    "private_key",
+    "secret_key_fallbacks",
+    "fernet_key_fallbacks",
+    "private_key_fallbacks",
+)
+
+
+def test_repr_and_str_never_expose_key_material():
+    secret = "supersecret-signing-key-value-01"
+    old_secret = "previous-signing-key-value-00000"
+    fernet = Fernet.generate_key().decode()
+    old_fernet = Fernet.generate_key().decode()
+    private_pem = _rsa_pem()
+
+    settings = _valid(
+        secret_key=secret,
+        secret_key_fallbacks=(old_secret,),
+        fernet_key=fernet,
+        fernet_key_fallbacks=(old_fernet,),
+        algorithm="RS256",
+        private_key=private_pem,
+    )
+
+    for rendered in (repr(settings), str(settings), f"{settings}"):
+        for leaked in (secret, old_secret, fernet, old_fernet, private_pem):
+            assert leaked not in rendered
+        # The fields are visibly redacted rather than silently dropped, so a
+        # missing value is still distinguishable from a hidden one.
+        for name in _SECRET_FIELDS:
+            assert f"{name}=<redacted>" in rendered
+
+    # Non-secret configuration is still rendered, so the repr stays useful.
+    assert "app_name=" in repr(settings)
+    assert "algorithm='RS256'" in repr(settings)
+
+
+def test_every_key_bearing_field_is_declared_repr_false():
+    # The ``repr=False`` flag on the field is the single source of truth the
+    # custom __repr__ reads, so a newly added secret field must carry it.
+    import dataclasses
+
+    non_repr = {f.name for f in dataclasses.fields(jafaal.AuthSettings) if not f.repr}
+    assert non_repr == set(_SECRET_FIELDS)
+
+
+def test_secret_values_are_still_readable_as_attributes():
+    # Redaction is presentational only; the library reads these normally.
+    settings = _valid(secret_key="z" * 32)
+    assert settings.secret_key == "z" * 32

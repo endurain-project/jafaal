@@ -155,3 +155,36 @@ def test_record_tiered_failure_highest_tier_wins(store):
     assert out.newly_locked is True
     now = int(time.time())
     assert out.locked_until_epoch is not None and out.locked_until_epoch >= now
+
+
+# --------------------------------------------------------------------------- #
+# set_if_absent — the single-writer claim primitive
+# --------------------------------------------------------------------------- #
+
+
+def test_set_if_absent_claims_once_then_declines(store):
+    assert store.set_if_absent("claim", b"1", 60) is True
+    assert store.get("claim") == b"1"
+    # Second caller loses; the original value is left untouched.
+    assert store.set_if_absent("claim", b"2", 60) is False
+    assert store.get("claim") == b"1"
+
+
+def test_set_if_absent_reclaimable_after_ttl_expiry(store, monkeypatch):
+    clock = {"t": 0.0}
+    monkeypatch.setattr("jafaal.state_store.time.monotonic", lambda: clock["t"])
+    assert store.set_if_absent("k", b"1", 30) is True
+    clock["t"] += 31
+    # The expired claim is evicted, so the key is genuinely absent again.
+    assert store.set_if_absent("k", b"2", 30) is True
+    assert store.get("k") == b"2"
+
+
+def test_set_if_absent_has_exactly_one_winner_under_threads(store):
+    # The property the TOTP single-use guard depends on: however many callers
+    # race for one key, exactly one may be told it owns the claim. A
+    # check-then-set pair in calling code would let several win here.
+    n = 50
+    results = _run_concurrently(lambda: store.set_if_absent("race", b"1", 60), n)
+    assert len(results) == n
+    assert sum(1 for won in results if won) == 1

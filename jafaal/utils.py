@@ -319,7 +319,10 @@ def complete_login(
         request (Request): The HTTP request object containing client information.
         user (jafaal_ports.UserProtocol): The authenticated user object.
         client_type (str): The type of client ("web" or "mobile").
-        password_hasher (jafaal_password_hasher.PasswordHasher): Utility for password hashing.
+        password_hasher (jafaal_password_hasher.PasswordHasher): Retained for
+            signature compatibility; no longer used. Refresh tokens are
+            high-entropy JWTs and are stored as a keyed HMAC-SHA256 digest (see
+            :func:`jafaal.sessions.utils.hash_refresh_token`), not a password hash.
         token_manager (jafaal_token_manager.TokenManager): Utility for token generation and management.
         db (Session): Database session for storing session information.
 
@@ -368,7 +371,6 @@ def complete_login(
         user,
         request,
         refresh_token,
-        password_hasher,
         db,
     )
 
@@ -435,7 +437,9 @@ def create_mobile_pkce_session_response(
         user: Authenticated user object
         code_challenge: PKCE code challenge (base64url-encoded SHA256)
         code_challenge_method: PKCE method (must be S256)
-        password_hasher: Password hasher instance
+        password_hasher: Retained for signature compatibility; no longer used
+            (the session is created without a refresh token, and refresh tokens
+            are stored as keyed HMAC-SHA256 digests rather than password hashes).
         db: Database session
 
     Returns:
@@ -481,7 +485,6 @@ def create_mobile_pkce_session_response(
         user,
         request,
         None,  # No refresh token yet
-        password_hasher,
         db,
         oauth_state_id=state_id,
     )

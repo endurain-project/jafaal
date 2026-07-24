@@ -45,6 +45,9 @@ class _FakeDistributedStore:
     def get_and_delete(self, key):
         return None
 
+    def set_if_absent(self, key, value, ttl_seconds):
+        return True
+
     def iter_keys(self, prefix):
         return iter(())
 

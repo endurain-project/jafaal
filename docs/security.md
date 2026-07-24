@@ -29,7 +29,10 @@ protections and the deployment steps you are responsible for.
 - **Refresh-token rotation with reuse detection.** Every refresh rotates the
   token; presenting an already-rotated token past a short grace window is treated
   as **theft** and invalidates the entire token family. A racing/duplicate
-  refresh *within* grace replays the same replacement idempotently.
+  refresh *within* grace replays the same replacement idempotently. Sessions
+  store the refresh token as a keyed HMAC-SHA256 digest — unforgeable without
+  `secret_key`, and microseconds to verify, since a refresh token is a
+  high-entropy server-minted JWT rather than a user-chosen secret.
 - **CSRF binding** for web clients, with an OAuth 2.1 bootstrap rule for page
   reloads. Refresh cookies are `HttpOnly`, `SameSite=Strict`, and `Secure` in
   deployed environments, with an optional `__Secure-`/`__Host-` name prefix.
@@ -41,9 +44,11 @@ protections and the deployment steps you are responsible for.
 ### MFA
 
 - **TOTP** with QR provisioning and **single-use backup codes**.
-- **Replay protection**: a matched TOTP timestep is recorded and a second use
-  within the validity window is rejected (constant-time comparison throughout).
-  On a state-store outage this fails **closed** by default (configurable via
+- **Replay protection**: a matched TOTP timestep is *atomically claimed* and a
+  second use within the validity window is rejected (constant-time comparison
+  throughout). The claim is a single compare-and-set in the state store, so two
+  concurrent verifications of the same code cannot both succeed. On a state-store
+  outage this fails **closed** by default (configurable via
   `mfa_totp_replay_fail_open`).
 
 ### Network & abuse

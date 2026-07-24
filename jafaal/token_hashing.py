@@ -10,9 +10,12 @@ modules so the choice is made in one place and cannot drift:
   hashing tokens of this entropy level.
 - :func:`hmac_sha256` — keyed HMAC-SHA256 using the configured signing secret
   (``AuthSettings.secret_key``).
-  Used for refresh-token reuse detection and CSRF tokens, where a keyed MAC
-  adds defense-in-depth: even with database read access an attacker cannot
-  verify stolen tokens without the server secret.
+  Used for the refresh-token digest stored on a session, refresh-token reuse
+  detection, and CSRF tokens, where a keyed MAC adds defense-in-depth: even with
+  database read access an attacker cannot verify stolen tokens without the server
+  secret. Refresh tokens are server-minted, high-entropy JWTs rather than
+  user-chosen secrets, so a password KDF would add no strength — only ~50 ms of
+  latency per verification.
 
 Both return a lowercase hex digest and are deterministic, enabling indexed
 equality lookups.

@@ -32,7 +32,7 @@ flowchart LR
 | OIDC ID-token forgery | Signature verified against the IdP JWKS with an asymmetric-only allow-list (blocks RS256→HS256 confusion); `iss`/`aud`/`exp`/`iat`, `nonce`, `azp`, and (when present) `at_hash` are validated. |
 | Refresh-token theft / replay | One-time rotation with reuse detection; a replay past the grace window invalidates the whole token family; in-grace retries replay one idempotent result. |
 | CSRF (web) | `HttpOnly` + `SameSite=Strict` refresh cookie (primary); HMAC-bound CSRF token (defense-in-depth); optional `__Secure-`/`__Host-` cookie-name prefix. |
-| TOTP replay | Matched timestep is recorded single-use; a second use within the validity window is rejected. Fails **closed** on a state-store outage by default. |
+| TOTP replay | Matched timestep is **atomically claimed** single-use (one backend-level compare-and-set, so concurrent uses of one code cannot both win); a second use within the validity window is rejected. Fails **closed** on a state-store outage by default. |
 | OAuth authorization-code replay / mix-up | Single-use, atomically-consumed `state`; `state`→IdP binding; PKCE (S256) on both the mobile client flow and the upstream authorization-code exchange to the IdP. |
 | SSRF via OIDC URLs | Scheme allow-list (`https` required for IdP endpoints by default), every resolved address must be public, pinned-IP connection (DNS-rebinding defence), guard re-runs on each redirect hop. |
 | Source-IP spoofing | Proxy headers honoured only from configured `trusted_proxies`. |

@@ -95,6 +95,80 @@ def verify_csrf_token(candidate: str, stored_hmac: str) -> bool:
     return hmac.compare_digest(expected, stored_hmac)
 
 
+# --------------------------------------------------------------------------- #
+# Refresh-token digests
+#
+# A refresh token is a signed JWT carrying a 128-bit random ``jti`` — it is
+# high-entropy server-minted material, not a user-chosen secret, so the stored
+# digest is a keyed HMAC-SHA256 (the strategy :mod:`jafaal.token_hashing`
+# prescribes for exactly this case) rather than a password KDF. The keyed MAC
+# still means database read access alone does not let an attacker verify a
+# stolen token, while costing microseconds instead of the ~50 ms an Argon2
+# verify costs — which /refresh would otherwise pay twice (verify the old token,
+# hash the new one) on every single call, and /logout once.
+#
+# It also removes an inconsistency: ``sessions.rotated_refresh_tokens`` already
+# stores *the same token* as an HMAC-SHA256 for reuse detection.
+# --------------------------------------------------------------------------- #
+
+# An HMAC-SHA256 digest renders as exactly 64 lowercase hex characters. Legacy
+# rows hold an Argon2/bcrypt PHC string (always starting with "$"), so the shape
+# is an unambiguous discriminator between the two formats.
+_HMAC_DIGEST_LENGTH = 64
+_HEX_DIGITS = frozenset("0123456789abcdef")
+
+
+def _is_hmac_digest(stored_hash: str) -> bool:
+    """Return True when ``stored_hash`` is an HMAC-SHA256 hex digest."""
+    return len(stored_hash) == _HMAC_DIGEST_LENGTH and _HEX_DIGITS.issuperset(stored_hash)
+
+
+def hash_refresh_token(refresh_token: str) -> str:
+    """Return the stored digest for a refresh token.
+
+    Args:
+        refresh_token: The raw refresh-token JWT.
+
+    Returns:
+        Hex-encoded HMAC-SHA256 digest, keyed with ``AuthSettings.secret_key``.
+    """
+    return token_hashing.hmac_sha256(refresh_token)
+
+
+def verify_refresh_token(
+    candidate: str,
+    stored_hash: str,
+    password_hasher: jafaal_password_hasher.SupportsVerifyPassword,
+) -> bool:
+    """Verify a presented refresh token against a session's stored digest.
+
+    Accepts both digest formats so existing sessions survive the upgrade:
+
+    * **Current** — keyed HMAC-SHA256, compared with ``hmac.compare_digest``.
+    * **Legacy** — an Argon2/bcrypt hash written before the switch, verified
+      through ``password_hasher``. Such rows are re-hashed to the HMAC format on
+      the session's next rotation (``/refresh`` calls :func:`edit_session`), so
+      the fallback drains naturally and can be removed in a later release.
+
+    Args:
+        candidate: The raw refresh token presented by the caller.
+        stored_hash: The digest persisted on the session row.
+        password_hasher: Verifier used only for the legacy format.
+
+    Returns:
+        True if the candidate matches the stored digest, False otherwise.
+    """
+    if _is_hmac_digest(stored_hash):
+        return hmac.compare_digest(hash_refresh_token(candidate), stored_hash)
+    try:
+        return password_hasher.verify_password(candidate, stored_hash)
+    except Exception as err:
+        # A malformed/unrecognised legacy hash must fail the comparison, not
+        # crash the request with a 500 (pwdlib raises on an unknown hash type).
+        logger.warning(f"Unverifiable stored refresh-token hash: {type(err).__name__}", exc_info=err)
+        return False
+
+
 def validate_session_timeout(
     session: jafaal_sessions_models.UsersSessions,
 ) -> None:
@@ -237,7 +311,6 @@ def create_session(
     user: jafaal_ports.UserProtocol,
     request: Request,
     refresh_token: str | None,
-    password_hasher: jafaal_password_hasher.PasswordHasher,
     db: Session,
     oauth_state_id: str | None = None,
     csrf_token: str | None = None,
@@ -250,7 +323,6 @@ def create_session(
         user: User for whom session is being created.
         request: The incoming HTTP request object.
         refresh_token: Refresh token to associate or None.
-        password_hasher: Utility to hash tokens.
         db: Database session for storing.
         oauth_state_id: Optional OAuth state ID for PKCE.
         csrf_token: Plain CSRF token to hash and store.
@@ -269,7 +341,7 @@ def create_session(
         session_id,
         user,
         request,
-        password_hasher.hash_password(refresh_token) if refresh_token else None,
+        hash_refresh_token(refresh_token) if refresh_token else None,
         exp,
         oauth_state_id,
         csrf_hash,
@@ -283,7 +355,6 @@ def edit_session(
     session: jafaal_sessions_models.UsersSessions,
     request: Request,
     new_refresh_token: str,
-    password_hasher: jafaal_password_hasher.PasswordHasher,
     db: Session,
     new_csrf_token: str | None = None,
 ) -> None:
@@ -294,7 +365,6 @@ def edit_session(
         session: Current user session object to edit.
         request: Incoming request containing session context.
         new_refresh_token: New refresh token to set.
-        password_hasher: Utility for hashing tokens.
         db: Database session for committing changes.
         new_csrf_token: Plain CSRF token to hash and store.
 
@@ -307,10 +377,12 @@ def edit_session(
     # Compute HMAC-SHA256 of the new CSRF token if provided
     csrf_hash = _hash_csrf_token(new_csrf_token) if new_csrf_token else None
 
-    # Update the session
+    # Update the session. Rotating a session that still holds a legacy
+    # Argon2/bcrypt refresh-token hash rewrites it in the HMAC format, so the
+    # legacy verification fallback drains as sessions refresh.
     updated_session = edit_session_object(
         request,
-        password_hasher.hash_password(new_refresh_token),
+        hash_refresh_token(new_refresh_token),
         exp,
         session,
         csrf_hash,

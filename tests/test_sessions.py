@@ -130,7 +130,7 @@ def test_strict_binding_rejects_revoked_session(db, make_user):
     # With strict binding on, revoking the session (logout / single-session
     # revocation) makes the outstanding access token fail immediately.
     user = make_user()
-    session_utils.create_session("sess-b", user, _request(), "rt", password_hasher, db)
+    session_utils.create_session("sess-b", user, _request(), "rt", db)
     token = _access_token(user, "sess-b")
     with _settings(strict_session_binding=True):
         # Valid while the session exists...
@@ -152,7 +152,7 @@ def test_strict_binding_rejects_session_owned_by_other_user(db, make_user):
     owner = make_user(username="owner")
     other = make_user(username="other")
     # The session belongs to `other`, but the token claims `owner` with that sid.
-    session_utils.create_session("sess-x", other, _request(), "rt", password_hasher, db)
+    session_utils.create_session("sess-x", other, _request(), "rt", db)
     token = _access_token(owner, "sess-x")
     with _settings(strict_session_binding=True), pytest.raises(exc.InvalidTokenError):
         _svc(db).resolve_from_access_token(token)
@@ -161,7 +161,7 @@ def test_strict_binding_rejects_session_owned_by_other_user(db, make_user):
 def test_strict_binding_enforces_session_timeout(db, make_user):
     # An idle-timed-out session rejects the access token under strict binding.
     user = make_user()
-    session_utils.create_session("sess-idle", user, _request(), "rt", password_hasher, db)
+    session_utils.create_session("sess-idle", user, _request(), "rt", db)
     token = _access_token(user, "sess-idle")
     row = sessions_crud.get_session_by_id("sess-idle", db)
     row.last_activity_at = datetime.now(UTC) - timedelta(hours=2)
@@ -184,7 +184,7 @@ def test_strict_binding_enforces_session_timeout(db, make_user):
 
 def test_session_create_get_delete(db, make_user):
     user = make_user()
-    session_utils.create_session("sess-1", user, _request(), "refresh-value", password_hasher, db)
+    session_utils.create_session("sess-1", user, _request(), "refresh-value", db)
 
     row = sessions_crud.get_session_by_id("sess-1", db)
     assert row is not None
@@ -197,16 +197,16 @@ def test_session_create_get_delete(db, make_user):
 
 def test_get_user_sessions(db, make_user):
     user = make_user()
-    session_utils.create_session("s-a", user, _request(), "rt-a", password_hasher, db)
-    session_utils.create_session("s-b", user, _request(), "rt-b", password_hasher, db)
+    session_utils.create_session("s-a", user, _request(), "rt-a", db)
+    session_utils.create_session("s-b", user, _request(), "rt-b", db)
     sessions = sessions_crud.get_user_sessions(user.id, db)
     assert {s.id for s in sessions} == {"s-a", "s-b"}
 
 
 def test_delete_sessions_by_user_with_exclude(db, make_user):
     user = make_user()
-    session_utils.create_session("keep", user, _request(), "rt-keep", password_hasher, db)
-    session_utils.create_session("drop", user, _request(), "rt-drop", password_hasher, db)
+    session_utils.create_session("keep", user, _request(), "rt-keep", db)
+    session_utils.create_session("drop", user, _request(), "rt-drop", db)
     sessions_crud.delete_sessions_by_user(user.id, db, exclude_session_id="keep")
     remaining = {s.id for s in sessions_crud.get_user_sessions(user.id, db)}
     assert remaining == {"keep"}
@@ -219,7 +219,7 @@ def test_delete_sessions_by_user_with_exclude(db, make_user):
 
 def test_rotated_token_store_and_lookup(db, make_user):
     user = make_user()
-    session_utils.create_session("fam-1", user, _request(), "initial-rt", password_hasher, db)
+    session_utils.create_session("fam-1", user, _request(), "initial-rt", db)
     exp = datetime.now(UTC) + timedelta(days=7)
     rotated_utils.store_rotated_token(
         "old-token",
@@ -242,7 +242,7 @@ def test_rotated_token_store_and_lookup(db, make_user):
 
 def test_invalidate_token_family_deletes_sessions(db, make_user):
     user = make_user()
-    session_utils.create_session("fam-x", user, _request(), "rt", password_hasher, db)
+    session_utils.create_session("fam-x", user, _request(), "rt", db)
     deleted = rotated_utils.invalidate_token_family("fam-x", db)
     assert deleted >= 1
     assert sessions_crud.get_session_by_id("fam-x", db) is None
@@ -250,7 +250,7 @@ def test_invalidate_token_family_deletes_sessions(db, make_user):
 
 def test_rotated_token_in_grace_replay(db, make_user):
     user = make_user()
-    session_utils.create_session("fam-g", user, _request(), "initial-rt", password_hasher, db)
+    session_utils.create_session("fam-g", user, _request(), "initial-rt", db)
     exp = datetime.now(UTC) + timedelta(days=7)
     rotated_utils.store_rotated_token(
         "old-token",
@@ -280,7 +280,7 @@ def test_grace_replay_is_idempotent_across_duplicate_reads(db, make_user):
     # test_state_store.py; the DB-level guarantee under genuine thread
     # concurrency is proven below via the ``concurrent_db`` fixture.)
     user = make_user()
-    session_utils.create_session("fam-cc", user, _request(), "initial-rt", password_hasher, db)
+    session_utils.create_session("fam-cc", user, _request(), "initial-rt", db)
     exp = datetime.now(UTC) + timedelta(days=7)
     rotated_utils.store_rotated_token(
         "old-cc",
@@ -346,7 +346,6 @@ def test_token_exchange_claim_has_exactly_one_winner_under_real_concurrency(conc
             SimpleNamespace(id=concurrent_db.user_id),
             _request(),
             None,
-            password_hasher,
             setup,
         )
 
@@ -377,7 +376,6 @@ def test_concurrent_rotation_of_one_token_records_a_single_row(concurrent_db):
             SimpleNamespace(id=concurrent_db.user_id),
             _request(),
             "initial-rt",
-            password_hasher,
             setup,
         )
     exp = datetime.now(UTC) + timedelta(days=7)
@@ -408,7 +406,7 @@ def test_concurrent_rotation_of_one_token_records_a_single_row(concurrent_db):
 
 def test_rotated_token_reuse_after_grace_is_theft(db, make_user):
     user = make_user()
-    session_utils.create_session("fam-t", user, _request(), "rt", password_hasher, db)
+    session_utils.create_session("fam-t", user, _request(), "rt", db)
     past = datetime.now(UTC) - timedelta(seconds=120)
     rotated_crud.create_rotated_token(
         rotated_schema.RotatedRefreshTokenCreate(
@@ -434,7 +432,7 @@ def test_validate_session_timeout_on_real_db_row(db, make_user):
     # check must remain tz-safe and not raise for a live session.
     with _settings(session_idle_timeout_enabled=True, session_idle_timeout_hours=1):
         user = make_user()
-        session_utils.create_session("s-live", user, _request(), "rt", password_hasher, db)
+        session_utils.create_session("s-live", user, _request(), "rt", db)
         row = sessions_crud.get_session_by_id("s-live", db)
         session_utils.validate_session_timeout(row)  # must not raise
 

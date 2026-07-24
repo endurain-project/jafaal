@@ -26,6 +26,7 @@ import jafaal.audit as jafaal_audit
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.orm as jafaal_orm
 import jafaal.sessions.crud as jafaal_sessions_crud
+import jafaal.sessions.utils as jafaal_sessions_utils
 import jafaal.settings as jafaal_settings
 
 logger = logging.getLogger(__name__)
@@ -91,7 +92,8 @@ def introspect_token(
             return _inactive()
         # A refresh token must still be the session's current one (not rotated).
         if claims.get("typ") == "refresh" and (
-            not session.refresh_token or not password_hasher.verify_password(token, session.refresh_token)
+            not session.refresh_token
+            or not jafaal_sessions_utils.verify_refresh_token(token, session.refresh_token, password_hasher)
         ):
             return _inactive()
 
@@ -166,7 +168,9 @@ def _revoke_refresh_token(
         return
     if session.user_id != user_id:
         return
-    if not session.refresh_token or not password_hasher.verify_password(token, session.refresh_token):
+    if not session.refresh_token or not jafaal_sessions_utils.verify_refresh_token(
+        token, session.refresh_token, password_hasher
+    ):
         return  # The presented token does not belong to this session; do not revoke.
 
     jafaal_sessions_crud.delete_session(session.id, user_id, db)

@@ -118,6 +118,15 @@ class RedisStateStore:
         except _REDIS_ERRORS as err:
             raise StateStoreUnavailableError("Redis GETDEL failed") from err
 
+    def set_if_absent(self, key: str, value: bytes, ttl_seconds: int) -> bool:
+        # ``SET key value NX EX ttl`` is a single atomic server-side command, so
+        # exactly one of N concurrent callers gets a truthy reply. Redis returns
+        # ``None`` (not ``False``) when NX declines, hence the explicit bool().
+        try:
+            return bool(self._client.set(key, value, nx=True, ex=ttl_seconds))
+        except _REDIS_ERRORS as err:
+            raise StateStoreUnavailableError("Redis SET NX failed") from err
+
     def increment(self, key: str, ttl_seconds: int) -> int:
         # INCR + EXPIRE in one pipeline: atomic increment, and the key carries a
         # TTL so fixed-window rate-limit counters self-expire. The window bucket

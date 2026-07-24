@@ -269,7 +269,7 @@ def claim_session_for_token_exchange(
 
     Args:
         session_id: The session to claim.
-        hashed_refresh_token: The (Argon2-hashed) refresh token
+        hashed_refresh_token: The keyed HMAC-SHA256 digest of the refresh token
             to persist on the row.
         db: SQLAlchemy database session.
 
