@@ -19,6 +19,18 @@ def _valid(**overrides):
     return jafaal.AuthSettings(**base)
 
 
+def _rsa_pem():
+    from joserfc.jwk import RSAKey
+
+    return RSAKey.generate_key(2048).as_pem(private=True).decode()
+
+
+def _ec_pem():
+    from joserfc.jwk import ECKey
+
+    return ECKey.generate_key("P-256").as_pem(private=True).decode()
+
+
 def test_requires_secret_key():
     with pytest.raises(ValueError, match="secret_key"):
         _valid(secret_key="")
@@ -47,7 +59,43 @@ def test_algorithm_must_be_allow_listed():
     with pytest.raises(ValueError, match="algorithm"):
         _valid(algorithm="none")
     with pytest.raises(ValueError, match="algorithm"):
+        _valid(algorithm="HS512")  # symmetric, but not in the allow-list
+
+
+def test_asymmetric_requires_private_key():
+    with pytest.raises(ValueError, match="requires a private_key"):
         _valid(algorithm="RS256")
+
+
+def test_asymmetric_rejects_malformed_or_wrong_type_key():
+    with pytest.raises(ValueError, match="private_key is invalid"):
+        _valid(algorithm="RS256", private_key="-----BEGIN PRIVATE KEY-----\nnope\n-----END PRIVATE KEY-----")
+    # An EC key cannot sign RS256.
+    with pytest.raises(ValueError, match="private_key is invalid"):
+        _valid(algorithm="RS256", private_key=_ec_pem())
+
+
+def test_private_key_with_symmetric_algorithm_rejected():
+    with pytest.raises(ValueError, match="symmetric"):
+        _valid(private_key=_rsa_pem())  # algorithm defaults to HS256
+
+
+def test_asymmetric_valid_config_accepted():
+    assert _valid(algorithm="RS256", private_key=_rsa_pem()) is not None
+    assert _valid(algorithm="ES256", private_key=_ec_pem()) is not None
+
+
+def test_asymmetric_public_only_fallback_accepted():
+    from joserfc.jwk import RSAKey
+
+    new = RSAKey.generate_key(2048)
+    old_public = RSAKey.generate_key(2048).as_pem(private=False).decode()
+    settings = _valid(
+        algorithm="RS256",
+        private_key=new.as_pem(private=True).decode(),
+        private_key_fallbacks=(old_public,),  # verify-only public key is fine
+    )
+    assert settings is not None
 
 
 def test_positive_expiries():

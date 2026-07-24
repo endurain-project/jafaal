@@ -29,6 +29,7 @@ from dataclasses import dataclass
 
 from cryptography.fernet import Fernet
 
+from jafaal._core import jwk_keys
 from jafaal._core.registry import ConfigSlot
 
 __all__ = [
@@ -42,10 +43,12 @@ __all__ = [
     "settings_generation",
 ]
 
-# JWT signing algorithms JAFAAL will accept. Pinned to HS256: the key material
-# is a symmetric secret, so asymmetric algorithms and ``alg=none`` must never be
-# honoured. (joserfc additionally refuses HS384/HS512 by default.)
-ALLOWED_ALGORITHMS: frozenset[str] = frozenset({"HS256"})
+# JWT signing algorithms JAFAAL will accept. ``HS256`` (symmetric, the default)
+# plus the asymmetric RSA/EC family (opt-in via ``private_key``): sign with a
+# private key, publish the public key at the JWKS endpoint, verify statelessly.
+# ``alg=none`` and non-listed algorithms are never honoured, and the same
+# allow-list is passed to ``jwt.decode`` so it cannot drift from signing.
+ALLOWED_ALGORITHMS: frozenset[str] = frozenset({"HS256"}) | jwk_keys.ASYMMETRIC_ALGORITHMS
 
 # Minimum length (characters) for the HS256 signing key. HMAC-SHA256 security
 # assumes a high-entropy key of at least 256 bits (32 bytes); a shorter secret
@@ -69,7 +72,15 @@ class AuthSettings:
         fernet_key_fallbacks: Additional Fernet keys accepted when *decrypting*
             at-rest tokens (never used to encrypt), enabling ``fernet_key``
             rotation without a bulk re-encrypt.
-        algorithm: JWT signing algorithm (only ``HS256`` is supported).
+        algorithm: JWT signing algorithm. ``HS256`` (default, symmetric) or an
+            asymmetric RSA/EC algorithm (RS256/384/512, PS256/384/512,
+            ES256/384/512): signs with ``private_key`` and publishes the public
+            key at the JWKS endpoint.
+        private_key: PEM private key used to sign JWTs when ``algorithm`` is
+            asymmetric (must be empty for HS256).
+        private_key_fallbacks: Additional verify-only keys (PEM, public or
+            private) kept in the published JWKS during a signing-key rotation
+            overlap.
         access_token_expire_minutes: Access-token lifetime, in minutes.
         refresh_token_expire_days: Refresh-token lifetime, in days.
         issuer: JWT ``iss`` claim. Defaults to ``base_url`` when empty
@@ -188,6 +199,15 @@ class AuthSettings:
 
     # --- JWT ---
     algorithm: str = "HS256"
+    # Asymmetric signing (opt-in). When ``algorithm`` is an RSA/EC algorithm
+    # (e.g. RS256 / ES256), ``private_key`` (PEM) signs the JWTs and its public
+    # key is published at the JWKS endpoint so resource servers can verify
+    # statelessly. ``private_key_fallbacks`` are verify-only public/private PEMs
+    # kept in the JWKS during a signing-key rotation overlap. ``secret_key`` is
+    # still required regardless of ``algorithm`` — it keys the HMAC hashing of
+    # refresh / CSRF tokens.
+    private_key: str = ""
+    private_key_fallbacks: tuple[str, ...] = ()
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
     issuer: str = ""
@@ -330,6 +350,25 @@ class AuthSettings:
         if self.algorithm not in ALLOWED_ALGORITHMS:
             raise ValueError(
                 f"AuthSettings.algorithm={self.algorithm!r} is not in the allow-list {sorted(ALLOWED_ALGORITHMS)}"
+            )
+        if self.algorithm in jwk_keys.ASYMMETRIC_ALGORITHMS:
+            if not self.private_key:
+                raise ValueError(
+                    f"AuthSettings.algorithm={self.algorithm!r} is asymmetric and requires a private_key (PEM)."
+                )
+            try:
+                jwk_keys.import_private_signing_key(self.private_key, self.algorithm)
+            except ValueError as err:
+                raise ValueError(f"AuthSettings.private_key is invalid: {err}") from err
+            for index, fallback in enumerate(self.private_key_fallbacks):
+                try:
+                    jwk_keys.import_verification_key(fallback, self.algorithm)
+                except ValueError as err:
+                    raise ValueError(f"AuthSettings.private_key_fallbacks[{index}] is invalid: {err}") from err
+        elif self.private_key or self.private_key_fallbacks:
+            raise ValueError(
+                f"AuthSettings.private_key / private_key_fallbacks are set but algorithm={self.algorithm!r} is "
+                "symmetric (HS256). Use an asymmetric algorithm (e.g. RS256 / ES256) or remove the keys."
             )
         if self.access_token_expire_minutes <= 0:
             raise ValueError("AuthSettings.access_token_expire_minutes must be positive")

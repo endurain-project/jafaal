@@ -17,11 +17,15 @@ protections and the deployment steps you are responsible for.
 
 ### Tokens & sessions
 
-- **JWTs are pinned to HS256.** The decode allow-list is mandatory, so `alg=none`
-  and algorithm-confusion attacks are rejected. OIDC ID tokens are verified
-  against a separate asymmetric allow-list (blocking RS256→HS256 confusion), and
-  their `iss`/`aud`/`exp`/`iat`, `nonce`, `azp`, and (when present) `at_hash`
-  claims are checked.
+- **JWTs default to HS256, with opt-in asymmetric signing.** The decode
+  allow-list is mandatory (pinned to the configured algorithm), so `alg=none`
+  and algorithm-confusion are rejected. Configure an asymmetric algorithm
+  (RS256/ES256/…) with a `private_key` to sign with a private key and let
+  resource servers verify statelessly via the published JWKS — no shared secret
+  (see [Asymmetric signing & JWKS](configuration.md#asymmetric-signing-jwks)).
+  OIDC ID tokens are verified against a separate asymmetric allow-list (blocking
+  RS256→HS256 confusion), and their `iss`/`aud`/`exp`/`iat`, `nonce`, `azp`, and
+  (when present) `at_hash` claims are checked.
 - **Refresh-token rotation with reuse detection.** Every refresh rotates the
   token; presenting an already-rotated token past a short grace window is treated
   as **theft** and invalidates the entire token family. A racing/duplicate

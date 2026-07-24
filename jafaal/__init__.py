@@ -94,6 +94,7 @@ from .exceptions import (
     UpstreamTimeoutError,
 )
 from .factory import RouterPrefixes, create_auth_router, verify_configuration
+from .jwks import get_jwks
 from .orm import (
     Base,
     configure_sessionmaker,
@@ -255,6 +256,7 @@ __all__ = [
     "configure_sessionmaker",
     "create_auth_router",
     "get_active_base",
+    "get_jwks",
     "get_settings",
     "is_models_mapped",
     "map_models",

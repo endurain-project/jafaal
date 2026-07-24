@@ -274,6 +274,7 @@ def create_auth_router(
     from jafaal.api_keys.router import router as api_keys_router
     from jafaal.identity_providers.public_router import router as idp_public_router
     from jafaal.identity_providers.router import router as idp_router
+    from jafaal.jwks import router as jwks_router
     from jafaal.password_reset_tokens.router import router as password_reset_router
     from jafaal.router import router as auth_router
     from jafaal.sessions.router import router as sessions_router
@@ -291,4 +292,8 @@ def create_auth_router(
     )
     aggregate.include_router(password_reset_router, prefix=prefixes.password_reset, tags=["password_reset"])
     aggregate.include_router(sign_up_router, prefix=prefixes.sign_up, tags=["sign_up"])
+    # JWKS is mounted at the aggregate root (no sub-prefix) so it lands at
+    # ``<api-root>/.well-known/jwks.json`` — the URL to advertise as the
+    # ``jwks_uri`` for resource servers verifying asymmetric tokens.
+    aggregate.include_router(jwks_router)
     return aggregate

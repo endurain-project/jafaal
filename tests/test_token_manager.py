@@ -18,6 +18,12 @@ def test_algorithm_allow_list_enforced():
     with pytest.raises(ValueError, match="allow-list"):
         TokenManager("k" * 32, "none")
     with pytest.raises(ValueError, match="allow-list"):
+        TokenManager("k" * 32, "HS512")  # symmetric, but not allow-listed
+
+
+def test_asymmetric_algorithm_requires_private_key():
+    # An asymmetric algorithm is allow-listed but needs a private key to sign.
+    with pytest.raises(ValueError, match="private_key"):
         TokenManager("k" * 32, "RS256")
 
 

@@ -302,6 +302,7 @@ source_modules = [
     "jafaal.factory",
     "jafaal.identity_providers",
     "jafaal.identity_service",
+    "jafaal.jwks",
     "jafaal.maintenance",
     "jafaal.mfa",
     "jafaal.oauth_state",

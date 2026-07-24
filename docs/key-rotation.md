@@ -52,6 +52,47 @@ days).
    redeploy. Any token still signed with it is now rejected (those sessions were
    already expired).
 
+## Rotating the asymmetric signing key
+
+When signing with an asymmetric `algorithm` (RS256/ES256/…), rotation is driven
+by `private_key` (the active signer) and `private_key_fallbacks` (verify-only
+keys still published in the JWKS). Verifiers pick the key by the token's `kid`,
+so old and new tokens both validate during the overlap.
+
+1. **Generate** a new key pair (e.g. RSA):
+
+    ```bash
+    openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out new-signing-key.pem
+    ```
+
+2. **Deploy the overlap.** Make the new key the `private_key` and keep the old
+   key (private, or just its public half) as a verify-only fallback:
+
+    ```python
+    jafaal.configure(jafaal.AuthSettings(
+        secret_key=SECRET_KEY,
+        fernet_key=FERNET_KEY,
+        algorithm="RS256",
+        private_key=NEW_PRIVATE_KEY_PEM,
+        private_key_fallbacks=(OLD_PUBLIC_KEY_PEM,),   # verify-only; stays in the JWKS
+        # ...rest unchanged...
+    ))
+    ```
+
+    New tokens are signed with the new key (new `kid`); both keys appear in the
+    JWKS, so tokens bearing either `kid` verify. Verifiers pick up the change
+    within their JWKS cache's `Cache-Control` max-age (300s by default).
+
+3. **Wait out the overlap** — at least `refresh_token_expire_days`, so every live
+   token has been re-signed with the new key.
+
+4. **Drop the old key.** Remove it from `private_key_fallbacks` and redeploy; the
+   JWKS then advertises only the new key.
+
+    !!! tip "Only public keys leave the process"
+        The JWKS publishes public keys only (the private component is never
+        serialised), so a fallback may be a public-only PEM.
+
 ## Rotating the encryption key (`fernet_key`)
 
 Fernet rotation has **no time pressure** — a secret encrypted with the old key

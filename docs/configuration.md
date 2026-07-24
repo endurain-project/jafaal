@@ -40,6 +40,9 @@ the settings and invalidates settings-derived caches (e.g. the token manager).
 | `access_token_expire_minutes` | `15` | Access-token lifetime. |
 | `refresh_token_expire_days` | `7` | Refresh-token lifetime. |
 | `jwt_leeway_seconds` | `0` | Clock-skew tolerance (seconds) for JWT `exp`/`nbf`; `0` is strict, keep any value small. |
+| `algorithm` | `"HS256"` | JWT signing algorithm: `HS256` (symmetric) or an asymmetric RSA/EC algorithm (see [below](#asymmetric-signing-jwks)). |
+| `private_key` | `""` | PEM private key for asymmetric signing (required when `algorithm` is asymmetric). |
+| `private_key_fallbacks` | `()` | Verify-only PEM keys kept in the published JWKS during a signing-key rotation. |
 | `session_idle_timeout_hours` | `1` | Idle-session timeout (when enabled). |
 | `session_absolute_timeout_hours` | `24` | Absolute session lifetime. |
 | `base_url` | `""` | Public base URL; default JWT issuer/audience and SSO redirect base. |
@@ -88,6 +91,69 @@ jafaal.configure(
 
 Once every token signed with — and every secret encrypted with — the old key has
 expired or been re-written, drop the fallback.
+
+## Asymmetric signing & JWKS
+
+By default JAFAAL signs its access/refresh tokens with **HS256** (a shared
+secret), so any service that verifies them needs that secret. To let other
+services verify tokens **statelessly with a public key** — no secret sprawl —
+set an asymmetric `algorithm` and a PEM `private_key`:
+
+```python
+import jafaal
+from cryptography.fernet import Fernet
+
+jafaal.configure(jafaal.AuthSettings(
+    secret_key="<32+ byte secret>",   # STILL required: keys the HMAC hashing of refresh/CSRF tokens
+    fernet_key=Fernet.generate_key().decode(),
+    base_url="https://app.example.com",
+    algorithm="RS256",                 # or ES256, PS256, RS384/512, ES384/512, PS384/512
+    private_key=open("jwt-signing-key.pem").read(),
+))
+```
+
+JAFAAL signs with the private key (tagging each token with the key's RFC 7638
+thumbprint as `kid`) and publishes the **public** key(s) as a JSON Web Key Set:
+
+```text
+GET  <your-api-root>/.well-known/jwks.json
+```
+
+A resource server verifies a JAFAAL access token the same way it would any OIDC
+provider's — fetch the JWKS and check the signature and claims (no call back to
+JAFAAL):
+
+```python
+import jwt                      # PyJWT, in the *resource server*
+from jwt import PyJWKClient
+
+jwks = PyJWKClient("https://app.example.com/api/v1/.well-known/jwks.json")
+signing_key = jwks.get_signing_key_from_jwt(access_token)
+claims = jwt.decode(
+    access_token,
+    signing_key.key,
+    algorithms=["RS256"],
+    issuer="https://app.example.com",      # == base_url
+    audience="https://app.example.com",    # == base_url
+)
+assert claims["typ"] == "access"
+```
+
+[`get_jwks()`][jafaal.get_jwks] is also exported, so you can serve the set at the
+conventional root path `/.well-known/jwks.json` from your own app instead of the
+API-root path above.
+
+!!! note "`secret_key` is always required"
+    Even with asymmetric JWTs, `secret_key` still keys the HMAC hashing of
+    refresh tokens (reuse detection) and CSRF tokens, so it stays mandatory.
+
+!!! note "EdDSA is not offered yet"
+    `EdDSA` is intentionally excluded: the underlying `joserfc` marks the
+    `EdDSA` JOSE identifier as deprecated (RFC 9864) and warns on use. Use
+    `ES256` (compact) or `RS256` (most widely interoperable) instead.
+
+See [Key rotation](key-rotation.md#rotating-the-asymmetric-signing-key) for
+rotating the signing key without downtime.
 
 ## Database: your `Base` and the session factory
 

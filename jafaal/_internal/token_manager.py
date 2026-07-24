@@ -9,6 +9,7 @@ import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 from enum import Enum
+from typing import Any
 
 from joserfc import jwt
 from joserfc.errors import (
@@ -21,13 +22,14 @@ from joserfc.errors import (
     InvalidTokenError,
     MissingClaimError,
 )
-from joserfc.jwk import OctKey
+from joserfc.jwk import KeySet, OctKey
 from joserfc.jwt import Token
 
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.ports as jafaal_ports
 import jafaal.scopes as jafaal_scopes
 import jafaal.settings as jafaal_settings
+from jafaal._core import jwk_keys
 
 logger = logging.getLogger(__name__)
 
@@ -40,15 +42,20 @@ class TokenType(Enum):
 class TokenManager:
     """Issue, decode, and validate JWTs (and mint CSRF tokens) for user sessions.
 
-    Tokens are signed with HMAC-SHA256 (``HS256`` only — the algorithm is pinned
-    via :data:`jafaal.settings.ALLOWED_ALGORITHMS`, and the same allow-list is
-    passed to ``jwt.decode`` so it cannot drift). Validation failures raise a
+    Signs with either ``HS256`` (symmetric, the default — a shared secret) or an
+    asymmetric RSA/EC algorithm (``RS256``/``ES256``/…), where a private key
+    signs and the corresponding public key is published at the JWKS endpoint so
+    resource servers verify statelessly. The algorithm is pinned via
+    :data:`jafaal.settings.ALLOWED_ALGORITHMS` and the same allow-list is passed
+    to ``jwt.decode`` so it cannot drift (blocking ``alg=none`` and
+    algorithm-confusion). Asymmetric tokens carry the active key's RFC 7638
+    thumbprint as ``kid``. Validation failures raise a
     :class:`~jafaal.exceptions.JafaalError` (mapped to HTTP 401 at the router
     edge); the constructor raises :class:`ValueError` for an algorithm outside
-    the allow-list.
+    the allow-list or missing asymmetric key material.
 
     Attributes:
-        algorithm: The JWT signing algorithm (``"HS256"``).
+        algorithm: The JWT signing algorithm.
     """
 
     def __init__(
@@ -61,6 +68,8 @@ class TokenManager:
         issuer: str = "",
         audience: str = "",
         secret_key_fallbacks: tuple[str, ...] = (),
+        private_key: str = "",
+        private_key_fallbacks: tuple[str, ...] = (),
         leeway_seconds: int = 0,
     ):
         """
@@ -82,6 +91,11 @@ class TokenManager:
                 when *verifying* a token (never used to sign). Lets tokens
                 issued before a ``secret_key`` rotation keep validating during
                 the overlap window.
+            private_key (str): PEM private key used to sign JWTs when
+                ``algorithm`` is asymmetric (RSA/EC); ignored for HS256.
+            private_key_fallbacks (tuple[str, ...]): Verify-only public/private
+                PEM keys kept in the published JWKS during a signing-key
+                rotation overlap.
             leeway_seconds (int): Clock-skew tolerance, in seconds, applied to
                 the ``exp`` / ``nbf`` claims during validation. ``0`` is strict;
                 a small value avoids spurious 401s when the issuing and
@@ -98,11 +112,42 @@ class TokenManager:
         self.issuer = issuer
         self.audience = audience
         self.leeway_seconds = leeway_seconds
-        self._key = OctKey.import_key(secret_key)
-        # Verification accepts the primary key plus any rotation fallbacks, so a
-        # token signed before a secret_key rotation still validates during the
-        # overlap window. Signing always uses the primary key (self._key).
-        self._decode_keys = [self._key, *(OctKey.import_key(fallback) for fallback in secret_key_fallbacks)]
+
+        self._is_symmetric: bool = algorithm not in jwk_keys.ASYMMETRIC_ALGORITHMS
+        self._sign_key: Any
+        self._sign_header: dict[str, str]
+        self._encode_algorithms: list[str] | None
+        self._decode_keys: list[Any]
+        self._verify_keys: list[Any]
+        self._verify_keyset: KeySet | None
+
+        if self._is_symmetric:
+            # HS256: sign and verify with the shared secret. Verification also
+            # accepts any rotation fallbacks so a token signed before a
+            # secret_key rotation still validates during the overlap window;
+            # signing always uses the primary key.
+            self._sign_key = OctKey.import_key(secret_key)
+            self._sign_header = {"alg": algorithm}
+            self._encode_algorithms = None
+            self._decode_keys = [self._sign_key, *(OctKey.import_key(fallback) for fallback in secret_key_fallbacks)]
+            self._verify_keys = []
+            self._verify_keyset = None
+        else:
+            # Asymmetric: sign with the private key; verify/publish with the
+            # public key(s). The token header carries the active key's RFC 7638
+            # thumbprint as ``kid`` so verifiers and the JWKS agree on it, and
+            # fallback public keys stay in the JWKS during a rotation overlap.
+            if not private_key:
+                raise ValueError(f"algorithm={algorithm!r} is asymmetric and requires a private_key.")
+            self._sign_key = jwk_keys.import_private_signing_key(private_key, algorithm)
+            self._sign_header = {"alg": algorithm, "kid": self._sign_key.thumbprint()}
+            self._encode_algorithms = [algorithm]
+            self._verify_keys = [
+                jwk_keys.public_verification_key(self._sign_key, algorithm),
+                *(jwk_keys.import_verification_key(fallback, algorithm) for fallback in private_key_fallbacks),
+            ]
+            self._verify_keyset = KeySet(self._verify_keys)
+            self._decode_keys = []
 
     def get_token_claim(self, token: str, claim: str) -> str | list[str] | int:
         """
@@ -142,11 +187,15 @@ class TokenManager:
         """
         Decodes a JWT token and returns the parsed Token object.
 
-        The token is verified against the primary signing key first, then each
-        configured rotation fallback (``secret_key_fallbacks``) in turn, so a
-        token signed before a key rotation still decodes during the overlap
-        window. Only a signature mismatch falls through to the next key; a
-        malformed token or a disallowed algorithm fails immediately.
+        The ``algorithms`` allow-list (pinned to this manager's algorithm) is
+        always passed to ``jwt.decode``: without it joserfc would trust whatever
+        algorithm the token header advertises (``none`` or an
+        algorithm-confusion variant), bypassing the signature check.
+
+        In symmetric (HS256) mode the token is verified against the primary key
+        then each rotation fallback. In asymmetric mode it is verified against
+        the public-key set, which joserfc selects by the header ``kid`` (the
+        active key plus any rotation fallbacks).
 
         Args:
             token (str): The JWT token to decode.
@@ -159,14 +208,15 @@ class TokenManager:
             JafaalError: If the token cannot be decoded, raises an HTTP 401
                 Unauthorized exception.
         """
+        if self._is_symmetric:
+            return self._decode_symmetric(token)
+        return self._decode_asymmetric(token)
+
+    def _decode_symmetric(self, token: str) -> Token:
+        """Verify an HS256 token against the primary key then rotation fallbacks."""
         last_signature_err: BadSignatureError | None = None
         for key in self._decode_keys:
             try:
-                # Decode the token and return the payload. The ``algorithms``
-                # allow-list is mandatory: without it, joserfc would accept any
-                # algorithm the token header advertises (including ``none`` or
-                # asymmetric variants), which would let an attacker who controls
-                # the unauthenticated token bypass the HMAC signature check.
                 return jwt.decode(token, key, algorithms=[self.algorithm])
             except BadSignatureError as sig_err:
                 # Wrong key: try the next rotation fallback before giving up.
@@ -194,6 +244,36 @@ class TokenManager:
             extra={"token": "[REDACTED]"},
         )
         raise jafaal_exceptions.InvalidTokenError("Unable to decode token") from last_signature_err
+
+    def _decode_asymmetric(self, token: str) -> Token:
+        """Verify an asymmetric token against the public-key set (selected by ``kid``)."""
+        keyset = self._verify_keyset
+        if keyset is None:  # pragma: no cover - always built in asymmetric mode
+            raise jafaal_exceptions.InvalidTokenError("Unable to decode token")
+        try:
+            return jwt.decode(token, keyset, algorithms=[self.algorithm])
+        except BadSignatureError as sig_err:
+            logger.error(
+                "Token signature did not match any active signing key",
+                exc_info=sig_err,
+                extra={"token": "[REDACTED]"},
+            )
+            raise jafaal_exceptions.InvalidTokenError("Unable to decode token") from sig_err
+        except InvalidPayloadError as payload_err:
+            logger.error(f"Invalid token payload: {payload_err}", exc_info=payload_err, extra={"token": "[REDACTED]"})
+            raise jafaal_exceptions.InvalidTokenError("Invalid token payload") from payload_err
+        except DecodeError as decode_err:
+            logger.error(f"Error decoding token: {decode_err}", exc_info=decode_err, extra={"token": "[REDACTED]"})
+            raise jafaal_exceptions.InvalidTokenError("Unable to decode token") from decode_err
+        except jafaal_exceptions.JafaalError:
+            raise
+        except Exception as err:
+            logger.error(
+                f"Unexpected error decoding token: {type(err).__name__}",
+                exc_info=err,
+                extra={"token": "[REDACTED]"},
+            )
+            raise jafaal_exceptions.InvalidTokenError("Unable to decode token") from err
 
     def validate_token_expiration(
         self,
@@ -364,9 +444,10 @@ class TokenManager:
         }
 
         encoded_token = jwt.encode(
-            {"alg": self.algorithm},
+            self._sign_header,
             scope_dict.copy(),
-            self._key,
+            self._sign_key,
+            algorithms=self._encode_algorithms,
         )
 
         # Return the expiration and the encoded token
@@ -382,6 +463,17 @@ class TokenManager:
                 as a CSRF token.
         """
         return secrets.token_urlsafe(32)
+
+    def jwks(self) -> dict[str, Any]:
+        """Return the JSON Web Key Set of public verification keys.
+
+        Empty (``{"keys": []}``) in symmetric (HS256) mode, which has no public
+        key to publish. In asymmetric mode it contains the active signing key's
+        public JWK plus any rotation fallbacks, each tagged with its ``kid``
+        (RFC 7638 thumbprint), ``use: "sig"``, and ``alg`` — exactly what a
+        resource server needs to verify JAFAAL's access tokens statelessly.
+        """
+        return {"keys": [jwk_keys.jwk_entry(key, self.algorithm) for key in self._verify_keys]}
 
 
 _token_manager: TokenManager | None = None
@@ -409,6 +501,8 @@ def get_token_manager() -> TokenManager:
             issuer=settings.resolved_issuer,
             audience=settings.resolved_audience,
             secret_key_fallbacks=settings.secret_key_fallbacks,
+            private_key=settings.private_key,
+            private_key_fallbacks=settings.private_key_fallbacks,
             leeway_seconds=settings.jwt_leeway_seconds,
         )
         _token_manager_generation = generation
