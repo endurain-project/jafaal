@@ -8,8 +8,11 @@ the HTTP-mocking tests (it has its own dedicated tests) so they stay hermetic.
 
 import asyncio
 import base64
+import dataclasses
 import hashlib
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
@@ -17,11 +20,13 @@ from joserfc import jwt
 from joserfc.jwk import OctKey, RSAKey
 from starlette.requests import Request
 
+import jafaal
 import jafaal.exceptions as exc
 import jafaal.identity_providers.crud as idp_crud
 import jafaal.identity_providers.links.crud as links_crud
 import jafaal.identity_providers.schema as idp_schema
 import jafaal.oauth_state.crud as oauth_state_crud
+from jafaal._core import crypto
 from jafaal._internal.password_hasher import password_hasher
 from jafaal._internal.security_stores import consume_step_up_reauth_grant
 from jafaal.identity_providers.service import IdentityProviderService
@@ -68,6 +73,22 @@ class _FakeOAuthClient:
         self._userinfo = userinfo
 
     async def fetch_token(self, token_endpoint, **kwargs):
+        return self._token
+
+    async def get(self, url, headers=None, **kwargs):
+        return _FakeResponse(self._userinfo)
+
+
+class _CapturingOAuthClient:
+    """OAuth client that records the kwargs passed to ``fetch_token``."""
+
+    def __init__(self, captured, token, userinfo=None):
+        self._captured = captured
+        self._token = token
+        self._userinfo = userinfo
+
+    async def fetch_token(self, token_endpoint, **kwargs):
+        self._captured.update(kwargs)
         return self._token
 
     async def get(self, url, headers=None, **kwargs):
@@ -126,6 +147,16 @@ def _rsa_jwks(kid="test-key-1"):
 
 def _no_ssrf(monkeypatch):
     monkeypatch.setattr("jafaal._core.network.reject_private_url", lambda *a, **k: None)
+
+
+@contextmanager
+def _settings(**overrides):
+    original = jafaal.get_settings()
+    jafaal.configure(dataclasses.replace(original, **overrides))
+    try:
+        yield
+    finally:
+        jafaal.configure(original)
 
 
 # --------------------------------------------------------------------------- #
@@ -434,6 +465,48 @@ def test_initiate_login_requires_state(db):
         asyncio.run(svc.initiate_login(idp, _request(), db, oauth_state_id=None))
 
 
+def test_initiate_login_includes_pkce_challenge_and_stores_verifier(db):
+    svc = IdentityProviderService()
+    idp = _create_idp(db, authorization_endpoint=f"{ISSUER}/authorize")
+    state_id = "pkce-state"
+    oauth_state_crud.create_oauth_state(
+        db=db, state_id=state_id, nonce="pkce-nonce", client_type="web", ip_address=None, idp_id=idp.id
+    )
+
+    url = asyncio.run(svc.initiate_login(idp, _request(), db, oauth_state_id=state_id))
+
+    query = parse_qs(urlparse(url).query)
+    assert query["code_challenge_method"] == ["S256"]
+    # The verifier is stored (encrypted) against the state and matches the
+    # S256 challenge advertised to the IdP (proves upstream PKCE is bound).
+    state_obj = oauth_state_crud.get_oauth_state_by_id(state_id, db)
+    assert state_obj.upstream_code_verifier
+    verifier = crypto.decrypt_token_fernet(state_obj.upstream_code_verifier)
+    expected = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).rstrip(b"=").decode("ascii")
+    assert query["code_challenge"] == [expected]
+
+
+def test_initiate_login_rejects_http_authorization_endpoint_when_required(db):
+    svc = IdentityProviderService()
+    idp = _create_idp(db, authorization_endpoint="http://idp.example/authorize")
+    oauth_state_crud.create_oauth_state(
+        db=db, state_id="s-http", nonce="n", client_type="web", ip_address=None, idp_id=idp.id
+    )
+    with pytest.raises(exc.InvalidRequestError):
+        asyncio.run(svc.initiate_login(idp, _request(), db, oauth_state_id="s-http"))
+
+
+def test_initiate_login_allows_http_authorization_endpoint_when_disabled(db):
+    svc = IdentityProviderService()
+    idp = _create_idp(db, authorization_endpoint="http://idp.example/authorize")
+    oauth_state_crud.create_oauth_state(
+        db=db, state_id="s-httpok", nonce="n", client_type="web", ip_address=None, idp_id=idp.id
+    )
+    with _settings(idp_require_https=False):
+        url = asyncio.run(svc.initiate_login(idp, _request(), db, oauth_state_id="s-httpok"))
+    assert url.startswith("http://idp.example/authorize")
+
+
 # --------------------------------------------------------------------------- #
 # Callback (mocked token exchange + userinfo)
 # --------------------------------------------------------------------------- #
@@ -472,6 +545,52 @@ def test_handle_callback_login_creates_user(db, monkeypatch):
     assert result["token_data"] == token
     # Link recorded for the IdP subject.
     assert links_crud.get_user_identity_provider_by_subject_and_idp_id(idp.id, "idp-sub-1", db) is not None
+
+
+def test_handle_callback_replays_pkce_verifier(db, monkeypatch):
+    svc = IdentityProviderService()
+    idp = _create_idp(
+        db, token_endpoint=f"{ISSUER}/token", userinfo_endpoint=f"{ISSUER}/userinfo", provider_type="oauth2"
+    )
+    userinfo = {"sub": "idp-pkce", "email": "pkce@test.dev", "email_verified": True}
+    token = {"access_token": "at", "refresh_token": "rt", "expires_in": 300, "token_type": "Bearer"}
+    captured: dict = {}
+    _no_ssrf(monkeypatch)
+    monkeypatch.setattr(svc, "_create_oauth_client", lambda **kw: _CapturingOAuthClient(captured, token, userinfo))
+
+    state_id = "s-pkce"
+    oauth_state_crud.create_oauth_state(
+        db=db, state_id=state_id, nonce="n", client_type="web", ip_address=None, idp_id=idp.id
+    )
+    oauth_state_crud.set_upstream_code_verifier(state_id, crypto.encrypt_token_fernet("verifier-xyz"), db)
+    state_obj = oauth_state_crud.get_oauth_state_by_id(state_id, db)
+
+    asyncio.run(svc.handle_callback(idp, "auth-code", state_id, _request(), password_hasher, db, state_obj))
+    # The stored verifier is decrypted and replayed on the token exchange.
+    assert captured["code_verifier"] == "verifier-xyz"
+
+
+def test_handle_callback_without_pkce_verifier_omits_code_verifier(db, monkeypatch):
+    svc = IdentityProviderService()
+    idp = _create_idp(
+        db, token_endpoint=f"{ISSUER}/token", userinfo_endpoint=f"{ISSUER}/userinfo", provider_type="oauth2"
+    )
+    userinfo = {"sub": "idp-nopkce", "email": "nopkce@test.dev", "email_verified": True}
+    token = {"access_token": "at", "refresh_token": "rt", "expires_in": 300, "token_type": "Bearer"}
+    captured: dict = {}
+    _no_ssrf(monkeypatch)
+    monkeypatch.setattr(svc, "_create_oauth_client", lambda **kw: _CapturingOAuthClient(captured, token, userinfo))
+
+    state_id = "s-nopkce"
+    oauth_state_crud.create_oauth_state(
+        db=db, state_id=state_id, nonce="n", client_type="web", ip_address=None, idp_id=idp.id
+    )
+    state_obj = oauth_state_crud.get_oauth_state_by_id(state_id, db)
+
+    asyncio.run(svc.handle_callback(idp, "auth-code", state_id, _request(), password_hasher, db, state_obj))
+    # A state with no stored verifier (e.g. a legacy in-flight flow) does not
+    # send code_verifier, staying compatible with the pre-PKCE token exchange.
+    assert "code_verifier" not in captured
 
 
 def test_handle_callback_link_mode(db, make_user, monkeypatch):

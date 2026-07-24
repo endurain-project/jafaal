@@ -33,6 +33,8 @@ class OAuthState(Base):
         purpose: Flow purpose (``login``, ``link``, or ``stepup``).
         code_challenge: PKCE challenge (base64url-encoded).
         code_challenge_method: PKCE method (always S256).
+        upstream_code_verifier: Encrypted PKCE code_verifier JAFAAL replays to
+            the upstream IdP token endpoint (RFC 7636).
         nonce: OIDC nonce for ID token validation.
         redirect_path: Frontend path after login.
         client_type: web or mobile.
@@ -86,6 +88,12 @@ class OAuthState(Base):
         String(10),
         nullable=True,
         comment="PKCE method (only S256 supported)",
+    )
+
+    upstream_code_verifier: Mapped[str | None] = mapped_column(
+        String(512),
+        nullable=True,
+        comment="Encrypted (Fernet) PKCE code_verifier JAFAAL sends to the upstream IdP token endpoint",
     )
 
     nonce: Mapped[str] = mapped_column(

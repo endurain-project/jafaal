@@ -33,10 +33,10 @@ flowchart LR
 | Refresh-token theft / replay | One-time rotation with reuse detection; a replay past the grace window invalidates the whole token family; in-grace retries replay one idempotent result. |
 | CSRF (web) | `HttpOnly` + `SameSite=Strict` refresh cookie (primary); HMAC-bound CSRF token (defense-in-depth); optional `__Secure-`/`__Host-` cookie-name prefix. |
 | TOTP replay | Matched timestep is recorded single-use; a second use within the validity window is rejected. Fails **closed** on a state-store outage by default. |
-| OAuth authorization-code replay / mix-up | Single-use, atomically-consumed `state`; `state`→IdP binding; PKCE (S256) for mobile. |
-| SSRF via OIDC URLs | Scheme allow-list, every resolved address must be public, pinned-IP connection (DNS-rebinding defence), guard re-runs on each redirect hop. |
+| OAuth authorization-code replay / mix-up | Single-use, atomically-consumed `state`; `state`→IdP binding; PKCE (S256) on both the mobile client flow and the upstream authorization-code exchange to the IdP. |
+| SSRF via OIDC URLs | Scheme allow-list (`https` required for IdP endpoints by default), every resolved address must be public, pinned-IP connection (DNS-rebinding defence), guard re-runs on each redirect hop. |
 | Source-IP spoofing | Proxy headers honoured only from configured `trusted_proxies`. |
-| Secret disclosure at rest | IdP secrets, MFA secrets, and rotated refresh tokens are Fernet-encrypted; refresh/CSRF tokens are stored as keyed HMACs. |
+| Secret disclosure at rest | IdP secrets, MFA secrets, rotated refresh tokens, and upstream PKCE verifiers are Fernet-encrypted; refresh/CSRF tokens are stored as keyed HMACs. |
 
 ## What JAFAAL does NOT do (host responsibilities)
 

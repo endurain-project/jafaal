@@ -155,6 +155,12 @@ class AuthSettings:
             header).
         ssrf_allowed_hosts: Hosts/CIDRs exempted from the SSRF private-address
             guard on outbound OIDC calls.
+        idp_require_https: When ``True`` (default), identity-provider endpoints
+            (the browser-facing authorization endpoint and the server-side
+            token, userinfo, JWKS, discovery and revocation URLs) must use
+            ``https``, refusing to transmit authorization codes, tokens and
+            client credentials in cleartext. Set ``False`` to allow ``http://``
+            IdP endpoints for local or self-hosted development.
         step_up_idp_reauth_enabled: Whether an SSO-only account (no local
             password and no MFA) may satisfy step-up verification by
             re-authenticating at a linked identity provider. When ``False`` such
@@ -350,6 +356,13 @@ class AuthSettings:
     # IPs/CIDRs behind a reverse proxy, or ("*",) to trust all peers.
     trusted_proxies: tuple[str, ...] = ()
     ssrf_allowed_hosts: tuple[str, ...] = ()
+
+    # When True (default), identity-provider endpoints (the browser-facing
+    # authorization endpoint and the server-side token, userinfo, JWKS,
+    # discovery and revocation URLs) must use https, refusing to transmit
+    # authorization codes, tokens and client credentials in cleartext. Set to
+    # False to allow http:// IdP endpoints for local or self-hosted development.
+    idp_require_https: bool = True
 
     # --- step-up (IdP re-authentication) ---
     # Lets an SSO-only account (no local password, no MFA) satisfy step-up by

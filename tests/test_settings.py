@@ -31,6 +31,14 @@ def _ec_pem():
     return ECKey.generate_key("P-256").as_pem(private=True).decode()
 
 
+def test_idp_require_https_defaults_true():
+    assert _valid().idp_require_https is True
+
+
+def test_idp_require_https_can_be_disabled():
+    assert _valid(idp_require_https=False).idp_require_https is False
+
+
 def test_requires_secret_key():
     with pytest.raises(ValueError, match="secret_key"):
         _valid(secret_key="")

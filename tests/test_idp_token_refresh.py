@@ -213,11 +213,14 @@ def test_revoke_without_revocation_endpoint_returns_false(db, make_user):
     assert asyncio.run(IdentityProviderService().revoke_idp_token(user.id, idp.id, db)) is False
 
 
-def test_revoke_success(db, make_user):
+def test_revoke_success(db, make_user, monkeypatch):
     user = make_user()
     idp = _create_idp(db, issuer_url=ISSUER)
     _link_with_tokens(db, user.id, idp.id, refresh="rt")
     svc = IdentityProviderService()
+    # The revocation POST carries the refresh token + client credentials, so it
+    # runs the SSRF/HTTPS pre-flight; stub it (the guard has its own tests).
+    _no_ssrf(monkeypatch)
     # Seed the discovery cache so the revocation endpoint resolves without HTTP.
     svc._discovery_cache[idp.id] = {"revocation_endpoint": f"{ISSUER}/revoke"}
     svc._cache_expiry[idp.id] = datetime.now(UTC) + timedelta(hours=1)

@@ -51,6 +51,16 @@ protections and the deployment steps you are responsible for.
 - **SSRF guard** on outbound OIDC calls: the scheme is allow-listed, every
   resolved A/AAAA address must be public (DNS-rebinding defence), and the guard
   re-runs on every redirect hop.
+- **HTTPS for identity-provider endpoints** (default). The OIDC client refuses
+  `http://` IdP URLs — the browser-facing authorization endpoint and the
+  server-side token, userinfo, JWKS, discovery and revocation URLs — so
+  authorization codes, tokens and client credentials are never sent in
+  cleartext. Set `idp_require_https=False` to allow `http://` for local or
+  self-hosted development.
+- **Upstream PKCE (S256)** on the authorization-code flow to the IdP: JAFAAL
+  sends a per-login `code_challenge` and replays the `code_verifier` (held
+  Fernet-encrypted with the `state`) at the token exchange, so an intercepted
+  authorization code cannot be redeemed by an attacker.
 - **Progressive per-account lockout** (escalating windows) on failed login, MFA,
   and step-up attempts, keyed on a normalised, hashed identifier.
 - **Rate limiting** hooks for sensitive/write endpoints (you inject the limiter).

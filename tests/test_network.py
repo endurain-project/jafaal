@@ -45,6 +45,25 @@ def test_reject_forbidden_scheme():
         network.reject_private_url("file:///etc/passwd")
 
 
+def test_require_https_url_accepts_https():
+    # https passes with no DNS resolution or private-address check, so it is
+    # safe for the browser-facing authorization endpoint (which may be a
+    # private/self-hosted host).
+    network.require_https_url("https://idp.example.com/authorize")
+
+
+def test_require_https_url_rejects_http():
+    with pytest.raises(exc.InvalidRequestError, match="HTTPS"):
+        network.require_https_url("http://idp.example.com/authorize")
+
+
+def test_reject_private_url_require_https_rejects_http_scheme():
+    # The https requirement is enforced at the scheme check, before any DNS
+    # resolution, so an http:// IdP endpoint is refused outright.
+    with pytest.raises(exc.InvalidRequestError, match="HTTPS"):
+        network.reject_private_url("http://idp.example.com/token", require_https=True)
+
+
 def test_reject_missing_hostname():
     with pytest.raises(exc.InvalidRequestError, match="hostname"):
         network.reject_private_url("http://")

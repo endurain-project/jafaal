@@ -315,12 +315,46 @@ def _reject_if_private(
     raise jafaal_exceptions.InvalidRequestError("URL resolves to a non-public address")
 
 
-def reject_private_url(url: str, *, purpose: str | None = None) -> None:
+# Shared by the HTTPS-transport guards so operators get a single, actionable
+# hint (including the escape hatch for local/self-host setups).
+_HTTPS_REQUIRED_MESSAGE = (
+    "Identity provider endpoint must use HTTPS. Set idp_require_https=False to "
+    "allow http:// for local or self-hosted development."
+)
+
+
+def _require_https_scheme(scheme: str) -> None:
+    """Raise unless ``scheme`` is ``https`` (cleartext-transport guard)."""
+    if scheme.lower() != "https":
+        raise jafaal_exceptions.InvalidRequestError(_HTTPS_REQUIRED_MESSAGE)
+
+
+def require_https_url(url: str) -> None:
+    """Reject a URL whose scheme is not ``https``.
+
+    Enforces encrypted transport for an identity-provider endpoint without the
+    DNS resolution / private-address checks of :func:`reject_private_url`, so it
+    is safe for the authorization endpoint the *browser* dials, which may
+    legitimately be a private or self-hosted host. Used by the SSO service when
+    ``idp_require_https`` is enabled.
+
+    Raises:
+        InvalidRequestError: If ``url`` is malformed or does not use ``https``.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError as err:
+        raise jafaal_exceptions.InvalidRequestError("Malformed URL") from err
+    _require_https_scheme(parsed.scheme)
+
+
+def reject_private_url(url: str, *, purpose: str | None = None, require_https: bool = False) -> None:
     """Refuse to dial URLs that resolve to private/internal hosts (SSRF guard).
 
     Enforces two checks before any outbound HTTP call:
 
-    1. The scheme must be ``http`` or ``https``.
+    1. The scheme must be ``http`` or ``https`` (or ``https`` only when
+       ``require_https`` is set).
     2. Every address the hostname resolves to (both A and AAAA records) must be
        a public unicast address. A single private/loopback/link-local answer
        aborts the request (DNS-rebinding defence).
@@ -328,6 +362,9 @@ def reject_private_url(url: str, *, purpose: str | None = None) -> None:
     Args:
         url: The fully-qualified URL the caller intends to fetch.
         purpose: Optional short tag identifying the outbound call (audit only).
+        require_https: When True, additionally refuse any scheme other than
+            ``https`` (keeps credential-bearing IdP calls off cleartext
+            transports when ``idp_require_https`` is enabled).
 
     Raises:
         InvalidRequestError: 400 if the URL is malformed, uses a forbidden
@@ -341,6 +378,8 @@ def reject_private_url(url: str, *, purpose: str | None = None) -> None:
 
     if parsed.scheme.lower() not in _ALLOWED_OUTBOUND_SCHEMES:
         raise jafaal_exceptions.InvalidRequestError("URL scheme is not permitted")
+    if require_https:
+        _require_https_scheme(parsed.scheme)
 
     hostname = parsed.hostname
     if not hostname:

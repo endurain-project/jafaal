@@ -67,6 +67,26 @@ def _oauth_client_cls() -> Any:
     return optional_deps.require(AsyncOAuth2Client, package="authlib", extra="sso", feature="Single sign-on (OIDC)")
 
 
+def _idp_require_https() -> bool:
+    """Whether identity-provider endpoints must use https (``idp_require_https``)."""
+    return jafaal_settings.get_settings().idp_require_https
+
+
+def _generate_pkce_verifier() -> str:
+    """Generate a high-entropy PKCE ``code_verifier`` (RFC 7636).
+
+    Returns a url-safe token of ~86 unreserved characters ([A-Za-z0-9-_]),
+    comfortably within the RFC's 43-128 character range.
+    """
+    return secrets_module.token_urlsafe(64)
+
+
+def _pkce_challenge_s256(code_verifier: str) -> str:
+    """Compute the S256 PKCE ``code_challenge`` for ``code_verifier`` (RFC 7636)."""
+    digest = hashlib.sha256(code_verifier.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
 # Allow-list of acceptable ID-token signature algorithms.
 #
 # OIDC ID tokens are verified against the IdP's *public* JWKS keys, so only
@@ -279,7 +299,7 @@ class IdentityProviderService:
             # attacker pivot via signed token replay.
             # Self-hosted IdPs on private networks can
             # be opted in via SSRF_ALLOWED_HOSTS.
-            network.reject_private_url(jwks_uri, purpose="oidc_jwks")
+            network.reject_private_url(jwks_uri, purpose="oidc_jwks", require_https=_idp_require_https())
             client = await self._get_http_client()
             logger.debug(f"Fetching JWKS from {jwks_uri}")
 
@@ -554,7 +574,7 @@ class IdentityProviderService:
         try:
             # SSRF guard for the admin-supplied issuer
             # URL: see jwks_uri rationale above.
-            network.reject_private_url(discovery_url, purpose="oidc_discovery")
+            network.reject_private_url(discovery_url, purpose="oidc_discovery", require_https=_idp_require_https())
             # Fetch the configuration
             client = await self._get_http_client()
             response = await client.get(discovery_url)
@@ -717,7 +737,7 @@ class IdentityProviderService:
         # re-validated), so a trusted issuer could still advertise an
         # internal target. Refuse private/internal addresses unless
         # explicitly opted in via SSRF_ALLOWED_HOSTS.
-        network.reject_private_url(token_endpoint, purpose="oidc_token")
+        network.reject_private_url(token_endpoint, purpose="oidc_token", require_https=_idp_require_https())
 
         return token_endpoint
 
@@ -819,13 +839,33 @@ class IdentityProviderService:
             state = oauth_state_id
             nonce = oauth_state_obj.nonce
 
+            # Enforce encrypted transport for the browser-facing authorization
+            # endpoint when idp_require_https is on (the redirect carries the
+            # state, nonce and PKCE challenge to the IdP).
+            if _idp_require_https():
+                network.require_https_url(authorization_endpoint)
+
             # Build authorization URL
             redirect_uri = self._get_redirect_uri(idp.slug)
             scopes = idp.scopes or "openid profile email"
 
+            # Upstream PKCE (RFC 7636): bind this authorization request to a
+            # secret code_verifier so an intercepted authorization code cannot
+            # be redeemed without it. The verifier is stored (encrypted) against
+            # the OAuth state and replayed on the token exchange in handle_callback.
+            code_verifier = _generate_pkce_verifier()
+            oauth_state_crud.set_upstream_code_verifier(state, crypto.encrypt_token_fernet(code_verifier), db)
+            code_challenge = _pkce_challenge_s256(code_verifier)
+
             client = _oauth_client_cls()(client_id=client_id, redirect_uri=redirect_uri, scope=scopes)
 
-            authorization_url, _ = client.create_authorization_url(authorization_endpoint, state=state, nonce=nonce)
+            authorization_url, _ = client.create_authorization_url(
+                authorization_endpoint,
+                state=state,
+                nonce=nonce,
+                code_challenge=code_challenge,
+                code_challenge_method="S256",
+            )
 
             return authorization_url
 
@@ -918,14 +958,33 @@ class IdentityProviderService:
             state = oauth_state_id
             nonce = oauth_state_obj.nonce
 
+            # Enforce encrypted transport for the browser-facing authorization
+            # endpoint when idp_require_https is on (the redirect carries the
+            # state, nonce and PKCE challenge to the IdP).
+            if _idp_require_https():
+                network.require_https_url(authorization_endpoint)
+
             # Build authorization URL
             redirect_uri = self._get_redirect_uri(idp.slug)
             scopes = idp.scopes or "openid profile email"
 
+            # Upstream PKCE (RFC 7636): bind this authorization request to a
+            # secret code_verifier so an intercepted authorization code cannot
+            # be redeemed without it. The verifier is stored (encrypted) against
+            # the OAuth state and replayed on the token exchange in handle_callback.
+            code_verifier = _generate_pkce_verifier()
+            oauth_state_crud.set_upstream_code_verifier(state, crypto.encrypt_token_fernet(code_verifier), db)
+            code_challenge = _pkce_challenge_s256(code_verifier)
+
             client = _oauth_client_cls()(client_id=client_id, redirect_uri=redirect_uri, scope=scopes)
 
             authorization_url, _ = client.create_authorization_url(
-                authorization_endpoint, state=state, nonce=nonce, **(authorize_extra_params or {})
+                authorization_endpoint,
+                state=state,
+                nonce=nonce,
+                code_challenge=code_challenge,
+                code_challenge_method="S256",
+                **(authorize_extra_params or {}),
             )
 
             return authorization_url
@@ -1051,7 +1110,14 @@ class IdentityProviderService:
                     redirect_uri=redirect_uri,
                 )
 
-                token_response = await client.fetch_token(token_endpoint, grant_type="authorization_code", code=code)
+                token_kwargs: dict[str, Any] = {"grant_type": "authorization_code", "code": code}
+                # Upstream PKCE: replay the stored code_verifier so the IdP can
+                # bind this token exchange to the earlier authorization request
+                # (defends against authorization-code injection/interception).
+                if oauth_state.upstream_code_verifier:
+                    token_kwargs["code_verifier"] = crypto.decrypt_token_fernet(oauth_state.upstream_code_verifier)
+
+                token_response = await client.fetch_token(token_endpoint, **token_kwargs)
             except httpx.TimeoutException as err:
                 logger.error(f"Timeout connecting to IdP {idp.name} token endpoint: {err}", exc_info=err)
                 raise jafaal_exceptions.IdentityProviderTimeoutError(
@@ -1317,7 +1383,7 @@ class IdentityProviderService:
             # explicitly opted in via SSRF_ALLOWED_HOSTS. Raised outside the
             # try/except below so the guard's 4xx is not swallowed as a
             # userinfo fetch failure.
-            network.reject_private_url(userinfo_endpoint, purpose="oidc_userinfo")
+            network.reject_private_url(userinfo_endpoint, purpose="oidc_userinfo", require_https=_idp_require_https())
             try:
                 # Use the access token to fetch userinfo
                 access_token = token_response.get("access_token")
@@ -1960,6 +2026,14 @@ class IdentityProviderService:
                     "Token will be cleared locally only."
                 )
                 return False
+
+            # SSRF guard + HTTPS policy: the revocation endpoint comes from the
+            # discovery document (not otherwise re-validated) and this POST
+            # carries the refresh token plus client credentials, so refuse
+            # private/internal targets and (when enabled) cleartext transports.
+            network.reject_private_url(
+                revocation_endpoint, purpose="oidc_revocation", require_https=_idp_require_https()
+            )
 
             # Decrypt client secret and id for authentication
             try:

@@ -178,6 +178,33 @@ def create_oauth_state(
 
 
 @db_errors.handle_db_errors
+def set_upstream_code_verifier(state_id: str, encrypted_verifier: str | None, db: Session) -> None:
+    """Persist the encrypted upstream PKCE code_verifier on an OAuth state.
+
+    Called while building the authorization URL (initiate_login / initiate_link)
+    so the verifier can be replayed on the later token exchange. The value is
+    already Fernet-encrypted by the caller and is never returned to a client.
+
+    Args:
+        state_id: The OAuth state ID to update.
+        encrypted_verifier: The Fernet-encrypted PKCE code_verifier (the
+            ``str | None`` result of ``encrypt_token_fernet``).
+        db: SQLAlchemy database session.
+
+    Raises:
+        JafaalError: 500 error if the database update fails.
+    """
+    stmt = (
+        sa_update(oauth_state_models.OAuthState)
+        .where(oauth_state_models.OAuthState.id == state_id)
+        .values(upstream_code_verifier=encrypted_verifier)
+        .execution_options(synchronize_session=False)
+    )
+    db.execute(stmt)
+    db.commit()
+
+
+@db_errors.handle_db_errors
 def mark_oauth_state_used(state_id: str, db: Session) -> bool:
     """Atomically mark an unused, unexpired OAuth state as used.
 
