@@ -189,6 +189,53 @@ def test_refresh_session_invalid_token_is_cleared(db, make_user, monkeypatch):
     assert link.idp_refresh_token is None  # cleared
 
 
+def test_clear_refresh_token_if_matches_guards_concurrent_rotation(db, make_user):
+    user = make_user()
+    idp = _create_idp(db)
+    _link_with_tokens(db, user.id, idp.id, refresh="rt")
+    stored = links_crud.get_user_identity_provider_by_user_id_and_idp_id(user.id, idp.id, db).idp_refresh_token
+
+    # A concurrent refresh already rotated the token: the stale ciphertext the
+    # race loser read no longer matches, so the clear must be a no-op.
+    assert (
+        links_crud.clear_user_identity_provider_refresh_token_if_matches(user.id, idp.id, "stale-ciphertext", db)
+        is False
+    )
+    db.expire_all()
+    link = links_crud.get_user_identity_provider_by_user_id_and_idp_id(user.id, idp.id, db)
+    assert link.idp_refresh_token == stored  # winner's freshly rotated token preserved
+
+    # The exact stored ciphertext still clears (genuine revocation path).
+    assert links_crud.clear_user_identity_provider_refresh_token_if_matches(user.id, idp.id, stored, db) is True
+    db.expire_all()
+    link = links_crud.get_user_identity_provider_by_user_id_and_idp_id(user.id, idp.id, db)
+    assert link.idp_refresh_token is None
+
+
+def test_refresh_session_stale_400_does_not_clear_rotated_token(db, make_user, monkeypatch):
+    _no_ssrf(monkeypatch)
+    user = make_user()
+    idp = _create_idp(db, token_endpoint=f"{ISSUER}/token")
+    # The DB row holds the winner's freshly rotated token.
+    _link_with_tokens(db, user.id, idp.id, refresh="winner-rt")
+    winner_ct = links_crud.get_user_identity_provider_by_user_id_and_idp_id(user.id, idp.id, db).idp_refresh_token
+    # Simulate the race loser: it read the OLD ciphertext before the rotation,
+    # so its now-stale token is rejected by the IdP with a 400.
+    stale_ct = crypto.encrypt_token_fernet("loser-old-rt")
+    monkeypatch.setattr(
+        "jafaal.identity_providers.links.utils.get_user_identity_provider_refresh_token_by_user_id_and_idp_id",
+        lambda *a, **k: stale_ct,
+    )
+    err = httpx.HTTPStatusError("bad", request=httpx.Request("POST", "http://x"), response=httpx.Response(400))
+    svc = IdentityProviderService()
+    monkeypatch.setattr(svc, "_create_oauth_client", lambda **kw: _FakeOAuthClient(raise_exc=err))
+
+    assert asyncio.run(svc.refresh_idp_session(user.id, idp.id, db)) is None
+    db.expire_all()
+    link = links_crud.get_user_identity_provider_by_user_id_and_idp_id(user.id, idp.id, db)
+    assert link.idp_refresh_token == winner_ct  # winner's token preserved, not wiped by the loser
+
+
 def test_refresh_session_idp_not_found(db):
     with pytest.raises(exc.NotFoundError):
         asyncio.run(IdentityProviderService().refresh_idp_session(1, 9999, db))

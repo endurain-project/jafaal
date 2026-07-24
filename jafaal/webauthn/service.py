@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.ports as jafaal_ports
 import jafaal.settings as jafaal_settings
+import jafaal.token_hashing as jafaal_token_hashing
 import jafaal.webauthn.challenge_store as challenge_store
 import jafaal.webauthn.crud as webauthn_crud
 import jafaal.webauthn.models as webauthn_models
@@ -168,6 +169,25 @@ def _descriptors_for_user(user_id: UserId, db: Session) -> list[Any]:
 # ---------------------------------------------------------------------------
 
 
+def _user_handle(user: jafaal_ports.UserProtocol) -> bytes:
+    """Return a stable, opaque WebAuthn user handle for ``user``.
+
+    The user handle is stored by the authenticator and returned verbatim in
+    assertions (notably for discoverable/resident credentials), so it must not
+    carry personally identifying information and should not be a guessable or
+    cross-site-correlatable value. Using the raw ``user.id`` would leak the
+    application's internal (often sequential) identifier to every authenticator.
+
+    Instead derive an opaque 32-byte handle as a keyed HMAC of the user id under
+    the server secret: it is stable per user (so every passkey a user registers
+    shares one account handle, as WebAuthn requires), non-identifying, and not
+    derivable or correlatable without ``AuthSettings.secret_key``. Authentication
+    resolves the user from the presented credential id, never from this handle,
+    so the derivation only needs to be deterministic - never reversible.
+    """
+    return bytes.fromhex(jafaal_token_hashing.hmac_sha256(f"webauthn:user-handle:{user.id}"))
+
+
 def begin_registration(user: jafaal_ports.UserProtocol, db: Session) -> dict[str, Any]:
     """Generate registration options and store the challenge for ``user``."""
     _require_webauthn()
@@ -182,7 +202,7 @@ def begin_registration(user: jafaal_ports.UserProtocol, db: Session) -> dict[str
         rp_id=_rp_id(),
         rp_name=settings.resolved_webauthn_rp_name,
         user_name=user.username,
-        user_id=str(user.id).encode("utf-8"),
+        user_id=_user_handle(user),
         user_display_name=user.username,
         attestation=_attestation(),
         authenticator_selection=selection,

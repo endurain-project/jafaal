@@ -16,7 +16,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
-from webauthn.helpers import bytes_to_base64url
+from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 
 import jafaal
 import jafaal.orm as jafaal_orm
@@ -159,6 +159,32 @@ def test_register_begin_returns_creation_options(client, make_user):
     assert options["rp"]["id"] == "app.test"
     assert options["user"]["name"] == "alice"
     assert options["pubKeyCredParams"]
+
+
+def test_register_begin_uses_opaque_user_handle(client, make_user):
+    user = make_user(username="alice")
+    headers = _auth_headers(client)
+    opts1 = client.post(REG_BEGIN, headers=headers).json()
+    opts2 = client.post(REG_BEGIN, headers=headers).json()
+    handle = opts1["user"]["id"]
+    # The handle must not be the raw (often sequential / PII) user id.
+    assert handle != bytes_to_base64url(str(user.id).encode("utf-8"))
+    # Opaque 32-byte handle, stable across ceremonies (same passkey account).
+    assert len(base64url_to_bytes(handle)) == 32
+    assert opts2["user"]["id"] == handle
+
+
+def test_user_handle_is_opaque_stable_and_per_user(make_user):
+    alice = make_user(username="alice")
+    bob = make_user(username="bob")
+    handle = webauthn_service._user_handle(alice)
+    # Deterministic / stable for the same user (all their passkeys share it).
+    assert webauthn_service._user_handle(alice) == handle
+    # Opaque 32-byte value, never the raw user id.
+    assert len(handle) == 32
+    assert handle != str(alice.id).encode("utf-8")
+    # Distinct per user.
+    assert webauthn_service._user_handle(bob) != handle
 
 
 def test_register_begin_requires_auth(client, make_user):

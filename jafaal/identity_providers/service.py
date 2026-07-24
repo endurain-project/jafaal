@@ -1862,9 +1862,10 @@ class IdentityProviderService:
                 raise ValueError("Decryption returned empty value")
         except Exception as err:
             logger.error(f"Failed to decrypt refresh token for user {user_id}, idp {idp_id}: {err}", exc_info=err)
-            # Clear corrupted token
-            jafaal_identity_links_crud.clear_user_identity_provider_refresh_token_by_user_id_and_idp_id(
-                user_id, idp_id, db
+            # Clear corrupted token (only if a concurrent refresh has not already
+            # replaced it with a valid, freshly rotated one).
+            jafaal_identity_links_crud.clear_user_identity_provider_refresh_token_if_matches(
+                user_id, idp_id, encrypted_refresh_token, db
             )
             return None
 
@@ -1908,9 +1909,12 @@ class IdentityProviderService:
                     f"{err.response.status_code} - {err.response.text}",
                     exc_info=err,
                 )
-                # Clear invalid token from database
-                jafaal_identity_links_crud.clear_user_identity_provider_refresh_token_by_user_id_and_idp_id(
-                    user_id, idp_id, db
+                # Clear invalid token from database. Use the conditional clear so
+                # a concurrent refresh that already rotated the token (the loser
+                # of the race gets a 400/401 for the now-stale token) does not
+                # wipe the winner's freshly stored token.
+                jafaal_identity_links_crud.clear_user_identity_provider_refresh_token_if_matches(
+                    user_id, idp_id, encrypted_refresh_token, db
                 )
                 return None
             else:

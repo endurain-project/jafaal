@@ -1,8 +1,10 @@
 """CRUD operations for user identity provider links."""
 
 from datetime import UTC, datetime
+from typing import Any, cast
 
-from sqlalchemy import exists, select
+from sqlalchemy import CursorResult, exists, select
+from sqlalchemy import update as sa_update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
@@ -263,6 +265,57 @@ def clear_user_identity_provider_refresh_token_by_user_id_and_idp_id(
         db.commit()
         return True
     return False
+
+
+@db_errors.handle_db_errors
+def clear_user_identity_provider_refresh_token_if_matches(
+    user_id: UserId,
+    idp_id: int,
+    expected_encrypted_refresh_token: str,
+    db: Session,
+) -> bool:
+    """
+    Clear the stored IdP refresh token only if it still equals the value the
+    caller just attempted to use.
+
+    Guards a concurrent-refresh race: when two requests refresh the same
+    (user, idp) at once, the IdP rotates the token for the winner and rejects
+    the loser's now-stale token with a 400/401. Clearing unconditionally on that
+    rejection would wipe the winner's freshly stored token. Every store writes a
+    fresh Fernet ciphertext, so an equality check on the exact ciphertext the
+    caller read atomically detects the rotation and skips the clear.
+
+    Args:
+        user_id: The ID of the user.
+        idp_id: The ID of the identity provider.
+        expected_encrypted_refresh_token: The encrypted refresh token the caller
+            read and attempted to use.
+        db: SQLAlchemy database session.
+
+    Returns:
+        True if a row was cleared, False otherwise (link gone, or the token was
+        already rotated/cleared by a concurrent refresh).
+
+    Raises:
+        JafaalError: 500 error if the database operation fails.
+    """
+    stmt = (
+        sa_update(jafaal_identity_links_models.IdentityLink)
+        .where(
+            jafaal_identity_links_models.IdentityLink.user_id == user_id,
+            jafaal_identity_links_models.IdentityLink.idp_id == idp_id,
+            jafaal_identity_links_models.IdentityLink.idp_refresh_token == expected_encrypted_refresh_token,
+        )
+        .values(
+            idp_refresh_token=None,
+            idp_access_token_expires_at=None,
+            idp_refresh_token_updated_at=None,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    result = cast(CursorResult[Any], db.execute(stmt))
+    db.commit()
+    return (result.rowcount or 0) > 0
 
 
 @db_errors.handle_db_errors
