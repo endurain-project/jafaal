@@ -42,6 +42,7 @@ import jafaal._internal.password_hasher as jafaal_password_hasher
 import jafaal._internal.services.account_security_service as jafaal_account_security_service
 import jafaal._internal.services.identity_link_service as jafaal_identity_link_service
 import jafaal._internal.services.mfa_workflow as jafaal_mfa_workflow
+import jafaal._internal.token_denylist as jafaal_token_denylist
 import jafaal._internal.token_manager as jafaal_token_manager
 import jafaal._internal.user_guards as jafaal_user_guards
 import jafaal.api_keys.crud as jafaal_api_keys_crud
@@ -859,7 +860,15 @@ class DefaultIdentityService:
         user = jafaal_user_guards.get_user_by_id_or_404(user_id, self._db)
         jafaal_user_guards.check_user_is_active(user)
 
-        if jafaal_settings.get_settings().strict_session_binding:
+        settings = jafaal_settings.get_settings()
+        # Reject a token whose jti was revoked (RFC 7009), when the opt-in
+        # denylist is enabled. A state-store outage fails open (see token_denylist).
+        if settings.access_token_denylist_enabled:
+            jti = self._token_manager.get_token_claim(access_token, "jti")
+            if isinstance(jti, str) and jafaal_token_denylist.is_access_token_denied(jti):
+                raise jafaal_exceptions.InvalidTokenError("Access token has been revoked")
+
+        if settings.strict_session_binding:
             self._enforce_session_binding(sid, user_id)
 
         return self._build_principal(

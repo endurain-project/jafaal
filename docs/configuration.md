@@ -51,6 +51,7 @@ the settings and invalidates settings-derived caches (e.g. the token manager).
 | `allow_api_key_query_param` | `False` | Whether API keys may be sent via `?api_key=` (header only by default). |
 | `allow_in_memory_state_store_when_deployed` | `False` | Permit the in-memory state store in a deployed environment (single-worker only; otherwise `create_auth_router()` raises at startup). |
 | `allow_no_rate_limit_when_deployed` | `False` | Permit a deployed environment with no enforcing rate limiter (otherwise `create_auth_router()`/`verify_configuration()` raise at startup). |
+| `access_token_denylist_enabled` | `False` | Record & check revoked access-token `jti`s so `/revoke` kills an access token immediately (one state-store lookup per request). |
 | `argon2_time_cost` | `3` | Argon2 time cost (iterations) for password hashing. |
 | `argon2_memory_cost` | `65536` | Argon2 memory cost, in KiB. |
 | `argon2_parallelism` | `4` | Argon2 parallelism (lanes). |
@@ -154,6 +155,40 @@ API-root path above.
 
 See [Key rotation](key-rotation.md#rotating-the-asymmetric-signing-key) for
 rotating the signing key without downtime.
+
+## Token introspection & revocation
+
+JAFAAL exposes RFC 7662 introspection and RFC 7009 revocation for its own
+access/refresh tokens, mounted on the auth router:
+
+- **`POST <api-root>/auth/introspect`** (RFC 7662) returns `{"active": …}` plus
+  the token's metadata (`sub`, `scope`, `exp`, `typ`, `sid`, …). It is
+  **protected**: the caller must present a credential (JWT or API key) carrying
+  the `auth:introspect` scope. Grant it to a resource-server API key:
+
+    ```python
+    import jafaal
+    jafaal.configure_api_key_scopes([..., jafaal.AUTH_INTROSPECT])  # "auth:introspect"
+    ```
+
+    A token reads as inactive once it expires, its signature/claims don't match,
+    its `jti` is revoked, or its session has been ended (logout / `/revoke`).
+
+- **`POST <api-root>/auth/revoke`** (RFC 7009) — present a token to revoke it
+  (possession is the authorisation); always returns `200`, even for an unknown
+  token.
+    - A **refresh token** deletes its session — always effective.
+    - An **access token** is denylisted by `jti` **only when**
+      `access_token_denylist_enabled=True`; otherwise the short-lived token
+      lapses at expiry. Enable that setting (or `strict_session_binding`) for
+      immediate access-token revocation — each adds one state-store lookup per
+      authenticated request.
+
+!!! note "Distributed deployments"
+    The access-token denylist lives in the state store, so a multi-worker
+    deployment needs a shared backend (e.g.
+    [`RedisStateStore`](ports-and-adapters.md#redisstatestore)) for revocation to
+    apply across workers — the same requirement as progressive lockout.
 
 ## Database: your `Base` and the session factory
 

@@ -174,6 +174,44 @@ class TokenResponseMobile(BaseModel):
     refresh_token_expires_in: StrictInt
 
 
+class TokenIntrospectionResponse(BaseModel):
+    """RFC 7662 token introspection response.
+
+    ``active`` is the only guaranteed field; the rest are populated only for an
+    active token. ``typ`` and ``sid`` are JAFAAL extensions (the token's own type
+    and its session id).
+
+    Attributes:
+        active: Whether the token is currently valid.
+        sub: Subject (user) identifier.
+        scope: Space-delimited granted scopes.
+        typ: JAFAAL token type (``access`` or ``refresh``).
+        token_type: ``Bearer`` for an active token.
+        exp: Expiry (epoch seconds).
+        iat: Issued-at (epoch seconds).
+        nbf: Not-before (epoch seconds).
+        iss: Issuer.
+        aud: Audience.
+        jti: Token identifier.
+        sid: Session identifier (JAFAAL extension).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    active: StrictBool
+    sub: StrictStr | None = None
+    scope: StrictStr | None = None
+    typ: StrictStr | None = None
+    token_type: StrictStr | None = None
+    exp: StrictInt | None = None
+    iat: StrictInt | None = None
+    nbf: StrictInt | None = None
+    iss: StrictStr | None = None
+    aud: StrictStr | None = None
+    jti: StrictStr | None = None
+    sid: StrictStr | None = None
+
+
 class LogoutResponse(BaseModel):
     """
     Response payload returned by the logout endpoint.

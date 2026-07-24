@@ -145,10 +145,12 @@ from .schema import (
     MobileSessionResponse,
     SignUpRequest,
     StepUpVerification,
+    TokenIntrospectionResponse,
     TokenResponseMobile,
     TokenResponseWeb,
 )
 from .scopes import (
+    AUTH_INTROSPECT,
     DEFAULT_SCOPE_CATALOG,
     ScopeCatalog,
     configure_scopes,
@@ -329,6 +331,7 @@ __all__ = [
     "MobileSessionResponse",
     "SignUpRequest",
     "StepUpVerification",
+    "TokenIntrospectionResponse",
     # Password hashing
     "PasswordHasher",
     "PasswordPolicyError",
@@ -351,6 +354,7 @@ __all__ = [
     "get_rate_limiter",
     "reset_rate_limiter",
     # Scopes (host-extensible catalog)
+    "AUTH_INTROSPECT",
     "DEFAULT_SCOPE_CATALOG",
     "ScopeCatalog",
     "configure_scopes",

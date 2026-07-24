@@ -82,6 +82,7 @@ class Event:
     MFA_REPLAY_CHECK_UNAVAILABLE: Final = "mfa.replay_check_unavailable"
     TOKEN_REUSE_GRACE: Final = "token.reuse_grace"
     TOKEN_THEFT_DETECTED: Final = "token.theft_detected"
+    TOKEN_REVOKED: Final = "token.revoked"
     API_KEY_AUTH_SUCCESS: Final = "api_key.auth_success"
     API_KEY_AUTH_FAILURE: Final = "api_key.auth_failure"
     OAUTH_STATE_REPLAY_REJECTED: Final = "oauth_state.replay_rejected"

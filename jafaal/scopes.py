@@ -28,6 +28,13 @@ SESSIONS_WRITE = "sessions:write"
 IDENTITY_PROVIDERS_READ = "identity_providers:read"
 IDENTITY_PROVIDERS_WRITE = "identity_providers:write"
 
+# Scope required to call the token-introspection endpoint (RFC 7662). It is
+# intentionally NOT part of the catalog tiers (never minted into a user's token):
+# grant it to a resource-server API key via
+# ``configure_api_key_scopes([..., AUTH_INTROSPECT])`` so introspection stays a
+# service-to-service capability, as RFC 7662 intends.
+AUTH_INTROSPECT = "auth:introspect"
+
 # Scopes a non-superuser token carries.
 _JAFAAL_REGULAR: tuple[str, ...] = (PROFILE, USERS_READ, IDENTITY_PROVIDERS_READ)
 # Scopes a superuser token carries (a superset of the regular tier).

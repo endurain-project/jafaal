@@ -180,6 +180,11 @@ class AuthSettings:
             with the no-op rate limiter. Off by default: ``create_auth_router``
             / ``verify_configuration`` refuse to start deployed without an
             enforcing limiter unless this is set.
+        access_token_denylist_enabled: When ``True``, revoked access-token
+            ``jti`` values are recorded and checked per request so ``/revoke``
+            kills an access token immediately (one state-store lookup per
+            request). Off by default (access tokens lapse at expiry; revoke the
+            refresh token / session for immediate effect).
         refresh_cookie_prefix: Optional refresh-cookie name-prefix hardening
             (``""``, ``"__Secure-"``, or ``"__Host-"``), applied only in a
             deployed environment. ``"__Host-"`` requires ``refresh_cookie_path``
@@ -258,6 +263,14 @@ class AuthSettings:
     # this toggle adds the same immediacy for *session* revocation at the cost of
     # one extra indexed query per request.
     strict_session_binding: bool = False
+
+    # When True, revoked access-token ``jti`` values are recorded in the state
+    # store and checked on every access-token-authenticated request, so
+    # ``/revoke`` of an access token takes effect immediately (at the cost of one
+    # indexed state-store lookup per request). Off by default: access tokens are
+    # short-lived and lapse at expiry, and revoking the refresh token (which
+    # deletes the session) is the always-effective revocation path.
+    access_token_denylist_enabled: bool = False
 
     # Bound how many accounts a single source IP can lock out by spraying failed
     # logins across usernames (the per-account lockout is otherwise a cheap

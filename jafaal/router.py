@@ -7,9 +7,11 @@ from typing import Annotated
 from fastapi import (
     APIRouter,
     Depends,
+    Form,
     Query,
     Request,
     Response,
+    Security,
     status,
 )
 from fastapi.security import OAuth2PasswordRequestForm
@@ -18,9 +20,11 @@ from sqlalchemy.orm import Session
 import jafaal._internal.internal_dependencies as jafaal_internal_dependencies
 import jafaal._internal.password_hasher as jafaal_password_hasher
 import jafaal._internal.security_stores as jafaal_security_stores
+import jafaal._internal.services.token_admin_service as token_admin_service
 import jafaal._internal.token_manager as jafaal_token_manager
 import jafaal._internal.user_guards as jafaal_user_guards
 import jafaal.audit as jafaal_audit
+import jafaal.dependencies as jafaal_dependencies
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_providers.utils as idp_utils
 import jafaal.identity_service as jafaal_identity_service
@@ -29,6 +33,7 @@ import jafaal.orm as jafaal_orm
 import jafaal.ports as jafaal_ports
 import jafaal.rate_limit as jafaal_rate_limit
 import jafaal.schema as jafaal_schema
+import jafaal.scopes as jafaal_scopes
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.models as jafaal_sessions_models
 import jafaal.sessions.rotated_refresh_tokens.utils as jafaal_sessions_rotated_tokens_utils
@@ -847,3 +852,72 @@ async def logout(
         "Invalid client type",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
+
+@router.post("/introspect", response_model=jafaal_schema.TokenIntrospectionResponse)
+def introspect_token_endpoint(
+    _scopes: Annotated[
+        None,
+        Security(jafaal_dependencies.check_auth_scopes, scopes=[jafaal_scopes.AUTH_INTROSPECT]),
+    ],
+    token: Annotated[str, Form()],
+    token_manager: Annotated[
+        jafaal_token_manager.TokenManager,
+        Depends(jafaal_token_manager.get_token_manager),
+    ],
+    password_hasher: Annotated[
+        jafaal_password_hasher.PasswordHasher,
+        Depends(jafaal_password_hasher.get_password_hasher),
+    ],
+    db: Annotated[Session, Depends(jafaal_orm.get_db)],
+    token_type_hint: Annotated[str | None, Form()] = None,
+):
+    """Introspect a JAFAAL token (RFC 7662).
+
+    Protected: the caller must present a credential (JWT or API key) carrying the
+    ``auth:introspect`` scope — grant it to a resource-server API key via
+    ``jafaal.configure_api_key_scopes([..., jafaal.scopes.AUTH_INTROSPECT])``.
+
+    Args:
+        token: The token to introspect (form field).
+        token_type_hint: Optional RFC 7662 hint; ignored (the token's ``typ``
+            claim is authoritative).
+
+    Returns:
+        The RFC 7662 introspection response.
+    """
+    return token_admin_service.introspect_token(token, token_manager, password_hasher, db)
+
+
+@router.post("/revoke", response_model=None, status_code=status.HTTP_200_OK)
+@jafaal_rate_limit.limit(jafaal_rate_limit.WRITE)
+def revoke_token_endpoint(
+    token: Annotated[str, Form()],
+    token_manager: Annotated[
+        jafaal_token_manager.TokenManager,
+        Depends(jafaal_token_manager.get_token_manager),
+    ],
+    password_hasher: Annotated[
+        jafaal_password_hasher.PasswordHasher,
+        Depends(jafaal_password_hasher.get_password_hasher),
+    ],
+    db: Annotated[Session, Depends(jafaal_orm.get_db)],
+    token_type_hint: Annotated[str | None, Form()] = None,
+) -> dict:
+    """Revoke a JAFAAL token (RFC 7009).
+
+    Present the token to revoke it (possession is the authorisation). A refresh
+    token deletes its session; an access token is denylisted when
+    ``access_token_denylist_enabled`` is set. Always returns 200, even for an
+    unknown token.
+
+    Args:
+        token: The token to revoke (form field).
+        token_type_hint: Optional RFC 7009 hint; ignored (the token's ``typ``
+            claim is authoritative).
+
+    Returns:
+        An empty object (RFC 7009 mandates a 200 with no error).
+    """
+    token_admin_service.revoke_token(token, token_manager, password_hasher, db)
+    return {}
