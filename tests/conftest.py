@@ -279,6 +279,51 @@ def make_user():
     return _make
 
 
+class ConcurrentDB:
+    """Handle onto a file-backed database that supports real thread concurrency."""
+
+    def __init__(self, session_factory, user_id):
+        self.session_factory = session_factory
+        self.user_id = user_id
+
+    def session(self):
+        """Return a fresh Session with its own connection (safe per thread)."""
+        return self.session_factory()
+
+
+@pytest.fixture
+def concurrent_db(tmp_path):
+    """A file-backed SQLite database that gives each thread its own connection.
+
+    The suite's default engine is in-memory SQLite behind a ``StaticPool`` — a
+    single connection shared by every thread — which cannot express true write
+    concurrency, so a race is only ever *simulated* there. Tests that must prove
+    a DB-level atomic guarantee (one winner under genuine parallelism) use this
+    fixture instead: a temp-file database whose pool hands each thread a real,
+    independent connection, so concurrent transactions actually contend and the
+    database — not Python — arbitrates.
+
+    Yields a :class:`ConcurrentDB` with a session factory and one seeded user.
+    """
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'concurrency.db'}",
+        # ``timeout`` is SQLite's busy-handler: wait for the writer lock rather
+        # than failing the moment another thread holds it.
+        connect_args={"check_same_thread": False, "timeout": 30},
+    )
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    try:
+        with session_factory() as setup:
+            user = Users(username="racer", email="racer@test.dev", is_active=True, is_verified=True)
+            setup.add(user)
+            setup.commit()
+            setup.refresh(user)
+            yield ConcurrentDB(session_factory, user.id)
+    finally:
+        engine.dispose()
+
+
 @pytest.fixture
 def client():
     """A FastAPI TestClient with the full JAFAAL router mounted under /api/v1."""

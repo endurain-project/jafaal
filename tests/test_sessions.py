@@ -1,6 +1,7 @@
 """Tests for session utilities, session CRUD, refresh-token rotation, and OAuth state."""
 
 import dataclasses
+import threading
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -276,8 +277,8 @@ def test_grace_replay_is_idempotent_across_duplicate_reads(db, make_user):
     # background refresh) must converge on the single replacement minted by the
     # original rotation — never diverge, escalate to theft, or re-rotate.
     # (True thread-parallelism of the lockout primitive is covered in
-    # test_state_store.py; in-memory SQLite shares one connection, so the DB-level
-    # guarantee is asserted here deterministically.)
+    # test_state_store.py; the DB-level guarantee under genuine thread
+    # concurrency is proven below via the ``concurrent_db`` fixture.)
     user = make_user()
     session_utils.create_session("fam-cc", user, _request(), "initial-rt", password_hasher, db)
     exp = datetime.now(UTC) + timedelta(days=7)
@@ -297,6 +298,112 @@ def test_grace_replay_is_idempotent_across_duplicate_reads(db, make_user):
     assert {r[0] for r in results} == {"new-cc"}
     # It stays an in-grace reuse throughout: no theft escalation, no re-rotation.
     assert rotated_utils.check_token_reuse("old-cc", db) == (True, True)
+
+
+# --------------------------------------------------------------------------- #
+# DB-level atomicity under REAL thread concurrency
+#
+# These use the file-backed ``concurrent_db`` fixture so each thread gets its own
+# connection and the database (not Python) arbitrates the race — the in-memory
+# suite engine shares a single connection and cannot express write contention.
+# --------------------------------------------------------------------------- #
+
+
+def _run_concurrently(work, threads=8):
+    """Run ``work(i)`` in ``threads`` threads released simultaneously.
+
+    Returns the list of ``(result, exception)`` pairs in completion-agnostic
+    order. A barrier maximises the overlap so the contention is genuine.
+    """
+    barrier = threading.Barrier(threads)
+    outcomes: list[tuple[object, BaseException | None]] = []
+    lock = threading.Lock()
+
+    def _worker(index):
+        barrier.wait()
+        try:
+            result, err = work(index), None
+        except BaseException as exception:  # recorded, then asserted on below
+            result, err = None, exception
+        with lock:
+            outcomes.append((result, err))
+
+    workers = [threading.Thread(target=_worker, args=(i,)) for i in range(threads)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=60)
+    return outcomes
+
+
+def test_token_exchange_claim_has_exactly_one_winner_under_real_concurrency(concurrent_db):
+    # The one-shot PKCE exchange is guarded by a single conditional UPDATE
+    # (claim_session_for_token_exchange). Under genuine parallelism exactly one
+    # caller may claim it; any other outcome is a double-spend of the code.
+    with concurrent_db.session() as setup:
+        session_utils.create_session(
+            "race-exchange",
+            SimpleNamespace(id=concurrent_db.user_id),
+            _request(),
+            None,
+            password_hasher,
+            setup,
+        )
+
+    def _claim(index):
+        with concurrent_db.session() as session:
+            return sessions_crud.claim_session_for_token_exchange("race-exchange", f"hash-{index}", session)
+
+    outcomes = _run_concurrently(_claim)
+    assert [err for _, err in outcomes if err is not None] == []
+    assert [result for result, _ in outcomes].count(True) == 1
+    assert [result for result, _ in outcomes].count(False) == len(outcomes) - 1
+
+    # Exactly one refresh-token hash was persisted — the winner's.
+    with concurrent_db.session() as check:
+        claimed = sessions_crud.get_session_by_id("race-exchange", check)
+        assert claimed.tokens_exchanged is True
+        assert claimed.refresh_token.startswith("hash-")
+
+
+def test_concurrent_rotation_of_one_token_records_a_single_row(concurrent_db):
+    # Two refreshes presenting the SAME refresh token must not both record a
+    # rotation: the unique index on the token hash is what makes the rotation
+    # single-use at the database level (no double-spend), so exactly one of the
+    # racing writers may commit.
+    with concurrent_db.session() as setup:
+        session_utils.create_session(
+            "race-family",
+            SimpleNamespace(id=concurrent_db.user_id),
+            _request(),
+            "initial-rt",
+            password_hasher,
+            setup,
+        )
+    exp = datetime.now(UTC) + timedelta(days=7)
+
+    def _rotate(index):
+        with concurrent_db.session() as session:
+            rotated_utils.store_rotated_token(
+                "contended-token",
+                "race-family",
+                0,
+                session,
+                replacement_refresh_token=f"replacement-{index}",
+                replacement_refresh_token_exp=exp,
+            )
+            return index
+
+    outcomes = _run_concurrently(_rotate)
+    winners = [result for result, err in outcomes if err is None]
+    assert len(winners) == 1, "more than one rotation of the same token committed"
+
+    # One row, and the replayable replacement is the winner's — the losers'
+    # replacements were never persisted, so an in-grace retry cannot diverge.
+    with concurrent_db.session() as check:
+        row = rotated_crud.get_rotated_token_by_hash(rotated_utils.hmac_hash_token("contended-token"), check)
+        assert row is not None
+        assert crypto.decrypt_token_fernet(row.replacement_refresh_token) == f"replacement-{winners[0]}"
 
 
 def test_rotated_token_reuse_after_grace_is_theft(db, make_user):

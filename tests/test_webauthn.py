@@ -1,21 +1,32 @@
 """Tests for the WebAuthn / passkey ceremonies.
 
-``py_webauthn`` is server-side only (no authenticator simulator), so the tests
-mock the two verification calls (``verify_registration_response`` /
-``verify_authentication_response``) at the boundary and exercise all of JAFAAL's
-plumbing for real: challenge lifecycle, credential persistence, token issuance,
-sign-count updates, the second-factor login branch, error handling, config
-resolution, and the optional-dependency guard.
+Most tests mock the two verification calls
+(``verify_registration_response`` / ``verify_authentication_response``) at the
+boundary and exercise all of JAFAAL's plumbing for real: challenge lifecycle,
+credential persistence, token issuance, sign-count updates, the second-factor
+login branch, error handling, config resolution, and the optional-dependency
+guard.
+
+The final section goes further and drives the passwordless ceremony with a
+**real software authenticator** (a genuine ES256 key signing a real assertion),
+so ``py_webauthn`` performs actual signature verification and sign-count clone
+detection with nothing mocked.
 """
 
 from __future__ import annotations
 
 import base64
+import hashlib
+import json
+import struct
 from contextlib import contextmanager
 from dataclasses import replace
 from types import SimpleNamespace
 
+import cbor2
 import pytest
+from cryptography.hazmat.primitives import hashes as crypto_hashes
+from cryptography.hazmat.primitives.asymmetric import ec
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 
 import jafaal
@@ -107,14 +118,14 @@ def mock_verify(monkeypatch):
     return state
 
 
-def _register_credential(user_id, *, raw_id=b"cred-1", sign_count=0, label="My Key"):
+def _register_credential(user_id, *, raw_id=b"cred-1", sign_count=0, label="My Key", public_key=b"cose-public-key"):
     """Persist a passkey directly (bypassing the ceremony) for auth/2FA tests."""
     session = jafaal_orm.get_sessionmaker()()
     try:
         return webauthn_crud.create_credential(
             user_id=user_id,
             credential_id=bytes_to_base64url(raw_id),
-            public_key=base64.b64encode(b"cose-public-key").decode("ascii"),
+            public_key=base64.b64encode(public_key).decode("ascii"),
             sign_count=sign_count,
             transports="internal",
             aaguid=None,
@@ -564,3 +575,190 @@ def _a_fernet_key() -> str:
     from cryptography.fernet import Fernet
 
     return Fernet.generate_key().decode()
+
+
+# --------------------------------------------------------------------------- #
+# REAL-CRYPTO ceremonies (nothing mocked)
+#
+# A software authenticator holding a genuine ES256 key signs real assertions, so
+# ``py_webauthn`` runs actual signature verification and sign-count clone
+# detection against the key JAFAAL persisted at registration. This closes the
+# fidelity gap left by the mocked verification above: the stored public key, the
+# stored sign count, and the challenge all have to be correct end-to-end or the
+# assertion simply will not verify.
+# --------------------------------------------------------------------------- #
+
+RP_ID = "app.test"
+ORIGIN = "https://app.test"
+
+
+class SoftAuthenticator:
+    """A minimal software WebAuthn authenticator (real ES256 key, real signatures)."""
+
+    def __init__(self, credential_id=b"real-cred"):
+        self.credential_id = credential_id
+        self._key = ec.generate_private_key(ec.SECP256R1())
+
+    @property
+    def cose_public_key(self) -> bytes:
+        """COSE_Key encoding of the public key, as an authenticator would report it."""
+        numbers = self._key.public_key().public_numbers()
+        return cbor2.dumps(
+            {
+                1: 2,  # kty: EC2
+                3: -7,  # alg: ES256
+                -1: 1,  # crv: P-256
+                -2: numbers.x.to_bytes(32, "big"),
+                -3: numbers.y.to_bytes(32, "big"),
+            }
+        )
+
+    def assert_(self, challenge_b64: str, *, sign_count: int, user_handle=b"handle") -> dict:
+        """Produce a real, signed authentication assertion for ``challenge_b64``."""
+        # rp_id_hash || flags(UP|UV) || signCount
+        authenticator_data = hashlib.sha256(RP_ID.encode()).digest() + bytes([0x05]) + struct.pack(">I", sign_count)
+        client_data = json.dumps(
+            {"type": "webauthn.get", "challenge": challenge_b64, "origin": ORIGIN},
+            separators=(",", ":"),
+        ).encode()
+        signature = self._key.sign(
+            authenticator_data + hashlib.sha256(client_data).digest(),
+            ec.ECDSA(crypto_hashes.SHA256()),
+        )
+        encoded_id = bytes_to_base64url(self.credential_id)
+        return {
+            "id": encoded_id,
+            "rawId": encoded_id,
+            "type": "public-key",
+            "response": {
+                "clientDataJSON": bytes_to_base64url(client_data),
+                "authenticatorData": bytes_to_base64url(authenticator_data),
+                "signature": bytes_to_base64url(signature),
+                "userHandle": bytes_to_base64url(user_handle),
+            },
+        }
+
+
+def _begin_passwordless(client, username="alice"):
+    """Start a passwordless ceremony; return (challenge_id, challenge_b64)."""
+    begin = client.post(AUTH_BEGIN, json={"username": username})
+    assert begin.status_code == 200
+    body = begin.json()
+    return body["challenge_id"], body["options"]["challenge"]
+
+
+def test_real_assertion_authenticates_and_advances_sign_count(client, make_user, db):
+    # Full passwordless login with a real signature verified by py_webauthn.
+    authenticator = SoftAuthenticator()
+    user = make_user(username="alice")
+    _register_credential(
+        user.id,
+        raw_id=authenticator.credential_id,
+        sign_count=4,
+        public_key=authenticator.cose_public_key,
+    )
+
+    challenge_id, challenge = _begin_passwordless(client)
+    resp = client.post(
+        AUTH_COMPLETE,
+        json={"challenge_id": challenge_id, "credential": authenticator.assert_(challenge, sign_count=5)},
+        headers=WEB,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["access_token"]
+
+    stored = webauthn_crud.get_credential_by_credential_id(bytes_to_base64url(authenticator.credential_id), db)
+    assert stored.sign_count == 5
+
+
+def test_real_assertion_with_regressed_sign_count_is_rejected_as_clone(client, make_user, db):
+    # Clone detection: an authenticator whose counter goes *backwards* signals a
+    # duplicated credential. The signature is valid, so only the sign-count check
+    # can reject this - and the stored counter must not move.
+    authenticator = SoftAuthenticator()
+    user = make_user(username="alice")
+    _register_credential(
+        user.id,
+        raw_id=authenticator.credential_id,
+        sign_count=9,
+        public_key=authenticator.cose_public_key,
+    )
+
+    challenge_id, challenge = _begin_passwordless(client)
+    resp = client.post(
+        AUTH_COMPLETE,
+        json={"challenge_id": challenge_id, "credential": authenticator.assert_(challenge, sign_count=3)},
+        headers=WEB,
+    )
+    assert resp.status_code == 401
+
+    stored = webauthn_crud.get_credential_by_credential_id(bytes_to_base64url(authenticator.credential_id), db)
+    assert stored.sign_count == 9  # unchanged - the clone did not advance it
+
+
+def test_real_assertion_replayed_sign_count_is_rejected_as_clone(client, make_user):
+    # An exactly-equal counter is also a clone signal (it must strictly increase),
+    # which is what catches a replayed assertion from a duplicated authenticator.
+    authenticator = SoftAuthenticator()
+    user = make_user(username="alice")
+    _register_credential(
+        user.id,
+        raw_id=authenticator.credential_id,
+        sign_count=6,
+        public_key=authenticator.cose_public_key,
+    )
+
+    challenge_id, challenge = _begin_passwordless(client)
+    resp = client.post(
+        AUTH_COMPLETE,
+        json={"challenge_id": challenge_id, "credential": authenticator.assert_(challenge, sign_count=6)},
+        headers=WEB,
+    )
+    assert resp.status_code == 401
+
+
+def test_real_assertion_from_a_different_key_is_rejected(client, make_user):
+    # The signature must verify against the *stored* public key: an attacker who
+    # knows the credential id but not the private key cannot authenticate.
+    legitimate = SoftAuthenticator()
+    attacker = SoftAuthenticator(credential_id=legitimate.credential_id)
+    user = make_user(username="alice")
+    _register_credential(
+        user.id,
+        raw_id=legitimate.credential_id,
+        sign_count=0,
+        public_key=legitimate.cose_public_key,
+    )
+
+    challenge_id, challenge = _begin_passwordless(client)
+    resp = client.post(
+        AUTH_COMPLETE,
+        json={"challenge_id": challenge_id, "credential": attacker.assert_(challenge, sign_count=1)},
+        headers=WEB,
+    )
+    assert resp.status_code == 401
+
+
+def test_real_assertion_for_another_challenge_is_rejected(client, make_user):
+    # The assertion is bound to the server-issued challenge, so one signed for a
+    # different challenge (a captured/replayed ceremony) cannot be substituted.
+    authenticator = SoftAuthenticator()
+    user = make_user(username="alice")
+    _register_credential(
+        user.id,
+        raw_id=authenticator.credential_id,
+        sign_count=0,
+        public_key=authenticator.cose_public_key,
+    )
+
+    challenge_id, _ = _begin_passwordless(client)
+    foreign_challenge = bytes_to_base64url(b"\x02" * 32)
+    resp = client.post(
+        AUTH_COMPLETE,
+        json={
+            "challenge_id": challenge_id,
+            "credential": authenticator.assert_(foreign_challenge, sign_count=1),
+        },
+        headers=WEB,
+    )
+    assert resp.status_code == 401

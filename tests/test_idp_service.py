@@ -798,3 +798,78 @@ def test_handle_callback_oidc_verified_id_token_succeeds(db, monkeypatch):
     result = asyncio.run(svc.handle_callback(idp, "auth-code", state_id, _request(), password_hasher, db, state_obj))
     assert result["user"].username == "oidcuser"
     assert links_crud.get_user_identity_provider_by_subject_and_idp_id(idp.id, "idp-oidc-1", db) is not None
+
+
+# --------------------------------------------------------------------------- #
+# SSRF guard enforced END-TO-END through the service (guard NOT stubbed)
+#
+# Every other test here stubs ``reject_private_url`` so it can use example.com
+# hostnames offline. That leaves the wiring — service pre-flight -> real guard —
+# unproven, so these tests run the genuine guard. They use IP literals
+# (127.0.0.1 / 169.254.169.254), which ``getaddrinfo`` resolves locally, so no
+# network access or DNS is required.
+# --------------------------------------------------------------------------- #
+
+
+def _link_with_refresh_token(db, user_id, idp_id, token="rt"):
+    links_crud.create_user_identity_provider(user_id, idp_id, f"sub-{idp_id}", db)
+    link = links_crud.get_user_identity_provider_by_user_id_and_idp_id(user_id, idp_id, db)
+    link.idp_refresh_token = crypto.encrypt_token_fernet(token)
+    db.commit()
+    return link
+
+
+@pytest.mark.parametrize(
+    "token_endpoint",
+    [
+        "https://127.0.0.1/token",  # loopback
+        "https://169.254.169.254/token",  # cloud instance metadata
+        "https://10.0.0.5/token",  # private RFC1918
+    ],
+)
+def test_service_refuses_private_token_endpoint_with_real_guard(db, make_user, token_endpoint):
+    # The admin-configured token endpoint is SSRF-checked by the service before
+    # any credential-bearing call is made.
+    user = make_user()
+    idp = _create_idp(db, token_endpoint=token_endpoint)
+    _link_with_refresh_token(db, user.id, idp.id)
+
+    with pytest.raises(exc.InvalidRequestError):
+        asyncio.run(IdentityProviderService().refresh_idp_session(user.id, idp.id, db))
+
+
+def test_service_refuses_private_discovery_url_with_real_guard(db, make_user):
+    # Discovery is pre-flighted too, so a private issuer never resolves an
+    # endpoint (the service reports an unresolvable provider rather than
+    # dialling internal infrastructure).
+    user = make_user()
+    idp = _create_idp(db, issuer_url="https://127.0.0.1")
+    _link_with_refresh_token(db, user.id, idp.id)
+
+    with pytest.raises(exc.IdentityProviderError):
+        asyncio.run(IdentityProviderService().refresh_idp_session(user.id, idp.id, db))
+
+
+def test_service_honours_ssrf_allow_list_end_to_end(db, make_user, monkeypatch):
+    # The opt-in escape hatch must work through the same un-stubbed path: with
+    # the host allow-listed, the identical request proceeds past the guard.
+    user = make_user()
+    idp = _create_idp(db, token_endpoint="https://127.0.0.1/token")
+    _link_with_refresh_token(db, user.id, idp.id)
+    new_token = {"access_token": "at", "refresh_token": "rt2", "expires_in": 300}
+    svc = IdentityProviderService()
+    monkeypatch.setattr(svc, "_create_oauth_client", lambda **kw: _FakeOAuthClient(new_token, None))
+
+    with _settings(ssrf_allowed_hosts=("127.0.0.1",)):
+        assert asyncio.run(svc.refresh_idp_session(user.id, idp.id, db)) == new_token
+
+
+def test_service_refuses_http_token_endpoint_with_real_guard(db, make_user):
+    # idp_require_https is threaded into the same un-stubbed pre-flight, so a
+    # cleartext endpoint is refused even when the host is allow-listed.
+    user = make_user()
+    idp = _create_idp(db, token_endpoint="http://127.0.0.1/token")
+    _link_with_refresh_token(db, user.id, idp.id)
+
+    with _settings(ssrf_allowed_hosts=("127.0.0.1",)), pytest.raises(exc.InvalidRequestError, match="HTTPS"):
+        asyncio.run(IdentityProviderService().refresh_idp_session(user.id, idp.id, db))

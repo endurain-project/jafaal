@@ -96,6 +96,10 @@ test = [
     "alembic>=1.13",
     # The WebAuthn/passkey suite exercises the registration/authentication ceremonies.
     "webauthn>=2.0.0",
+    # The real-crypto passkey tests build COSE public keys for the software
+    # authenticator. Transitively a py_webauthn dependency; declared explicitly
+    # so the test build never relies on it implicitly.
+    "cbor2>=5.6",
 ]
 # Real database drivers for the CI database matrix (Postgres + MySQL). The
 # default test run uses in-memory SQLite (built into Python) and needs neither;

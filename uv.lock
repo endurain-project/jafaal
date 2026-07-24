@@ -1045,6 +1045,7 @@ webauthn = [
 dev = [
     { name = "alembic" },
     { name = "authlib" },
+    { name = "cbor2" },
     { name = "faker" },
     { name = "fakeredis" },
     { name = "hatch" },
@@ -1074,6 +1075,7 @@ lint = [
 test = [
     { name = "alembic" },
     { name = "authlib" },
+    { name = "cbor2" },
     { name = "faker" },
     { name = "fakeredis" },
     { name = "httpx" },
@@ -1126,6 +1128,7 @@ provides-extras = ["mfa", "sso", "webauthn", "redis", "migrations", "all"]
 dev = [
     { name = "alembic", specifier = ">=1.13" },
     { name = "authlib", specifier = ">=1.6.11" },
+    { name = "cbor2", specifier = ">=5.6" },
     { name = "faker", specifier = ">=40.15.0" },
     { name = "fakeredis", specifier = ">=2.21.0" },
     { name = "hatch", specifier = ">=1.16.5" },
@@ -1155,6 +1158,7 @@ lint = [
 test = [
     { name = "alembic", specifier = ">=1.13" },
     { name = "authlib", specifier = ">=1.6.11" },
+    { name = "cbor2", specifier = ">=5.6" },
     { name = "faker", specifier = ">=40.15.0" },
     { name = "fakeredis", specifier = ">=2.21.0" },
     { name = "httpx", specifier = ">=0.28.1" },
