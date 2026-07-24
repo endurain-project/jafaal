@@ -2,22 +2,27 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from datetime import UTC, datetime
 
 import pytest
+from fastapi import Request
 
 import jafaal
 import jafaal.ports as ports
+import jafaal.rate_limit as rate_limit
 from jafaal.adapters import (
     DEFAULT_PASSWORD_POLICY,
     DEFAULT_SIGNUP_CONFIG,
     CompositeAuthEventSink,
     LoggingAuthEventSink,
     SqlAlchemyUserRepository,
+    StateStoreRateLimiter,
     StaticSettingsProvider,
 )
 from jafaal.exceptions import NotFoundError
+from jafaal.state_store import StateStoreUnavailableError
 
 try:
     import fakeredis
@@ -392,3 +397,155 @@ class TestRedisStateStore:
         store = RedisStateStore(client=_BrokenClient())
         with pytest.raises(StateStoreUnavailableError):
             store.get("k")
+
+    def test_increment_counts_and_sets_ttl(self):
+        raw = fakeredis.FakeStrictRedis()
+        store = RedisStateStore(client=raw)
+        assert [store.increment("c", 60) for _ in range(3)] == [1, 2, 3]
+        # The counter carries a TTL so fixed-window rate-limit buckets self-expire.
+        assert 0 < raw.ttl("c") <= 60
+
+    def test_increment_matches_in_memory_store(self):
+        redis_store = RedisStateStore(client=fakeredis.FakeStrictRedis())
+        memory = jafaal.InMemoryStateStore()
+        redis_counts = [redis_store.increment("c", 60) for _ in range(4)]
+        memory_counts = [memory.increment("c", 60) for _ in range(4)]
+        assert redis_counts == memory_counts == [1, 2, 3, 4]
+
+
+# --------------------------------------------------------------------------- #
+# StateStoreRateLimiter
+# --------------------------------------------------------------------------- #
+
+
+def _login(client, username="alice", password="Str0ng!Pass"):
+    return client.post(
+        "/api/v1/auth/login",
+        data={"username": username, "password": password},
+        headers=WEB,
+    )
+
+
+def _make_request(host: str) -> Request:
+    """A minimal Starlette/FastAPI ``Request`` whose client IP is ``host``."""
+    return Request({"type": "http", "headers": [], "client": (host, 0)})
+
+
+class TestParseBudget:
+    def test_valid_budgets(self):
+        from jafaal.adapters.rate_limiter import _parse_budget
+
+        assert _parse_budget("10/minute") == (10, 60)
+        assert _parse_budget("30/hour") == (30, 3600)
+        assert _parse_budget(" 5 / second ") == (5, 1)
+        assert _parse_budget("2/days") == (2, 86400)
+
+    @pytest.mark.parametrize("bad", ["10", "abc/minute", "10/fortnight", ""])
+    def test_invalid_budgets_raise(self, bad):
+        from jafaal.adapters.rate_limiter import _parse_budget
+
+        with pytest.raises(ValueError):
+            _parse_budget(bad)
+
+
+class TestStateStoreRateLimiter:
+    def test_installing_it_flips_off_the_no_op_limiter(self):
+        jafaal.configure_rate_limiter(StateStoreRateLimiter())
+        try:
+            assert rate_limit.is_enforcing() is True
+        finally:
+            jafaal.reset_rate_limiter()
+
+    def test_blocks_requests_over_budget(self, client, make_user):
+        make_user(username="alice")
+        original = jafaal.get_settings()
+        # A wide window keeps every request in one fixed-window bucket for the
+        # duration of the test (no minute/hour-boundary flakiness).
+        jafaal.configure(dataclasses.replace(original, rate_limit_sensitive="3/hour"))
+        jafaal.configure_rate_limiter(StateStoreRateLimiter())
+        try:
+            for _ in range(3):
+                assert _login(client).status_code == 200
+            blocked = _login(client)
+            assert blocked.status_code == 429
+            assert int(blocked.headers["Retry-After"]) > 0
+        finally:
+            jafaal.configure(original)
+            jafaal.reset_rate_limiter()
+
+    def test_separate_ips_have_separate_counters(self):
+        original = jafaal.get_settings()
+        jafaal.configure(dataclasses.replace(original, rate_limit_sensitive="1/hour"))
+        limiter = StateStoreRateLimiter()
+
+        @limiter.limit(rate_limit.SENSITIVE)
+        def endpoint(request):
+            return "ok"
+
+        try:
+            # Each IP gets its own budget: the first hit per IP is allowed, and
+            # only the second hit from the *same* IP trips the 1/hour limit.
+            assert endpoint(request=_make_request("1.1.1.1")) == "ok"
+            assert endpoint(request=_make_request("2.2.2.2")) == "ok"
+            with pytest.raises(jafaal.RateLimitedError):
+                endpoint(request=_make_request("1.1.1.1"))
+        finally:
+            jafaal.configure(original)
+
+    async def test_wraps_async_endpoints(self):
+        limiter = StateStoreRateLimiter()
+
+        @limiter.limit(rate_limit.WRITE)
+        async def endpoint(request):
+            return "async-ok"
+
+        assert await endpoint(request=_make_request("9.9.9.9")) == "async-ok"
+
+    def test_fails_open_when_no_request_argument(self):
+        limiter = StateStoreRateLimiter()
+
+        @limiter.limit(rate_limit.SENSITIVE)
+        def endpoint(x):
+            return x * 2
+
+        # No Request in args/kwargs → the limiter cannot identify a client, so it
+        # passes the call through untouched instead of erroring.
+        assert endpoint(21) == 42
+
+    def test_fails_open_when_state_store_unavailable(self, client, make_user):
+        make_user(username="alice")
+        original = jafaal.get_settings()
+        jafaal.configure(dataclasses.replace(original, rate_limit_sensitive="1/hour"))
+
+        class _BrokenStore(jafaal.InMemoryStateStore):
+            def increment(self, key, ttl_seconds):
+                raise StateStoreUnavailableError("limiter backend down")
+
+        jafaal.configure_state_store(_BrokenStore())
+        jafaal.configure_rate_limiter(StateStoreRateLimiter())
+        try:
+            # Budget is 1/hour, so requests 2+ would 429 if the limiter counted;
+            # a state-store outage must instead fail open so auth stays up.
+            for _ in range(3):
+                assert _login(client).status_code == 200
+        finally:
+            jafaal.configure(original)
+            jafaal.reset_state_store()
+            jafaal.reset_rate_limiter()
+
+    def test_fails_open_on_malformed_budget(self):
+        original = jafaal.get_settings()
+        jafaal.configure(dataclasses.replace(original, rate_limit_sensitive="not-a-budget"))
+        limiter = StateStoreRateLimiter()
+
+        @limiter.limit(rate_limit.SENSITIVE)
+        def endpoint(request):
+            return "ok"
+
+        try:
+            # A misconfigured budget must not wedge the endpoint shut.
+            for _ in range(5):
+                assert endpoint(request=_make_request("1.1.1.1")) == "ok"
+        finally:
+            jafaal.configure(original)
+

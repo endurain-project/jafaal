@@ -76,9 +76,10 @@ def _warn_on_insecure_defaults() -> None:
     if not jafaal_rate_limit.is_enforcing():
         logger.warning(
             "JAFAAL rate limiting is not configured: the no-op limiter is active, so login / MFA / "
-            "password-reset / refresh endpoints are NOT rate-limited. Pass rate_limiter= to "
-            "create_auth_router() (or call jafaal.configure_rate_limiter(...)) with a real limiter in "
-            "production. Per-account progressive lockout still applies."
+            "password-reset / refresh endpoints are NOT rate-limited. Install a real limiter — the "
+            "batteries-included jafaal.adapters.StateStoreRateLimiter needs no extra dependency — via "
+            "rate_limiter= on create_auth_router() (or jafaal.configure_rate_limiter(...)) in production. "
+            "Per-account progressive lockout still applies."
         )
 
     deployed = jafaal_settings.is_configured() and jafaal_settings.get_settings().is_deployed

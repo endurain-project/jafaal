@@ -102,6 +102,17 @@ class AuthSettings:
             multi-worker/replica deployment would fragment progressive-lockout
             and TOTP-replay state per-worker. Set ``True`` only for a genuine
             single-worker deployment.
+        strict_session_binding: When ``True``, every access-token-authenticated
+            request verifies the token's ``sid`` session still exists and is
+            valid, so logout / single-session revocation is immediate instead of
+            bounded by the access-token lifetime. Off by default (stateless
+            access-token validation); adds one indexed session lookup per request.
+        login_ip_lockout_enabled: When ``True`` (default), a per-source-IP backoff
+            bounds how many accounts one IP can lock out by spraying failed
+            logins across usernames (the per-account lockout is otherwise a cheap
+            targeted-DoS lever). Relies on an accurate client IP (configure
+            ``trusted_proxies`` behind a reverse proxy); disable if a shared
+            egress IP (large NAT / load balancer) causes false lockouts.
         audit_include_pii: When True (default), audit records carry direct
             identifiers (plaintext username, client IP, email). Set False to
             drop them (substituting a one-way username hash) for PII-minimal
@@ -184,6 +195,24 @@ class AuthSettings:
     # on the process-local in-memory state store (which would fragment lockout /
     # TOTP-replay state). create_auth_router() enforces this.
     allow_in_memory_state_store_when_deployed: bool = False
+
+    # When True, every access-token-authenticated request also verifies that the
+    # token's session (its ``sid`` claim) still exists and is valid, so logout and
+    # single-session revocation take effect immediately instead of waiting for the
+    # short-lived access token to expire. Off by default: access tokens are
+    # validated statelessly (no per-request session lookup). A deactivated *user*
+    # is rejected immediately regardless (the user row is loaded every request);
+    # this toggle adds the same immediacy for *session* revocation at the cost of
+    # one extra indexed query per request.
+    strict_session_binding: bool = False
+
+    # Bound how many accounts a single source IP can lock out by spraying failed
+    # logins across usernames (the per-account lockout is otherwise a cheap
+    # targeted-DoS lever). After enough total failures from one IP its logins are
+    # throttled; reset on any successful login from that IP. Relies on an
+    # accurate client IP (configure trusted_proxies behind a reverse proxy).
+    # Disable if a shared egress IP (large NAT / load balancer) trips it.
+    login_ip_lockout_enabled: bool = True
 
     # --- audit ---
     # When False, the jafaal.audit stream drops direct identifiers (plaintext

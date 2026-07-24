@@ -5,12 +5,15 @@ object-level authorization guard on the session endpoints.
 """
 
 import pyotp
+import pytest
 
 import jafaal
+import jafaal.exceptions as exc
 import jafaal.mfa.crud as mfa_crud
 import jafaal.orm as jafaal_orm
 from jafaal import scopes as scopes_mod
 from jafaal._core import crypto
+from jafaal._internal.internal_dependencies import ClientType, get_client_type
 
 WEB = {"X-Client-Type": "web"}
 
@@ -55,10 +58,94 @@ def test_login_unknown_user_401(client):
     assert resp.status_code == 401
 
 
+def test_login_ip_lockout_blocks_spray_across_usernames(client, make_user):
+    from jafaal._internal.security_stores import get_failed_login_attempts
+
+    store = get_failed_login_attempts()
+    # Pre-load 49 sprayed failures from this source IP (just under the 50 threshold).
+    for _ in range(49):
+        store.record_ip_failure("testclient")
+
+    # One real failed login via HTTP crosses the threshold (the handler records
+    # the IP failure) and trips the per-IP backoff.
+    first = client.post(
+        "/api/v1/auth/login",
+        data={"username": "u-50", "password": "whatever"},
+        headers=WEB,
+    )
+    assert first.status_code == 401  # auth failed; the IP is now locked
+
+    # A login for a DIFFERENT, never-seen account is refused with 429 — proving
+    # the IP backoff bounds cross-account spray independently of per-account state.
+    blocked = client.post(
+        "/api/v1/auth/login",
+        data={"username": "u-51", "password": "whatever"},
+        headers=WEB,
+    )
+    assert blocked.status_code == 429
+    assert "network" in blocked.json()["detail"].lower()
+
+
+def test_successful_login_resets_ip_backoff(client, make_user):
+    from jafaal._internal.security_stores import get_failed_login_attempts
+
+    make_user(username="victim", password="Str0ng!Pass")
+    store = get_failed_login_attempts()
+    for _ in range(49):
+        store.record_ip_failure("testclient")
+
+    # A successful login from this IP clears the per-IP failure counter...
+    assert _login(client, username="victim").status_code == 200
+
+    # ...so it takes a fresh 49 failures again to approach the lock (not 98).
+    for _ in range(49):
+        store.record_ip_failure("testclient")
+    assert store.is_ip_locked_out("testclient") is False
+
+
 def test_login_missing_client_type_header_rejected(client, make_user):
     make_user(username="alice")
     resp = client.post("/api/v1/auth/login", data={"username": "alice", "password": "Str0ng!Pass"})
     assert resp.status_code in (401, 403)
+
+
+def test_login_invalid_client_type_header_rejected(client, make_user):
+    # A present-but-unrecognised X-Client-Type is rejected at the boundary (400),
+    # not silently treated as mobile or stopped only by a downstream guard.
+    make_user(username="alice")
+    resp = client.post(
+        "/api/v1/auth/login",
+        data={"username": "alice", "password": "Str0ng!Pass"},
+        headers={"X-Client-Type": "desktop"},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["code"] == "invalid_request"
+
+
+def test_login_invalid_client_type_rejected_before_mfa(client, make_user):
+    # An MFA-enabled account with an invalid client type is rejected at the
+    # boundary before any handler logic runs, closing the old fall-through where
+    # an unrecognised client type slipped past the MFA branch to complete_login.
+    user = make_user(username="mfauser")
+    _enable_mfa(user.id, pyotp.random_base32())
+    resp = client.post(
+        "/api/v1/auth/login",
+        data={"username": "mfauser", "password": "Str0ng!Pass"},
+        headers={"X-Client-Type": "Web"},  # wrong case -> invalid, not "web"
+    )
+    assert resp.status_code == 400
+    assert "access_token" not in resp.json()
+
+
+def test_get_client_type_dependency_validates():
+    # web/mobile map to the enum; anything else (incl. wrong case / whitespace)
+    # is rejected. A StrEnum, so members still compare as their string value.
+    assert get_client_type("web") is ClientType.WEB
+    assert get_client_type("mobile") is ClientType.MOBILE
+    assert ClientType.WEB == "web"
+    for bad in ("desktop", "Web", "MOBILE", "", "web "):
+        with pytest.raises(exc.InvalidRequestError):
+            get_client_type(bad)
 
 
 def test_refresh_rotates_tokens(client, make_user):

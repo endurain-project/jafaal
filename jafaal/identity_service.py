@@ -54,6 +54,8 @@ import jafaal.orm as jafaal_orm
 import jafaal.ports as jafaal_ports
 import jafaal.schema as jafaal_schema
 import jafaal.sessions.crud as jafaal_sessions_crud
+import jafaal.sessions.utils as jafaal_sessions_utils
+import jafaal.settings as jafaal_settings
 import jafaal.utils as jafaal_utils
 from jafaal._core import timeutils
 from jafaal.orm import UserId
@@ -387,7 +389,7 @@ class IdentityService(Protocol):
         """
         ...
 
-    def delete_other_user_sessions(self, user_id: UserId, current_session_id: str) -> None:
+    def delete_other_user_sessions(self, user_id: UserId, current_session_id: str) -> int:
         """Delete all of the authenticated user's sessions except the current one.
 
         Args:
@@ -395,7 +397,7 @@ class IdentityService(Protocol):
             current_session_id: The caller's session, left intact.
 
         Returns:
-            None.
+            The number of sessions revoked.
         """
         ...
 
@@ -749,6 +751,36 @@ class DefaultIdentityService:
             credential=credential,
         )
 
+    def _enforce_session_binding(self, session_id: str, user_id: UserId) -> None:
+        """Reject an access token whose session is gone, expired, or not the caller's.
+
+        Enabled by :attr:`~jafaal.settings.AuthSettings.strict_session_binding`.
+        Access tokens are otherwise stateless, so logout / single-session
+        revocation only takes effect once the short-lived token expires. Binding
+        every access-token-authenticated request to a still-valid server-side
+        session — the same lifecycle (existence, absolute expiry, and idle/
+        absolute timeout) the refresh flow enforces — makes revocation immediate,
+        at the cost of one indexed session lookup per request.
+
+        Args:
+            session_id: The ``sid`` claim from the access token.
+            user_id: The ``sub`` claim, coerced to the user table's PK type.
+
+        Raises:
+            JafaalError: 401 ``session_expired`` if the session is missing,
+                expired, or timed out; 401 ``invalid_token`` if the session
+                belongs to a different user.
+        """
+        session = jafaal_sessions_crud.get_session_by_id_not_expired(session_id, self._db)
+        if session is None:
+            raise jafaal_exceptions.SessionExpiredError("Session has been revoked or has expired.")
+        if session.user_id != user_id:
+            logger.warning(
+                f"Access-token session owner mismatch: token sub={user_id}, session user_id={session.user_id}"
+            )
+            raise jafaal_exceptions.InvalidTokenError("Invalid access token")
+        jafaal_sessions_utils.validate_session_timeout(session)
+
     # ------------------------------------------------------------------
     # Protocol methods
     # ------------------------------------------------------------------
@@ -800,7 +832,9 @@ class DefaultIdentityService:
 
         Raises:
             JafaalError: 401 if the token is expired,
-                invalid, or the user is not found.
+                invalid, the user is not found, or (when
+                ``AuthSettings.strict_session_binding`` is enabled) the
+                token's session has been revoked or has expired.
         """
         self._token_manager.validate_access_expiration_logged(access_token)
 
@@ -822,6 +856,9 @@ class DefaultIdentityService:
 
         user = jafaal_user_guards.get_user_by_id_or_404(user_id, self._db)
         jafaal_user_guards.check_user_is_active(user)
+
+        if jafaal_settings.get_settings().strict_session_binding:
+            self._enforce_session_binding(sid, user_id)
 
         return self._build_principal(
             user,
@@ -1137,9 +1174,9 @@ class DefaultIdentityService:
         """Delete one of the authenticated user's own sessions."""
         jafaal_account_security_service.delete_user_session(session_id, user_id, self._db)
 
-    def delete_other_user_sessions(self, user_id: UserId, current_session_id: str) -> None:
+    def delete_other_user_sessions(self, user_id: UserId, current_session_id: str) -> int:
         """Delete all of the authenticated user's sessions except the current one."""
-        jafaal_account_security_service.delete_other_user_sessions(
+        return jafaal_account_security_service.delete_other_user_sessions(
             user_id,
             current_session_id,
             self._db,

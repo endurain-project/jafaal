@@ -116,6 +116,14 @@ class PasswordHasher:
                 f"Unsupported hasher type: {type(hasher).__name__}. Must be Argon2Hasher, BcryptHasher, Iterable, PasswordHash, or None."
             )
 
+        # Pre-compute the dummy hash now so dummy_verify() costs exactly one
+        # verify on every call — including the first. Otherwise the first
+        # "user not found" login would additionally pay the (deliberately slow)
+        # hash and be measurably slower than the steady-state "found, wrong
+        # password" branch, re-opening the username-enumeration timing side
+        # channel that dummy_verify() exists to close.
+        self._dummy_hash = self._password_hash.hash(secrets.token_urlsafe(32))
+
     def hash_password(self, password: str) -> str:
         """
         Hashes the provided password using the configured password hashing algorithm.
@@ -167,22 +175,15 @@ class PasswordHasher:
         milliseconds and a fast bail-out on the not-found branch is
         trivially distinguishable from a real verify.
 
-        The dummy hash is generated lazily once per process from a
-        random throwaway password so that no real user's hash is reused
-        and the verify always returns ``False``.
+        The dummy hash is pre-computed once at construction (see
+        :meth:`__init__`), so this call always costs exactly one verify —
+        the first invocation is not slower than steady state. A fresh
+        random password is verified against it, so the result is always
+        ``False``; the return value is ignored (the call exists purely
+        for its timing side effect).
         """
-        # Lazily generate a dummy hash so cost is paid only on first
-        # call (typically during the first failed login attempt). We
-        # use a random throwaway password and discard it; what we keep
-        # is its hash, which we then verify a *different* random
-        # password against — the verify is guaranteed to return False
-        # but performs the full Argon2 work.
-        if not hasattr(self, "_dummy_hash"):
-            throwaway = secrets.token_urlsafe(32)
-            self._dummy_hash = self._password_hash.hash(throwaway)
-        # Verify a *different* random string so the result is always
-        # False; we ignore the return value — the call exists purely
-        # for its timing side effect.
+        # Verify a random string against the pre-computed dummy hash: it is
+        # guaranteed to return False but performs the full Argon2 verify work.
         self._password_hash.verify(secrets.token_urlsafe(32), self._dummy_hash)
 
     @staticmethod

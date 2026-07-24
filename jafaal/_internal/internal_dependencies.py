@@ -18,6 +18,7 @@ user exists and is active). Use that instead.
 
 import logging
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Annotated
 
 from fastapi import (
@@ -53,6 +54,50 @@ oauth2_scheme = OAuth2PasswordBearer(
 
 # Define the API key header for the client type
 header_client_type_scheme = APIKeyHeader(name="X-Client-Type")
+
+
+class ClientType(StrEnum):
+    """The validated set of ``X-Client-Type`` values.
+
+    A :class:`~enum.StrEnum`, so members compare and interpolate as their plain
+    string value (``ClientType.WEB == "web"``) — keeping every existing
+    ``== "web"`` / ``== "mobile"`` comparison working — while callers can rely on
+    the value being exactly one of these two options once it has passed through
+    :func:`get_client_type`.
+    """
+
+    WEB = "web"
+    MOBILE = "mobile"
+
+
+def get_client_type(
+    client_type: Annotated[str, Depends(header_client_type_scheme)],
+) -> ClientType:
+    """Validate the ``X-Client-Type`` header at the request boundary.
+
+    This is the single validation point for the client type: the header is
+    required (a missing one is rejected as 401/403 by the underlying scheme),
+    and a present-but-unrecognised value is rejected here with a 400. Every
+    downstream handler can therefore rely on the client type being exactly
+    ``web`` or ``mobile`` instead of guessing (e.g. treating any non-``web``
+    value as mobile).
+
+    Args:
+        client_type: The raw ``X-Client-Type`` header value.
+
+    Returns:
+        The validated :class:`ClientType`.
+
+    Raises:
+        JafaalError: 400 if the header value is not ``web`` or ``mobile``.
+    """
+    try:
+        return ClientType(client_type)
+    except ValueError as err:
+        raise jafaal_exceptions.InvalidRequestError(
+            f"Invalid X-Client-Type header: expected 'web' or 'mobile', got {client_type!r}."
+        ) from err
+
 
 # Define the API key header for third-party API key auth
 header_api_key_scheme = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -119,7 +164,7 @@ def _resolve_and_cache_principal(
 def get_token(
     non_cookie_token: Annotated[str | None, Depends(oauth2_scheme)],
     cookie_token: str | None,
-    client_type: str,
+    client_type: ClientType,
     token_type: jafaal_token_manager.TokenType,
 ) -> str | None:
     """
@@ -305,7 +350,7 @@ def get_sid_from_access_token(
 def get_refresh_token(
     request: Request,
     non_cookie_refresh_token: Annotated[str | None, Depends(oauth2_scheme)],
-    client_type: str = Depends(header_client_type_scheme),
+    client_type: Annotated[ClientType, Depends(get_client_type)],
 ) -> str | None:
     """
     Retrieves the refresh token from either the Authorization header or the

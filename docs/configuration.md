@@ -193,7 +193,7 @@ By default JAFAAL runs in a single process with an in-memory
 infrastructure you inject:
 
 ```python
-# jafaal.configure_rate_limiter(...)  # inject a real limiter (e.g. slowapi)
+# jafaal.configure_rate_limiter(StateStoreRateLimiter())  # batteries-included limiter
 # jafaal.configure_state_store(...)   # inject Redis for multi-worker lockout state
 ```
 
@@ -202,10 +202,12 @@ still active, and **refuses to start** (raises `RuntimeError`) when the in-memor
 state store is used in a *deployed* environment — set
 `allow_in_memory_state_store_when_deployed=True` to override for a single-worker
 deployment (see [Security → Deployment hardening](security.md#deployment-hardening)).
-For multi-worker/replica deployments, inject a distributed
-[`StateStore`][jafaal.StateStore] (e.g.
-[`RedisStateStore`](ports-and-adapters.md#redisstatestore)) and a
-[`RateLimiter`][jafaal.RateLimiter].
+The batteries-included
+[`StateStoreRateLimiter`](ports-and-adapters.md#statestoreratelimiter) needs no
+extra dependency and satisfies the limiter warning. For multi-worker/replica
+deployments, also inject a distributed [`StateStore`][jafaal.StateStore] (e.g.
+[`RedisStateStore`](ports-and-adapters.md#redisstatestore)); the limiter then
+enforces budgets cluster-wide automatically.
 
 Call `jafaal.verify_configuration()` once at startup (e.g. in a FastAPI lifespan
 handler) to fail fast if a required component — the settings object, the session

@@ -103,6 +103,14 @@ class StateStore(Protocol):
 
     def get_and_delete(self, key: str) -> bytes | None: ...
 
+    def increment(self, key: str, ttl_seconds: int) -> int:
+        """Atomically add 1 to the counter at ``key`` and return the new value.
+
+        The counter carries ``ttl_seconds`` TTL, so it is self-expiring — used by
+        the reference rate limiter for fixed-window request counting.
+        """
+        ...
+
     def iter_keys(self, prefix: str) -> Iterator[str]: ...
 
     def record_tiered_failure(
@@ -168,6 +176,13 @@ class InMemoryStateStore:
             if value is not None:
                 del self._data[key]
             return value
+
+    def increment(self, key: str, ttl_seconds: int) -> int:
+        with self._lock:
+            current = self._live_value(key)
+            count = (int(current.decode()) if current is not None else 0) + 1
+            self._data[key] = (str(count).encode(), time.monotonic() + ttl_seconds)
+            return count
 
     def iter_keys(self, prefix: str) -> Iterator[str]:
         with self._lock:

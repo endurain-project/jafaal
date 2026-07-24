@@ -53,6 +53,27 @@ def test_iter_keys_only_live(store, monkeypatch):
     assert list(store.iter_keys("p:")) == ["p:live"]
 
 
+def test_increment_counts_up(store):
+    assert store.increment("c", 60) == 1
+    assert store.increment("c", 60) == 2
+    assert store.increment("c", 60) == 3
+
+
+def test_increment_is_isolated_per_key(store):
+    assert store.increment("a", 60) == 1
+    assert store.increment("b", 60) == 1
+    assert store.increment("a", 60) == 2
+
+
+def test_increment_self_expires_after_ttl(store, monkeypatch):
+    clock = {"t": 100.0}
+    monkeypatch.setattr("jafaal.state_store.time.monotonic", lambda: clock["t"])
+    assert store.increment("c", 10) == 1
+    assert store.increment("c", 10) == 2
+    clock["t"] += 11  # window elapsed → counter evicted, next call restarts at 1
+    assert store.increment("c", 10) == 1
+
+
 def test_record_tiered_failure_locks_at_threshold(store):
     tiers = ((3, 60), (5, 300))
     out = None

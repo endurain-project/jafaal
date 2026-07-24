@@ -24,6 +24,10 @@ Provided:
 * :class:`~jafaal.adapters.redis_state_store.RedisStateStore` — a distributed
   ``StateStore`` (lockout + TOTP-replay state shared across workers/replicas);
   requires the ``jafaal[redis]`` extra.
+* :class:`~jafaal.adapters.rate_limiter.StateStoreRateLimiter` — a real
+  ``RateLimiter`` (fixed-window, per-client-IP) backed by the configured
+  ``StateStore``; no extra dependency, and distributed automatically when
+  ``RedisStateStore`` is configured.
 
 Install and wire, for example::
 
@@ -42,6 +46,7 @@ Install and wire, for example::
 from __future__ import annotations
 
 from jafaal.adapters.event_sinks import CompositeAuthEventSink, LoggingAuthEventSink
+from jafaal.adapters.rate_limiter import StateStoreRateLimiter
 from jafaal.adapters.redis_state_store import RedisStateStore
 from jafaal.adapters.sqlalchemy_user_repository import SqlAlchemyUserRepository
 from jafaal.adapters.static_settings import (
@@ -57,5 +62,6 @@ __all__ = [
     "LoggingAuthEventSink",
     "RedisStateStore",
     "SqlAlchemyUserRepository",
+    "StateStoreRateLimiter",
     "StaticSettingsProvider",
 ]

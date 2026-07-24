@@ -33,6 +33,7 @@ import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.rotated_refresh_tokens.utils as jafaal_sessions_rotated_tokens_utils
 import jafaal.sessions.utils as jafaal_sessions_utils
 import jafaal.utils as jafaal_utils
+from jafaal._core import network
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,7 @@ router = APIRouter()
 
 
 def _validate_pkce_query_params(
-    client_type: str,
+    client_type: jafaal_internal_dependencies.ClientType,
     code_challenge: str | None,
     code_challenge_method: str | None,
 ) -> None:
@@ -121,7 +122,7 @@ def login_for_access_token(
     response: Response,
     request: Request,
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
-    client_type: Annotated[str, Depends(jafaal_internal_dependencies.header_client_type_scheme)],
+    client_type: Annotated[jafaal_internal_dependencies.ClientType, Depends(jafaal_internal_dependencies.get_client_type)],
     failed_attempts: Annotated[
         jafaal_security_stores.FailedLoginStore,
         Depends(jafaal_security_stores.get_failed_login_attempts),
@@ -194,6 +195,22 @@ def login_for_access_token(
         code_challenge_method,
     )
 
+    client_ip = network.get_ip_address(request)
+
+    # Per-source-IP backoff: refuse when this IP has sprayed enough failed logins
+    # across usernames to trip the IP lockout, so a single IP cannot cheaply lock
+    # out many accounts. Checked before the per-username lockout so a spraying IP
+    # is stopped regardless of the target account.
+    with _translate_store_outage():
+        if failed_attempts.is_ip_locked_out(client_ip):
+            ip_lockout_until = failed_attempts.get_ip_lockout_time(client_ip)
+            if ip_lockout_until:
+                seconds_remaining = int((ip_lockout_until - datetime.now(UTC)).total_seconds())
+                raise jafaal_exceptions.RateLimitedError(
+                    f"Too many failed login attempts from this network. Try again in {seconds_remaining} seconds.",
+                    retry_after=seconds_remaining,
+                )
+
     # Check if username is locked out from too many failed login attempts
     with _translate_store_outage():
         if failed_attempts.is_locked_out(form_data.username):
@@ -221,6 +238,7 @@ def login_for_access_token(
             )
             with _translate_store_outage():
                 failed_attempts.record_failed_attempt(form_data.username)
+                failed_attempts.record_ip_failure(client_ip)
         raise err
 
     # Check if the user is active
@@ -254,6 +272,7 @@ def login_for_access_token(
     # Reset failed login attempts counter
     with _translate_store_outage():
         failed_attempts.reset_attempts(form_data.username)
+        failed_attempts.reset_ip_attempts(client_ip)
 
     # Mobile clients with PKCE use secure token exchange flow
     # Web clients don't need PKCE - they have httpOnly cookies and same-origin protection
@@ -284,7 +303,7 @@ def verify_mfa_and_login(
     response: Response,
     request: Request,
     mfa_request: jafaal_schema.MFALoginRequest,
-    client_type: Annotated[str, Depends(jafaal_internal_dependencies.header_client_type_scheme)],
+    client_type: Annotated[jafaal_internal_dependencies.ClientType, Depends(jafaal_internal_dependencies.get_client_type)],
     failed_attempts: Annotated[
         jafaal_security_stores.FailedLoginStore,
         Depends(jafaal_security_stores.get_failed_login_attempts),
@@ -412,6 +431,7 @@ def verify_mfa_and_login(
     with _translate_store_outage():
         pending_mfa_store.reset_attempts(mfa_request.username)
         failed_attempts.reset_attempts(mfa_request.username)
+        failed_attempts.reset_ip_attempts(network.get_ip_address(request))
 
     # Mobile clients with PKCE use secure token exchange flow
     # Web clients don't need PKCE - they have httpOnly cookies and same-origin protection
@@ -464,7 +484,7 @@ async def refresh_token(
         Session,
         Depends(jafaal_orm.get_db),
     ],
-    client_type: Annotated[str, Depends(jafaal_internal_dependencies.header_client_type_scheme)],
+    client_type: Annotated[jafaal_internal_dependencies.ClientType, Depends(jafaal_internal_dependencies.get_client_type)],
     x_csrf_token: Annotated[str | None, Depends(jafaal_internal_dependencies.header_csrf_token_scheme)] = None,
 ):
     """
@@ -699,7 +719,7 @@ async def logout(
         str,
         Depends(jafaal_internal_dependencies.get_and_return_refresh_token),
     ],
-    client_type: Annotated[str, Depends(jafaal_internal_dependencies.header_client_type_scheme)],
+    client_type: Annotated[jafaal_internal_dependencies.ClientType, Depends(jafaal_internal_dependencies.get_client_type)],
     token_user_id: Annotated[
         int,
         Depends(jafaal_internal_dependencies.get_sub_from_refresh_token),

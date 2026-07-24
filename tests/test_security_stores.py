@@ -111,6 +111,71 @@ def test_failed_login_clear_all():
 
 
 # --------------------------------------------------------------------------- #
+# Per-source-IP backoff (50/100/250 → 15m/1h/24h)
+# --------------------------------------------------------------------------- #
+
+
+def test_login_ip_locks_after_ip_threshold():
+    store = FailedLoginAttempts()
+    ip = "203.0.113.9"
+    assert store.is_ip_locked_out(ip) is False
+    for _ in range(49):
+        store.record_ip_failure(ip)
+    assert store.is_ip_locked_out(ip) is False  # under the 50 threshold
+    store.record_ip_failure(ip)  # 50th → IP locked
+    assert store.is_ip_locked_out(ip) is True
+    assert store.get_ip_lockout_time(ip) is not None
+
+
+def test_login_ip_reset_clears_lock():
+    store = FailedLoginAttempts()
+    ip = "203.0.113.9"
+    for _ in range(50):
+        store.record_ip_failure(ip)
+    assert store.is_ip_locked_out(ip) is True
+    store.reset_ip_attempts(ip)
+    assert store.is_ip_locked_out(ip) is False
+
+
+def test_login_ip_and_username_lockouts_are_independent():
+    # Five failures for one username lock the account but not the IP (needs 50),
+    # so normal targeted brute-force does not incidentally trip the IP backoff.
+    store = FailedLoginAttempts()
+    for _ in range(5):
+        store.record_failed_attempt("alice")
+        store.record_ip_failure("203.0.113.9")
+    assert store.is_locked_out("alice") is True
+    assert store.is_ip_locked_out("203.0.113.9") is False
+
+
+def test_clear_all_clears_ip_lockout():
+    store = FailedLoginAttempts()
+    for _ in range(50):
+        store.record_ip_failure("203.0.113.9")
+    assert store.is_ip_locked_out("203.0.113.9") is True
+    store.clear_all()
+    assert store.is_ip_locked_out("203.0.113.9") is False
+
+
+def test_login_ip_lockout_can_be_disabled():
+    import dataclasses
+
+    import jafaal
+
+    store = FailedLoginAttempts()
+    ip = "203.0.113.9"
+    original = jafaal.get_settings()
+    jafaal.configure(dataclasses.replace(original, login_ip_lockout_enabled=False))
+    try:
+        for _ in range(60):
+            assert store.record_ip_failure(ip) == 0  # no-op when disabled
+        assert store.is_ip_locked_out(ip) is False
+        assert store.get_ip_lockout_time(ip) is None
+    finally:
+        jafaal.configure(original)
+
+
+# --------------------------------------------------------------------------- #
 # PendingMFALogin (bookkeeping + 5/10/15 lockout)
 # --------------------------------------------------------------------------- #
 

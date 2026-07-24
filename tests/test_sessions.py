@@ -19,6 +19,8 @@ import jafaal.sessions.rotated_refresh_tokens.utils as rotated_utils
 import jafaal.sessions.utils as session_utils
 from jafaal._core import crypto
 from jafaal._internal.password_hasher import password_hasher
+from jafaal._internal.token_manager import TokenType, get_token_manager
+from jafaal.identity_service import DefaultIdentityService
 
 
 @contextmanager
@@ -99,6 +101,79 @@ def test_parse_user_agent():
     # An empty UA is not mobile/tablet → classified as PC.
     unknown = session_utils.parse_user_agent("")
     assert unknown.device_type == session_utils.DeviceType.PC
+
+
+# --------------------------------------------------------------------------- #
+# Strict session binding (access-token revocation)
+# --------------------------------------------------------------------------- #
+
+
+def _svc(db):
+    return DefaultIdentityService(db, get_token_manager(), password_hasher)
+
+
+def _access_token(user, sid):
+    _, token = get_token_manager().create_token(sid, user, TokenType.ACCESS)
+    return token
+
+
+def test_access_token_resolves_without_session_when_binding_off(db, make_user):
+    # Default (binding off): access tokens are validated statelessly, so a token
+    # resolves even when its session no longer exists (e.g. after logout).
+    user = make_user()
+    token = _access_token(user, "sess-gone")
+    assert _svc(db).resolve_from_access_token(token).user_id == user.id
+
+
+def test_strict_binding_rejects_revoked_session(db, make_user):
+    # With strict binding on, revoking the session (logout / single-session
+    # revocation) makes the outstanding access token fail immediately.
+    user = make_user()
+    session_utils.create_session("sess-b", user, _request(), "rt", password_hasher, db)
+    token = _access_token(user, "sess-b")
+    with _settings(strict_session_binding=True):
+        # Valid while the session exists...
+        assert _svc(db).resolve_from_access_token(token).user_id == user.id
+        # ...and rejected the moment the session is revoked.
+        sessions_crud.delete_session("sess-b", user.id, db)
+        with pytest.raises(exc.SessionExpiredError):
+            _svc(db).resolve_from_access_token(token)
+
+
+def test_strict_binding_rejects_missing_session(db, make_user):
+    user = make_user()
+    token = _access_token(user, "never-created")
+    with _settings(strict_session_binding=True), pytest.raises(exc.SessionExpiredError):
+        _svc(db).resolve_from_access_token(token)
+
+
+def test_strict_binding_rejects_session_owned_by_other_user(db, make_user):
+    owner = make_user(username="owner")
+    other = make_user(username="other")
+    # The session belongs to `other`, but the token claims `owner` with that sid.
+    session_utils.create_session("sess-x", other, _request(), "rt", password_hasher, db)
+    token = _access_token(owner, "sess-x")
+    with _settings(strict_session_binding=True), pytest.raises(exc.InvalidTokenError):
+        _svc(db).resolve_from_access_token(token)
+
+
+def test_strict_binding_enforces_session_timeout(db, make_user):
+    # An idle-timed-out session rejects the access token under strict binding.
+    user = make_user()
+    session_utils.create_session("sess-idle", user, _request(), "rt", password_hasher, db)
+    token = _access_token(user, "sess-idle")
+    row = sessions_crud.get_session_by_id("sess-idle", db)
+    row.last_activity_at = datetime.now(UTC) - timedelta(hours=2)
+    db.commit()
+    with (
+        _settings(
+            strict_session_binding=True,
+            session_idle_timeout_enabled=True,
+            session_idle_timeout_hours=1,
+        ),
+        pytest.raises(exc.SessionExpiredError),
+    ):
+        _svc(db).resolve_from_access_token(token)
 
 
 # --------------------------------------------------------------------------- #

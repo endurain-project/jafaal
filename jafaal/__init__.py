@@ -171,6 +171,8 @@ from .user_model import IntPKUserMixin, UserMixin, UUIDPKUserMixin
 if TYPE_CHECKING:
     from ._internal.internal_dependencies import (
         AuthContext,
+        ClientType,
+        get_client_type,
         get_sid_from_access_token,
         get_sid_from_refresh_token,
         get_sub_from_access_token,
@@ -197,6 +199,8 @@ if TYPE_CHECKING:
 
 _LAZY_EXPORTS: dict[str, str] = {
     "AuthContext": "jafaal._internal.internal_dependencies",
+    "ClientType": "jafaal._internal.internal_dependencies",
+    "get_client_type": "jafaal._internal.internal_dependencies",
     "get_sid_from_access_token": "jafaal._internal.internal_dependencies",
     "get_sid_from_refresh_token": "jafaal._internal.internal_dependencies",
     "get_sub_from_access_token": "jafaal._internal.internal_dependencies",
@@ -299,6 +303,7 @@ __all__ = [
     "register_exception_handlers",
     # Security dependencies
     "AuthContext",
+    "ClientType",
     "FailedLoginAttempts",
     # Schemas
     "LoginRequest",
@@ -356,6 +361,7 @@ __all__ = [
     "complete_login",
     "create_mobile_pkce_session_response",
     "create_tokens",
+    "get_client_type",
     "get_failed_login_attempts",
     "get_password_hasher",
     "get_pending_mfa_store",

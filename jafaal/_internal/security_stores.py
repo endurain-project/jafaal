@@ -125,46 +125,48 @@ def _datetime_from_epoch(epoch_seconds: int) -> datetime:
     return datetime.fromtimestamp(epoch_seconds, tz=UTC)
 
 
-def _log_lockout(display_name: str, duration_label: str, username: str, failed_count: int) -> None:
+def _log_lockout(
+    display_name: str,
+    duration_label: str,
+    subject: str,
+    value: str,
+    failed_count: int,
+) -> None:
     """
-    Log a progressive lockout event.
+    Log and audit a progressive lockout event.
 
     Args:
-        display_name: Human-readable store name.
+        display_name: Human-readable store name (e.g. ``"Login"``).
         duration_label: Human-readable lockout duration.
-        username: Normalized username being locked out.
+        subject: The kind of key being locked (``"username"`` or ``"ip"``); the
+            audit record carries ``<subject>`` (the value) and ``<subject>_hash``
+            (a non-reversible digest that survives PII scrubbing).
+        value: The already-normalized subject value being locked out.
         failed_count: Failed attempt count that caused the lockout.
 
     Returns:
         None.
-
-    Raises:
-        None.
     """
+    digest = hashing.sha256_hex(value)
     logger.warning(
-        f"{display_name} lockout ({duration_label}) applied to user "
-        f"{username_log_identifier(username)} after {failed_count} "
-        "failed attempts",
-        extra={
-            "username_hash": _username_digest(username),
-            "failed_attempts": failed_count,
-        },
+        f"{display_name} lockout ({duration_label}) applied to {subject}_hash={digest} "
+        f"after {failed_count} failed attempts",
+        extra={f"{subject}_hash": digest, "failed_attempts": failed_count},
     )
     jafaal_audit.record(
         jafaal_audit.Event.LOCKOUT_APPLIED,
         outcome=jafaal_audit.Outcome.BLOCKED,
         level=logging.WARNING,
         store=display_name,
-        username=username,
-        username_hash=_username_digest(username),
         failed_attempts=failed_count,
         lockout=duration_label,
+        **{subject: value, f"{subject}_hash": digest},
     )
 
 
 @runtime_checkable
 class FailedLoginStore(Protocol):
-    """Contract for failed-login lockout stores. Keys are usernames."""
+    """Contract for failed-login lockout stores (per-username + per-source-IP)."""
 
     def is_locked_out(self, username: str) -> bool: ...
 
@@ -173,6 +175,14 @@ class FailedLoginStore(Protocol):
     def record_failed_attempt(self, username: str) -> int: ...
 
     def reset_attempts(self, username: str) -> None: ...
+
+    def is_ip_locked_out(self, ip: str) -> bool: ...
+
+    def get_ip_lockout_time(self, ip: str) -> datetime | None: ...
+
+    def record_ip_failure(self, ip: str) -> int: ...
+
+    def reset_ip_attempts(self, ip: str) -> None: ...
 
     def clear_all(self) -> None: ...
 
@@ -229,6 +239,16 @@ _LOGIN_LOCKOUT_THRESHOLDS: tuple[tuple[int, int, str], ...] = (
     (10, 30 * 60, "30 min"),
     (20, 24 * 60 * 60, "24 hours"),
 )
+# Per-source-IP thresholds. Higher than the per-username tiers because they
+# aggregate failures across *all* usernames tried from one IP: they bound how
+# many accounts a single IP can lock out (each account needs 5 failures, so ~10
+# accounts trips the first IP tier) without penalising a busy shared egress that
+# also has successful logins (which reset the counter).
+_LOGIN_IP_LOCKOUT_THRESHOLDS: tuple[tuple[int, int, str], ...] = (
+    (50, 15 * 60, "15 min"),
+    (100, 60 * 60, "1 hour"),
+    (250, 24 * 60 * 60, "24 hours"),
+)
 _MFA_LOCKOUT_THRESHOLDS: tuple[tuple[int, int, str], ...] = (
     (5, 5 * 60, "5 min"),
     (10, 30 * 60, "30 min"),
@@ -265,6 +285,7 @@ class _ProgressiveLockout:
         thresholds: tuple[tuple[int, int, str], ...],
         attempts_ttl_seconds: int,
         normalize_key: "Callable[[str], str] | None" = None,
+        subject: str = "username",
     ) -> None:
         self._get_state = get_state
         self._name = name
@@ -272,6 +293,7 @@ class _ProgressiveLockout:
         self._thresholds = thresholds
         self._attempts_ttl_seconds = attempts_ttl_seconds
         self._normalize = normalize_key or (lambda key: key)
+        self._subject = subject
 
     def _digest(self, key: str) -> str:
         return hashing.sha256_hex(self._normalize(key))
@@ -321,7 +343,13 @@ class _ProgressiveLockout:
         except StateStoreUnavailableError as err:
             _raise_store_unavailable("record failed attempt", err)
         if outcome.newly_locked:
-            _log_lockout(self._display_name, self._duration_label(outcome.count), self._normalize(key), outcome.count)
+            _log_lockout(
+                self._display_name,
+                self._duration_label(outcome.count),
+                self._subject,
+                self._normalize(key),
+                outcome.count,
+            )
         return outcome.count
 
     def reset_attempts(self, key: str) -> None:
@@ -347,12 +375,29 @@ class _ProgressiveLockout:
 
 class FailedLoginAttempts:
     """
-    Track failed login attempts with progressive lockout (5/10/20 → 5m/30m/24h).
+    Track failed login attempts with progressive lockout.
+
+    Two independent dimensions guard the login endpoint:
+
+    * **Per-username** (5/10/20 → 5m/30m/24h) bounds brute-force against a single
+      account. Because it keys on the username, anyone who knows a username can
+      trip it — i.e. it is also a *targeted-lockout* (DoS) lever: an attacker can
+      lock a known account out by submitting bad passwords for it. This is
+      inherent to per-account lockout.
+    * **Per-source-IP** (50/100/250 → 15m/1h/24h) bounds how many accounts a
+      single IP can lock out by *spraying* failures across many usernames, so the
+      targeted-lockout lever above is not cheap at scale — an attacker must
+      rotate IPs. It is reset on any successful login from the IP (so a busy
+      shared egress rarely trips it) and gated by
+      :attr:`~jafaal.settings.AuthSettings.login_ip_lockout_enabled`. It relies on
+      an accurate client IP, so configure ``trusted_proxies`` behind a reverse
+      proxy (otherwise every client shares the proxy's address).
 
     Attributes:
         _state_override: Explicit provider (tests); ``None`` resolves the
             process-wide provider lazily at call time.
-        _lockout: Shared progressive-lockout helper.
+        _lockout: Per-username progressive-lockout helper.
+        _ip_lockout: Per-source-IP progressive-lockout helper.
     """
 
     def __init__(self, state: StateStore | None = None) -> None:
@@ -365,10 +410,22 @@ class FailedLoginAttempts:
             attempts_ttl_seconds=24 * 60 * 60,
             normalize_key=normalize_username_key,
         )
+        self._ip_lockout = _ProgressiveLockout(
+            self._get_state,
+            name="login_ip",
+            display_name="Login (per-IP)",
+            thresholds=_LOGIN_IP_LOCKOUT_THRESHOLDS,
+            attempts_ttl_seconds=60 * 60,
+            subject="ip",
+        )
 
     def _get_state(self) -> StateStore:
         return self._state_override if self._state_override is not None else get_state_store()
 
+    def _ip_lockout_enabled(self) -> bool:
+        return jafaal_settings.get_settings().login_ip_lockout_enabled
+
+    # --- per-username lockout ---
     def is_locked_out(self, username: str) -> bool:
         """Check if a username is locked out from failed logins."""
         return self._lockout.is_locked_out(username)
@@ -385,9 +442,35 @@ class FailedLoginAttempts:
         """Clear the failed-attempt counter on successful login."""
         self._lockout.reset_attempts(username)
 
+    # --- per-source-IP backoff ---
+    def is_ip_locked_out(self, ip: str) -> bool:
+        """Check if a source IP is under the per-IP failed-login backoff."""
+        if not self._ip_lockout_enabled():
+            return False
+        return self._ip_lockout.is_locked_out(ip)
+
+    def get_ip_lockout_time(self, ip: str) -> datetime | None:
+        """Get the per-IP backoff expiry for a source IP, if active."""
+        if not self._ip_lockout_enabled():
+            return None
+        return self._ip_lockout.get_lockout_time(ip)
+
+    def record_ip_failure(self, ip: str) -> int:
+        """Record a failed login against the source IP; return the count (0 if disabled)."""
+        if not self._ip_lockout_enabled():
+            return 0
+        return self._ip_lockout.record_failed_attempt(ip)
+
+    def reset_ip_attempts(self, ip: str) -> None:
+        """Clear the per-IP failure counter after a successful login from the IP."""
+        if not self._ip_lockout_enabled():
+            return
+        self._ip_lockout.reset_attempts(ip)
+
     def clear_all(self) -> None:
-        """Clear all failed-login records."""
+        """Clear all failed-login records (per-username and per-IP)."""
         self._lockout.clear_all()
+        self._ip_lockout.clear_all()
 
 
 class PendingMFALogin:

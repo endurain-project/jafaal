@@ -161,8 +161,14 @@ class IdentityProviderService:
         if self._http_client is None:
             self._http_client = httpx.AsyncClient(
                 timeout=10.0,
-                limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
                 follow_redirects=True,
+                # Pin every connection (and each redirect hop) to a validated
+                # public IP so the address dialed is the one the SSRF policy
+                # checked — closing the DNS-rebinding TOCTOU. The request hook
+                # below remains as an early, per-hop URL check (defense in depth).
+                transport=network.build_ssrf_guard_transport(
+                    limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
+                ),
                 # Re-run the SSRF guard on every request, including each redirect
                 # hop, so ``follow_redirects=True`` cannot be abused to reach an
                 # internal address via a 3xx from an otherwise-public endpoint.
@@ -669,6 +675,10 @@ class IdentityProviderService:
             client_id=client_id,
             client_secret=client_secret,
             redirect_uri=redirect_uri,
+            # Pin outbound token/userinfo connections to a validated public IP
+            # (these carry client credentials and bearer tokens), closing the
+            # DNS-rebinding TOCTOU that the pre-flight reject_private_url leaves.
+            transport=network.build_ssrf_guard_transport(),
             # Token/userinfo requests carry client credentials and/or bearer
             # tokens; never follow a redirect that could replay them to an
             # attacker-controlled or internal target (also authlib's default).

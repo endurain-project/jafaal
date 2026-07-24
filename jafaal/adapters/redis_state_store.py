@@ -118,6 +118,20 @@ class RedisStateStore:
         except _REDIS_ERRORS as err:
             raise StateStoreUnavailableError("Redis GETDEL failed") from err
 
+    def increment(self, key: str, ttl_seconds: int) -> int:
+        # INCR + EXPIRE in one pipeline: atomic increment, and the key carries a
+        # TTL so fixed-window rate-limit counters self-expire. The window bucket
+        # lives in the key, so refreshing the TTL each call is harmless (a new
+        # window uses a new key and starts the count at 1).
+        try:
+            with self._client.pipeline() as pipe:
+                pipe.incr(key)
+                pipe.expire(key, ttl_seconds)
+                count, _ = pipe.execute()
+            return int(count)
+        except _REDIS_ERRORS as err:
+            raise StateStoreUnavailableError("Redis INCR failed") from err
+
     def iter_keys(self, prefix: str) -> Iterator[str]:
         try:
             keys = [key.decode() for key in self._client.scan_iter(match=f"{prefix}*", count=500)]

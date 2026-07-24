@@ -114,3 +114,112 @@ async def test_ssrf_request_hook_allows_public_redirect():
 
     assert resp.status_code == 200
     assert resp.json() == {"ok": True}
+
+
+# --------------------------------------------------------------------------- #
+# Pinned-IP SSRF transport (DNS-rebinding TOCTOU closure)
+# --------------------------------------------------------------------------- #
+
+
+def _fake_getaddrinfo(*ips):
+    """Return a fake ``getaddrinfo`` resolving to the given IP(s)."""
+
+    def _resolver(host, port, *args, **kwargs):
+        return [(0, 0, 0, "", (ip, port or 0)) for ip in ips]
+
+    return _resolver
+
+
+def test_resolve_and_validate_host_returns_public_ip(monkeypatch):
+    monkeypatch.setattr("jafaal._core.network.socket.getaddrinfo", _fake_getaddrinfo("93.184.216.34"))
+    assert network._resolve_and_validate_host("example.test") == "93.184.216.34"
+
+
+def test_resolve_and_validate_host_rejects_private_answer(monkeypatch):
+    monkeypatch.setattr("jafaal._core.network.socket.getaddrinfo", _fake_getaddrinfo("10.1.2.3"))
+    with pytest.raises(exc.InvalidRequestError):
+        network._resolve_and_validate_host("rebind.test")
+
+
+def test_resolve_and_validate_host_rejects_when_any_answer_private(monkeypatch):
+    # A rebinding answer that mixes a public and a private address is rejected
+    # (strict: a single private answer aborts).
+    monkeypatch.setattr("jafaal._core.network.socket.getaddrinfo", _fake_getaddrinfo("93.184.216.34", "10.0.0.5"))
+    with pytest.raises(exc.InvalidRequestError):
+        network._resolve_and_validate_host("mixed.test")
+
+
+def test_resolve_and_validate_host_ip_literals():
+    assert network._resolve_and_validate_host("93.184.216.34") == "93.184.216.34"
+    with pytest.raises(exc.InvalidRequestError):
+        network._resolve_and_validate_host("127.0.0.1")
+
+
+def test_pin_request_rewrites_hostname_and_preserves_tls_identity(monkeypatch):
+    monkeypatch.setattr("jafaal._core.network.socket.getaddrinfo", _fake_getaddrinfo("93.184.216.34"))
+    req = httpx.Request("GET", "https://idp.example/token")
+    network._pin_request_to_validated_ip(req)
+    # Dials the validated IP, but TLS + vhost routing still target the hostname.
+    assert req.url.host == "93.184.216.34"
+    assert req.extensions["sni_hostname"] == "idp.example"
+    assert req.headers["Host"] == "idp.example"
+
+
+def test_pin_request_ip_literal_left_unchanged():
+    req = httpx.Request("GET", "https://93.184.216.34/token")
+    network._pin_request_to_validated_ip(req)
+    assert req.url.host == "93.184.216.34"
+    assert "sni_hostname" not in req.extensions
+
+
+def test_pin_request_rejects_forbidden_scheme():
+    req = httpx.Request("GET", "ftp://example.test/x")
+    with pytest.raises(exc.InvalidRequestError):
+        network._pin_request_to_validated_ip(req)
+
+
+def test_pin_request_allowlisted_private_is_pinned(monkeypatch):
+    monkeypatch.setattr("jafaal._core.network.socket.getaddrinfo", _fake_getaddrinfo("10.1.2.3"))
+    with _settings(ssrf_allowed_hosts=("10.0.0.0/8",)):
+        req = httpx.Request("GET", "https://internal.idp/token")
+        network._pin_request_to_validated_ip(req)
+        assert req.url.host == "10.1.2.3"  # allow-listed private host is dialed
+
+
+async def test_ssrf_guard_transport_pins_and_forwards(monkeypatch):
+    monkeypatch.setattr("jafaal._core.network.socket.getaddrinfo", _fake_getaddrinfo("93.184.216.34"))
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["host"] = request.url.host
+        seen["sni"] = request.extensions.get("sni_hostname")
+        seen["host_header"] = request.headers.get("Host")
+        return httpx.Response(200, json={"ok": True})
+
+    transport = network.SsrfGuardAsyncTransport(httpx.MockTransport(handler))
+    async with httpx.AsyncClient(transport=transport) as client:
+        resp = await client.get("https://idp.example/x")
+
+    assert resp.status_code == 200
+    assert seen["host"] == "93.184.216.34"
+    assert seen["sni"] == "idp.example"
+    assert seen["host_header"] == "idp.example"
+
+
+async def test_ssrf_guard_transport_blocks_rebinding_to_private(monkeypatch):
+    # DNS rebinding: the transport re-resolves at connect time and refuses the
+    # private answer, so the inner transport is never reached even though the URL
+    # host looks public. This is the TOCTOU that reject_private_url alone leaves.
+    monkeypatch.setattr("jafaal._core.network.socket.getaddrinfo", _fake_getaddrinfo("169.254.169.254"))
+    reached = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        reached["count"] += 1
+        return httpx.Response(200, json={"secret": "leaked"})
+
+    transport = network.SsrfGuardAsyncTransport(httpx.MockTransport(handler))
+    async with httpx.AsyncClient(transport=transport) as client:
+        with pytest.raises(exc.InvalidRequestError):
+            await client.get("https://rebind.evil/x")
+
+    assert reached["count"] == 0

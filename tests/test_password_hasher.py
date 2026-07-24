@@ -88,8 +88,16 @@ def test_dummy_verify_runs_without_error():
     hasher = PasswordHasher()
     # Should perform a full verify against a throwaway hash and return None.
     assert hasher.dummy_verify() is None
-    # Second call reuses the cached dummy hash.
+    # Second call reuses the pre-warmed dummy hash.
     assert hasher.dummy_verify() is None
+
+
+def test_dummy_hash_is_prewarmed_at_construction():
+    # The dummy hash is built in __init__, so dummy_verify()'s first call costs a
+    # single verify (not hash + verify) — keeping the first "user not found"
+    # login response the same latency as steady state (no enumeration signal).
+    hasher = PasswordHasher()
+    assert hasher._dummy_hash  # a real, non-empty hash is ready before first use
 
 
 def test_unsupported_hasher_type_raises():

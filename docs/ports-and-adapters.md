@@ -154,3 +154,29 @@ jafaal.configure_state_store(RedisStateStore(url="redis://localhost:6379/0"))
 The client must return `bytes` (leave `decode_responses` at its default of
 `False`). The tiered-lockout increment is atomic (a `WATCH`/`MULTI` transaction),
 so its correctness does not depend on how many workers hit it concurrently.
+
+### `StateStoreRateLimiter`
+
+A batteries-included [`RateLimiter`][jafaal.RateLimiter] that enforces a
+fixed-window, per-client-IP request budget using the configured
+[`StateStore`][jafaal.StateStore]. It needs no extra dependency and becomes
+distributed automatically once you configure
+[`RedisStateStore`](#redisstatestore) — lockout, TOTP-replay, and rate-limit
+counters then share one backend.
+
+```python
+import jafaal
+from jafaal.adapters import StateStoreRateLimiter
+
+jafaal.configure_rate_limiter(StateStoreRateLimiter())
+# ...or: create_auth_router(rate_limiter=StateStoreRateLimiter()).
+```
+
+Budgets come from settings (`rate_limit_sensitive` / `rate_limit_write`, e.g.
+`"10/minute"`), and the client IP is resolved through the proxy-aware
+`trusted_proxies` logic, so set that correctly behind a reverse proxy. Rate
+limiting is defense-in-depth, so the limiter **fails open** (does not block) when
+the client IP is unknown, the budget is malformed, or the state store is
+unavailable — an infrastructure fault must never take down authentication.
+Per-account and per-IP progressive lockout still apply.
+

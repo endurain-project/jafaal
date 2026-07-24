@@ -90,9 +90,11 @@ should address two silent-by-default footguns at startup — `create_auth_router
 **warns** about the first and **refuses to start** on the second:
 
 1. **Inject a real rate limiter.** The default is a no-op, so endpoints are not
-   rate-limited until you call `jafaal.configure_rate_limiter(...)` (per-account
-   progressive lockout still applies). Pass it via
-   `create_auth_router(rate_limiter=...)`.
+   rate-limited until you install one (per-account progressive lockout still
+   applies). The batteries-included
+   [`StateStoreRateLimiter`](ports-and-adapters.md#statestoreratelimiter) needs no
+   extra dependency — pass it via `create_auth_router(rate_limiter=...)` or call
+   `jafaal.configure_rate_limiter(StateStoreRateLimiter())`.
 2. **Use a distributed state store for multi-worker deployments.** The in-memory
    `StateStore` is process-local, so multiple workers/replicas would keep lockout
    and TOTP-replay state per worker — `create_auth_router()` therefore raises in a
