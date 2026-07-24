@@ -99,6 +99,19 @@ def _require_user_verification() -> bool:
     return jafaal_settings.get_settings().webauthn_user_verification == "required"
 
 
+def _passwordless_user_verification() -> Any:
+    """User-verification requirement for the passwordless login ceremony.
+
+    Always ``required``: on the passwordless path the passkey is the entire
+    authentication, so the authenticator MUST verify the user (PIN/biometric) for
+    it to be a genuine two-factor (possession + inherence/knowledge) credential
+    rather than mere possession of a synced/exported key. This is enforced
+    independent of ``AuthSettings.webauthn_user_verification``, which governs only
+    the second-factor path (where the password already provides the first factor).
+    """
+    return _structs.UserVerificationRequirement.REQUIRED
+
+
 def _attestation() -> Any:
     return _structs.AttestationConveyancePreference(jafaal_settings.get_settings().webauthn_attestation)
 
@@ -249,7 +262,7 @@ def begin_authentication(username: str | None, db: Session) -> tuple[str, dict[s
     options = _webauthn.generate_authentication_options(  # type: ignore[union-attr]
         rp_id=_rp_id(),
         allow_credentials=allow_credentials or None,
-        user_verification=_user_verification(),
+        user_verification=_passwordless_user_verification(),
     )
     challenge_id = challenge_store.new_challenge_id()
     challenge_store.store_authentication_challenge(challenge_id, options.challenge)
@@ -260,6 +273,8 @@ def _verify_assertion(
     stored: webauthn_models.WebAuthnCredential,
     credential: dict[str, Any],
     challenge: bytes,
+    *,
+    require_user_verification: bool,
 ) -> Any:
     try:
         return _webauthn.verify_authentication_response(  # type: ignore[union-attr]
@@ -269,7 +284,7 @@ def _verify_assertion(
             expected_origin=_origins(),
             credential_public_key=base64.b64decode(stored.public_key),
             credential_current_sign_count=stored.sign_count,
-            require_user_verification=_require_user_verification(),
+            require_user_verification=require_user_verification,
         )
     except _VERIFY_ERRORS as err:
         logger.warning("WebAuthn authentication verification failed: %s", err)
@@ -295,7 +310,7 @@ def complete_authentication(
     if stored is None:
         raise jafaal_exceptions.InvalidCredentialsError("WebAuthn authentication failed.")
 
-    verification = _verify_assertion(stored, credential, challenge)
+    verification = _verify_assertion(stored, credential, challenge, require_user_verification=True)
     webauthn_crud.update_sign_count(stored, verification.new_sign_count, db)
 
     user = jafaal_ports.get_user_repository().get_by_id(stored.user_id, db)
@@ -349,6 +364,8 @@ def complete_second_factor(
     if stored is None or stored.user_id != user_id:
         return False
 
-    verification = _verify_assertion(stored, credential, challenge)
+    verification = _verify_assertion(
+        stored, credential, challenge, require_user_verification=_require_user_verification()
+    )
     webauthn_crud.update_sign_count(stored, verification.new_sign_count, db)
     return True

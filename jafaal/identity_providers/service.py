@@ -1089,6 +1089,9 @@ class IdentityProviderService:
                 expected_issuer=expected_issuer,
                 expected_audience=client_id,
                 expected_nonce=expected_nonce,
+                # OIDC providers must present a verifiable ID token; oauth2 providers
+                # legitimately identify the user via userinfo only.
+                require_verified_id_token=(idp.provider_type == "oidc"),
             )
 
             # Extract subject (unique user identifier)
@@ -1267,6 +1270,7 @@ class IdentityProviderService:
         expected_issuer: str | None,
         expected_audience: str,
         expected_nonce: str | None = None,
+        require_verified_id_token: bool = False,
     ) -> dict[str, Any]:
         """
         Retrieve user information from an identity provider using the provided token response.
@@ -1289,6 +1293,11 @@ class IdentityProviderService:
             expected_issuer (str | None): Expected 'iss' claim value from OIDC discovery.
             expected_audience (str): Expected 'aud' claim value (typically the client_id).
             expected_nonce (str | None): Expected nonce value from session (optional, but recommended).
+            require_verified_id_token (bool): When True (OIDC providers), the signed
+                ID token is the identity assertion and unverified userinfo is never
+                accepted as a fallback — the flow fails closed if the ID token is
+                absent or cannot be verified. False (e.g. plain OAuth2 providers)
+                identifies the user from the userinfo endpoint by design.
 
         Returns:
             dict[str, Any]: The user information claims retrieved from the identity provider.
@@ -1370,18 +1379,37 @@ class IdentityProviderService:
                 logger.error(f"Unexpected error verifying ID token: {err}", exc_info=err)
                 raise jafaal_exceptions.InternalError("Failed to verify ID token") from err
 
-        # If we got userinfo from endpoint but no ID token, return userinfo
+        # Reaching this point means no ID token was cryptographically verified —
+        # either the provider returned none, or JWKS/issuer were unavailable so it
+        # could not be checked. For an OIDC provider the signed ID token *is* the
+        # identity assertion, so fail closed here instead of trusting the userinfo
+        # response: without a verified ID token (and with no PKCE/nonce binding on a
+        # pure userinfo flow) an injected or stolen authorization code redeemed in
+        # the attacker's session would resolve to the victim's identity
+        # (authorization-code injection). A provider that legitimately issues no ID
+        # token must be configured as provider_type="oauth2".
+        if require_verified_id_token:
+            if id_token:
+                logger.error(
+                    "OIDC provider returned an ID token that could not be verified "
+                    "(missing JWKS URI or issuer from discovery); refusing to fall back to "
+                    "unverified userinfo. Configure issuer_url so the ID token can be verified."
+                )
+            else:
+                logger.error(
+                    "OIDC provider returned no ID token; refusing to authenticate from "
+                    "unverified userinfo. Use provider_type='oauth2' for userinfo-only providers."
+                )
+            raise jafaal_exceptions.IdentityProviderError(
+                "Unable to securely verify your identity with the identity provider. Please contact administrator."
+            )
+
+        # Non-OIDC providers (provider_type="oauth2") identify the user from the
+        # userinfo endpoint; they issue no ID token by design.
         if userinfo_claims:
             return userinfo_claims
 
-        # If ID token exists but we're missing JWKS/issuer info, log warning
-        if id_token and (not jwks_uri or not expected_issuer):
-            logger.warning(
-                "ID token present but cannot verify: missing JWKS URI or issuer. "
-                "Configure issuer_url for OIDC discovery."
-            )
-
-        # If we get here, we couldn't retrieve or verify any user information
+        # Couldn't retrieve or verify any user information.
         logger.error("Failed to retrieve user information from userinfo endpoint or ID token")
         raise jafaal_exceptions.InternalError(
             "Unable to retrieve user information from identity provider. Please contact administrator."

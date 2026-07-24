@@ -149,6 +149,14 @@ def test_resolve_and_validate_host_rejects_when_any_answer_private(monkeypatch):
         network._resolve_and_validate_host("mixed.test")
 
 
+def test_resolve_and_validate_host_rejects_ipv4_mapped_metadata(monkeypatch):
+    # A resolver answer of the IPv4-mapped cloud-metadata address must be rejected
+    # rather than treated as a public IPv6 address.
+    monkeypatch.setattr("jafaal._core.network.socket.getaddrinfo", _fake_getaddrinfo("::ffff:169.254.169.254"))
+    with pytest.raises(exc.InvalidRequestError):
+        network._resolve_and_validate_host("rebind-mapped.test")
+
+
 def test_resolve_and_validate_host_ip_literals():
     assert network._resolve_and_validate_host("93.184.216.34") == "93.184.216.34"
     with pytest.raises(exc.InvalidRequestError):

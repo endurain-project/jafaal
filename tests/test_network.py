@@ -1,6 +1,7 @@
 """Tests for the SSRF guard and proxy-aware client IP extraction."""
 
 import dataclasses
+import ipaddress
 from contextlib import contextmanager
 
 import pytest
@@ -59,6 +60,20 @@ def test_reject_private_range():
         network.reject_private_url("http://10.0.0.5")
     with pytest.raises(exc.InvalidRequestError, match="non-public"):
         network.reject_private_url("http://169.254.169.254/latest/meta-data")
+
+
+def test_ipv4_mapped_ipv6_is_classified_by_embedded_address():
+    # ::ffff:a.b.c.d must be classified by its embedded IPv4 address so a mapped
+    # metadata/loopback/private literal is caught even on Python 3.12.0-3.12.3,
+    # where ipaddress does not decompose it inside is_private/is_global (the OS
+    # still routes it to the embedded IPv4 target).
+    assert network._is_private_or_reserved(ipaddress.ip_address("::ffff:169.254.169.254")) is True
+    assert network._is_private_or_reserved(ipaddress.ip_address("::ffff:127.0.0.1")) is True
+    assert network._is_private_or_reserved(ipaddress.ip_address("::ffff:10.0.0.5")) is True
+    # A genuinely public mapped address is not over-rejected, and normal public
+    # IPv6 is unaffected.
+    assert network._is_private_or_reserved(ipaddress.ip_address("::ffff:93.184.216.34")) is False
+    assert network._is_private_or_reserved(ipaddress.ip_address("2606:4700:4700::1111")) is False
 
 
 def test_get_ip_address_honours_xff_when_peer_trusted():

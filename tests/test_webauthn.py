@@ -340,6 +340,40 @@ def test_passwordless_inactive_user_rejected(client, make_user, mock_verify):
     assert resp.status_code in (401, 403)
 
 
+def test_passwordless_begin_requires_user_verification(client, make_user):
+    # Passwordless login forces UV=required regardless of the (default
+    # "preferred") global setting, so the passkey is a genuine factor rather than
+    # mere possession.
+    user = make_user(username="alice")
+    _register_credential(user.id, raw_id=b"cred-1")
+    begin = client.post(AUTH_BEGIN, json={"username": "alice"})
+    assert begin.status_code == 200
+    assert begin.json()["options"]["userVerification"] == "required"
+
+
+def test_passwordless_complete_enforces_user_verification(client, make_user, monkeypatch):
+    # The passwordless completion verifies the assertion with
+    # require_user_verification=True, independent of the global setting.
+    user = make_user(username="alice")
+    _register_credential(user.id, raw_id=b"cred-1")
+    captured: dict = {}
+
+    def _capture(**kw):
+        captured.update(kw)
+        return _fake_authentication()
+
+    monkeypatch.setattr(webauthn_service._webauthn, "verify_authentication_response", _capture)
+
+    begin = client.post(AUTH_BEGIN, json={"username": "alice"})
+    resp = client.post(
+        AUTH_COMPLETE,
+        json={"challenge_id": begin.json()["challenge_id"], "credential": _assertion_credential()},
+        headers=WEB,
+    )
+    assert resp.status_code == 200
+    assert captured["require_user_verification"] is True
+
+
 # --------------------------------------------------------------------------- #
 # Second factor (password + passkey)
 # --------------------------------------------------------------------------- #
@@ -383,6 +417,35 @@ def test_second_factor_completes_login(client, make_user, mock_verify):
         )
     assert resp.status_code == 200
     assert resp.json()["access_token"]
+
+
+def test_second_factor_uses_configured_user_verification(client, make_user, monkeypatch):
+    # The second-factor path (the password already provided the first factor)
+    # keeps UV governed by AuthSettings.webauthn_user_verification, unlike the
+    # forced-UV passwordless path.
+    user = make_user(username="alice")
+    _register_credential(user.id, raw_id=b"cred-1")
+    captured: dict = {}
+
+    def _capture(**kw):
+        captured.update(kw)
+        return _fake_authentication()
+
+    monkeypatch.setattr(webauthn_service._webauthn, "verify_authentication_response", _capture)
+
+    with override_settings(webauthn_second_factor_enabled=True, webauthn_user_verification="discouraged"):
+        assert _login(client).status_code == 202
+        begin = client.post(MFA_BEGIN, json={"username": "alice"})
+        assert begin.status_code == 200
+        # The second-factor ceremony advertises the configured (non-forced) UV level.
+        assert begin.json()["userVerification"] == "discouraged"
+        resp = client.post(
+            MFA_COMPLETE,
+            json={"username": "alice", "credential": _assertion_credential()},
+            headers=WEB,
+        )
+    assert resp.status_code == 200
+    assert captured["require_user_verification"] is False
 
 
 def test_second_factor_rejects_foreign_credential(client, make_user):

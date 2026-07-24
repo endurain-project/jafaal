@@ -325,6 +325,42 @@ def test_get_userinfo_forwards_access_token_for_at_hash():
         )
 
 
+def test_get_userinfo_oidc_refuses_userinfo_without_verified_id_token(monkeypatch):
+    # An OIDC provider (require_verified_id_token=True) must NOT authenticate from
+    # userinfo when there is no verifiable ID token; a plain OAuth2 provider
+    # (False) legitimately uses userinfo as the identity source.
+    _no_ssrf(monkeypatch)
+    svc = IdentityProviderService()
+    userinfo = {"sub": "u1", "email": "u1@test.dev"}
+    client = _FakeOAuthClient({"access_token": "at"}, userinfo)
+
+    got = asyncio.run(
+        svc._get_userinfo(
+            {"access_token": "at"},
+            f"{ISSUER}/userinfo",
+            client,
+            None,
+            None,
+            AUDIENCE,
+            require_verified_id_token=False,
+        )
+    )
+    assert got["sub"] == "u1"
+
+    with pytest.raises(exc.IdentityProviderError):
+        asyncio.run(
+            svc._get_userinfo(
+                {"access_token": "at"},
+                f"{ISSUER}/userinfo",
+                client,
+                None,
+                None,
+                AUDIENCE,
+                require_verified_id_token=True,
+            )
+        )
+
+
 def test_verify_id_token_missing_kid():
     svc = IdentityProviderService()
     key, _jwks = _rsa_jwks()
@@ -412,7 +448,9 @@ def _prepare_callback_idp(db, monkeypatch, svc, *, userinfo, token=None):
 
 def test_handle_callback_login_creates_user(db, monkeypatch):
     svc = IdentityProviderService()
-    idp = _create_idp(db, token_endpoint=f"{ISSUER}/token", userinfo_endpoint=f"{ISSUER}/userinfo")
+    idp = _create_idp(
+        db, token_endpoint=f"{ISSUER}/token", userinfo_endpoint=f"{ISSUER}/userinfo", provider_type="oauth2"
+    )
     userinfo = {
         "sub": "idp-sub-1",
         "email": "sso@test.dev",
@@ -439,7 +477,9 @@ def test_handle_callback_login_creates_user(db, monkeypatch):
 def test_handle_callback_link_mode(db, make_user, monkeypatch):
     user = make_user(username="existing")
     svc = IdentityProviderService()
-    idp = _create_idp(db, token_endpoint=f"{ISSUER}/token", userinfo_endpoint=f"{ISSUER}/userinfo")
+    idp = _create_idp(
+        db, token_endpoint=f"{ISSUER}/token", userinfo_endpoint=f"{ISSUER}/userinfo", provider_type="oauth2"
+    )
     userinfo = {"sub": "idp-sub-2", "email": "existing@test.dev", "email_verified": True}
     _prepare_callback_idp(db, monkeypatch, svc, userinfo=userinfo)
 
@@ -478,7 +518,9 @@ def _stepup_state(db, idp, user, *, state_id):
 def test_handle_callback_step_up_success(db, make_user, monkeypatch):
     user = make_user(username="ssostepup", password=None)
     svc = IdentityProviderService()
-    idp = _create_idp(db, token_endpoint=f"{ISSUER}/token", userinfo_endpoint=f"{ISSUER}/userinfo")
+    idp = _create_idp(
+        db, token_endpoint=f"{ISSUER}/token", userinfo_endpoint=f"{ISSUER}/userinfo", provider_type="oauth2"
+    )
     links_crud.create_user_identity_provider(user.id, idp.id, "idp-sub-su", db)
     now = int(datetime.now(UTC).timestamp())
     userinfo = {"sub": "idp-sub-su", "email": "ssostepup@test.dev", "auth_time": now}
@@ -495,7 +537,9 @@ def test_handle_callback_step_up_success(db, make_user, monkeypatch):
 def test_handle_callback_step_up_stale_auth_time(db, make_user, monkeypatch):
     user = make_user(username="ssostale", password=None)
     svc = IdentityProviderService()
-    idp = _create_idp(db, token_endpoint=f"{ISSUER}/token", userinfo_endpoint=f"{ISSUER}/userinfo")
+    idp = _create_idp(
+        db, token_endpoint=f"{ISSUER}/token", userinfo_endpoint=f"{ISSUER}/userinfo", provider_type="oauth2"
+    )
     links_crud.create_user_identity_provider(user.id, idp.id, "idp-sub-stale", db)
     stale = int(datetime.now(UTC).timestamp()) - 4000  # older than the 300s freshness window
     userinfo = {"sub": "idp-sub-stale", "auth_time": stale}
@@ -510,7 +554,9 @@ def test_handle_callback_step_up_stale_auth_time(db, make_user, monkeypatch):
 def test_handle_callback_step_up_missing_auth_time(db, make_user, monkeypatch):
     user = make_user(username="ssonoat", password=None)
     svc = IdentityProviderService()
-    idp = _create_idp(db, token_endpoint=f"{ISSUER}/token", userinfo_endpoint=f"{ISSUER}/userinfo")
+    idp = _create_idp(
+        db, token_endpoint=f"{ISSUER}/token", userinfo_endpoint=f"{ISSUER}/userinfo", provider_type="oauth2"
+    )
     links_crud.create_user_identity_provider(user.id, idp.id, "idp-sub-noat", db)
     userinfo = {"sub": "idp-sub-noat"}  # provider did not assert auth_time
     _prepare_callback_idp(db, monkeypatch, svc, userinfo=userinfo)
@@ -524,7 +570,9 @@ def test_handle_callback_step_up_missing_auth_time(db, make_user, monkeypatch):
 def test_handle_callback_step_up_identity_mismatch(db, make_user, monkeypatch):
     user = make_user(username="ssomm", password=None)
     svc = IdentityProviderService()
-    idp = _create_idp(db, token_endpoint=f"{ISSUER}/token", userinfo_endpoint=f"{ISSUER}/userinfo")
+    idp = _create_idp(
+        db, token_endpoint=f"{ISSUER}/token", userinfo_endpoint=f"{ISSUER}/userinfo", provider_type="oauth2"
+    )
     # The user is NOT linked to the subject the IdP returns.
     now = int(datetime.now(UTC).timestamp())
     userinfo = {"sub": "someone-elses-sub", "auth_time": now}
@@ -566,7 +614,9 @@ def test_initiate_link_forwards_extra_authorize_params(db, make_user):
 
 def test_handle_callback_missing_subject(db, monkeypatch):
     svc = IdentityProviderService()
-    idp = _create_idp(db, token_endpoint=f"{ISSUER}/token", userinfo_endpoint=f"{ISSUER}/userinfo")
+    idp = _create_idp(
+        db, token_endpoint=f"{ISSUER}/token", userinfo_endpoint=f"{ISSUER}/userinfo", provider_type="oauth2"
+    )
     _prepare_callback_idp(db, monkeypatch, svc, userinfo={"email": "x@test.dev"})  # no 'sub'
 
     state_id = "s-nosub"
@@ -577,3 +627,55 @@ def test_handle_callback_missing_subject(db, monkeypatch):
 
     with pytest.raises(exc.IdentityProviderError):
         asyncio.run(svc.handle_callback(idp, "auth-code", state_id, _request(), password_hasher, db, state_obj))
+
+
+def test_handle_callback_oidc_refuses_unverified_userinfo(db, monkeypatch):
+    # An OIDC provider that returns userinfo but no verifiable ID token (no
+    # issuer_url/JWKS configured) must fail closed instead of authenticating from
+    # unverified userinfo — the authorization-code-injection defense.
+    svc = IdentityProviderService()
+    idp = _create_idp(db, token_endpoint=f"{ISSUER}/token", userinfo_endpoint=f"{ISSUER}/userinfo")  # oidc default
+    userinfo = {"sub": "idp-sub-noverify", "email": "x@test.dev", "preferred_username": "x", "email_verified": True}
+    _prepare_callback_idp(db, monkeypatch, svc, userinfo=userinfo)  # token carries no id_token
+
+    state_id = "s-oidc-noverify"
+    oauth_state_crud.create_oauth_state(
+        db=db, state_id=state_id, nonce="n", client_type="web", ip_address=None, idp_id=idp.id
+    )
+    state_obj = oauth_state_crud.get_oauth_state_by_id(state_id, db)
+
+    with pytest.raises(exc.IdentityProviderError):
+        asyncio.run(svc.handle_callback(idp, "auth-code", state_id, _request(), password_hasher, db, state_obj))
+    # No account provisioned and no link recorded.
+    assert links_crud.get_user_identity_provider_by_subject_and_idp_id(idp.id, "idp-sub-noverify", db) is None
+
+
+def test_handle_callback_oidc_verified_id_token_succeeds(db, monkeypatch):
+    # The OIDC happy path: a provider with a verifiable ID token authenticates
+    # through the full callback with the fail-closed guard in place.
+    _no_ssrf(monkeypatch)
+    svc = IdentityProviderService()
+    idp = _create_idp(db, issuer_url=ISSUER, token_endpoint=f"{ISSUER}/token")  # provider_type defaults to "oidc"
+    key, jwks = _rsa_jwks()
+    svc._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
+
+    async def _fake_config(_idp):
+        return {"jwks_uri": JWKS_URI, "issuer": ISSUER, "token_endpoint": f"{ISSUER}/token"}
+
+    monkeypatch.setattr(svc, "get_oidc_configuration", _fake_config)
+
+    claims = _id_token_claims(nonce="n", sub="idp-oidc-1")
+    claims.update({"email": "oidc@test.dev", "preferred_username": "oidcuser", "email_verified": True})
+    id_token = jwt.encode({"alg": "RS256", "kid": "test-key-1"}, claims, key)
+    token = {"access_token": "at", "id_token": id_token, "expires_in": 300, "token_type": "Bearer"}
+    monkeypatch.setattr(svc, "_create_oauth_client", lambda **kw: _FakeOAuthClient(token, None))
+
+    state_id = "s-oidc-ok"
+    oauth_state_crud.create_oauth_state(
+        db=db, state_id=state_id, nonce="n", client_type="web", ip_address=None, idp_id=idp.id
+    )
+    state_obj = oauth_state_crud.get_oauth_state_by_id(state_id, db)
+
+    result = asyncio.run(svc.handle_callback(idp, "auth-code", state_id, _request(), password_hasher, db, state_obj))
+    assert result["user"].username == "oidcuser"
+    assert links_crud.get_user_identity_provider_by_subject_and_idp_id(idp.id, "idp-oidc-1", db) is not None

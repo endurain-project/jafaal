@@ -233,7 +233,19 @@ def _is_private_or_reserved(
     Combines every "do not dial" predicate ``ipaddress`` exposes: private,
     loopback, link-local, multicast, unspecified, and reserved. Any of these
     would let an attacker pivot to internal infrastructure or cloud metadata.
+
+    IPv4-mapped IPv6 addresses (``::ffff:a.b.c.d``) are decomposed to the
+    embedded IPv4 address before classifying: CPython only started applying the
+    ``is_private`` / ``is_global`` predicates through the mapped address in
+    3.12.4, so on 3.12.0-3.12.3 a literal such as ``::ffff:169.254.169.254``
+    would otherwise be treated as a public IPv6 address and slip past the
+    deny-list (while the OS still routes it to the embedded IPv4 target, e.g.
+    the cloud metadata endpoint). Decomposing here makes the guard correct on
+    every supported patch release.
     """
+    mapped = getattr(addr, "ipv4_mapped", None)
+    if mapped is not None:
+        addr = mapped
     return (
         addr.is_private
         or addr.is_loopback
