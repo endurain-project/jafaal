@@ -25,6 +25,7 @@ It owns the security-critical parts of auth so your app doesn't have to.
 - **JWT access/refresh tokens** (HS256) with refresh-token **rotation + reuse detection**
 - **Sessions** with idle/absolute timeout, CSRF binding, and web/mobile (PKCE) flows
 - **MFA** (TOTP + single-use backup codes) with replay protection
+- **Passkeys / WebAuthn** — passwordless login and passkey-as-second-factor (incl. usernameless)
 - **API keys** with a host-controlled scope allow-list
 - **SSO / OIDC** identity providers with SSRF-guarded outbound calls
 - **Password reset & sign-up** flows that emit events (you deliver the email)
@@ -52,6 +53,7 @@ you use:
 
 ```bash
 pip install 'jafaal[mfa]'     # TOTP MFA (pyotp) + QR provisioning (qrcode)
+pip install 'jafaal[webauthn]' # passkeys / WebAuthn (py_webauthn)
 pip install 'jafaal[sso]'     # OpenID Connect identity providers (authlib)
 pip install 'jafaal[redis]'   # distributed StateStore adapter (redis)
 pip install 'jafaal[all]'     # everything

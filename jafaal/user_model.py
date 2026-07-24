@@ -77,6 +77,7 @@ if TYPE_CHECKING:
     from jafaal.password_reset_tokens.models import PasswordResetToken
     from jafaal.sessions.models import UsersSessions
     from jafaal.sign_up_tokens.models import SignUpToken
+    from jafaal.webauthn.models import WebAuthnCredential
 
 __all__ = [
     "IntPKUserMixin",
@@ -179,6 +180,10 @@ class UserMixin:
     @declared_attr
     def mfa_backup_codes(cls) -> Mapped[list[MFABackupCode]]:
         return relationship("MFABackupCode", back_populates="users", cascade="all, delete-orphan")
+
+    @declared_attr
+    def webauthn_credentials(cls) -> Mapped[list[WebAuthnCredential]]:
+        return relationship("WebAuthnCredential", back_populates="users", cascade="all, delete-orphan")
 
     @declared_attr
     def auth_mfa(cls) -> Mapped[UsersMFA | None]:

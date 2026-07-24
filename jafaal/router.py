@@ -38,7 +38,9 @@ import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.models as jafaal_sessions_models
 import jafaal.sessions.rotated_refresh_tokens.utils as jafaal_sessions_rotated_tokens_utils
 import jafaal.sessions.utils as jafaal_sessions_utils
+import jafaal.settings as jafaal_settings
 import jafaal.utils as jafaal_utils
+import jafaal.webauthn.crud as webauthn_crud
 from jafaal._core import network
 
 logger = logging.getLogger(__name__)
@@ -328,8 +330,15 @@ def login_for_access_token(
     # Check if the user is active
     jafaal_user_guards.check_user_is_active(user)
 
-    # Check if MFA is enabled for this user
-    if mfa_service.is_mfa_enabled_for_user(user.id, db):
+    # A second factor is required when the account has TOTP MFA enabled, or —
+    # when webauthn_second_factor_enabled — has at least one registered passkey.
+    # The pending login is satisfied by either factor: /auth/mfa/verify (TOTP or
+    # backup code) or /auth/webauthn/mfa/* (passkey assertion).
+    require_second_factor = mfa_service.is_mfa_enabled_for_user(user.id, db) or (
+        jafaal_settings.get_settings().webauthn_second_factor_enabled
+        and webauthn_crud.user_has_credentials(user.id, db)
+    )
+    if require_second_factor:
         # Store the user for pending MFA verification
         with _translate_store_outage():
             pending_mfa_store.add_pending_login(form_data.username, user.id)

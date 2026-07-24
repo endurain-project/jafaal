@@ -80,6 +80,7 @@ class Event:
     LOCKOUT_APPLIED: Final = "lockout.applied"
     MFA_FAILURE: Final = "mfa.failure"
     MFA_REPLAY_CHECK_UNAVAILABLE: Final = "mfa.replay_check_unavailable"
+    WEBAUTHN_REGISTERED: Final = "webauthn.registered"
     TOKEN_REUSE_GRACE: Final = "token.reuse_grace"
     TOKEN_THEFT_DETECTED: Final = "token.theft_detected"
     TOKEN_REVOKED: Final = "token.revoked"

@@ -26,6 +26,7 @@ misconfiguration fails fast.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 from cryptography.fernet import Fernet
 
@@ -189,6 +190,23 @@ class AuthSettings:
             (``""``, ``"__Secure-"``, or ``"__Host-"``), applied only in a
             deployed environment. ``"__Host-"`` requires ``refresh_cookie_path``
             to be ``"/"``. See :attr:`effective_refresh_cookie_name`.
+        webauthn_rp_id: WebAuthn Relying Party ID — the registrable domain
+            passkeys are scoped to (no scheme/port). Defaults to the ``base_url``
+            host (see :attr:`resolved_webauthn_rp_id`).
+        webauthn_rp_name: Human-readable Relying Party name shown by the
+            authenticator. Defaults to :attr:`app_name`.
+        webauthn_origins: Exact origins (scheme + host + port) a passkey ceremony
+            may complete from. Defaults to the origin of ``base_url`` (see
+            :attr:`resolved_webauthn_origins`).
+        webauthn_user_verification: User-verification requirement for ceremonies
+            (``"required"``, ``"preferred"`` (default), or ``"discouraged"``).
+        webauthn_attestation: Attestation conveyance requested at registration
+            (``"none"`` (default) or ``"direct"``).
+        webauthn_second_factor_enabled: When ``True``, a user with registered
+            passkeys must present one as a second factor after password login.
+            Off by default (passkeys remain usable for passwordless login).
+        webauthn_challenge_ttl_seconds: Lifetime, in seconds, of a WebAuthn
+            challenge held in the state store before it must be redeemed.
     """
 
     # --- secrets (required; the host provides them) ---
@@ -342,6 +360,43 @@ class AuthSettings:
     step_up_reauth_max_age_seconds: int = 300
     step_up_grant_ttl_seconds: int = 120
 
+    # --- WebAuthn / passkeys ---
+    # Relying Party (RP) identity for the WebAuthn ceremonies. ``webauthn_rp_id``
+    # is the registrable domain the passkey is scoped to (e.g. "example.com" — no
+    # scheme or port); it must be a registrable suffix of every origin the app is
+    # served from. ``webauthn_origins`` are the exact origins (scheme + host +
+    # port, e.g. "https://example.com") the browser is allowed to complete a
+    # ceremony from. Both default to values derived from ``base_url`` when empty
+    # (see resolved_webauthn_rp_id / resolved_webauthn_origins); the WebAuthn
+    # endpoints fail fast if neither an explicit value nor a usable base_url is
+    # available. ``webauthn_rp_name`` is the human-readable RP name shown by the
+    # authenticator (defaults to app_name).
+    webauthn_rp_id: str = ""
+    webauthn_rp_name: str = ""
+    webauthn_origins: tuple[str, ...] = ()
+    # User-verification requirement for passkey ceremonies: "required" forces the
+    # authenticator to verify the user (PIN/biometric — a true second factor),
+    # "preferred" (default) verifies when the authenticator supports it, and
+    # "discouraged" skips it (presence-only).
+    webauthn_user_verification: str = "preferred"
+    # Attestation conveyance requested at registration. "none" (default) asks for
+    # no attestation statement (best for privacy and interoperability); "direct"
+    # requests the authenticator's attestation so the host can inspect the model
+    # (AAGUID). JAFAAL does not verify attestation certificates — request
+    # "direct" only if the host processes them.
+    webauthn_attestation: str = "none"
+    # When True, a user who has registered passkeys must present one as a second
+    # factor after a successful password login (the login returns an
+    # MFA-required challenge, satisfiable by a passkey assertion). Off by default:
+    # passkeys are usable for passwordless login but do not gate the password
+    # path. Passwordless authentication is always available regardless of this
+    # flag.
+    webauthn_second_factor_enabled: bool = False
+    # Lifetime, in seconds, of a WebAuthn registration/authentication challenge
+    # held in the state store before it must be redeemed. Kept short (a ceremony
+    # is interactive and immediate) to bound replay of a leaked challenge.
+    webauthn_challenge_ttl_seconds: int = 300
+
     def __post_init__(self) -> None:
         if not self.secret_key:
             raise ValueError("AuthSettings.secret_key is required")
@@ -397,6 +452,17 @@ class AuthSettings:
             raise ValueError("AuthSettings.step_up_reauth_max_age_seconds must be positive")
         if self.step_up_grant_ttl_seconds <= 0:
             raise ValueError("AuthSettings.step_up_grant_ttl_seconds must be positive")
+        if self.webauthn_user_verification not in ("required", "preferred", "discouraged"):
+            raise ValueError(
+                "AuthSettings.webauthn_user_verification must be 'required', 'preferred', or "
+                f"'discouraged' (got {self.webauthn_user_verification!r})."
+            )
+        if self.webauthn_attestation not in ("none", "direct"):
+            raise ValueError(
+                f"AuthSettings.webauthn_attestation must be 'none' or 'direct' (got {self.webauthn_attestation!r})."
+            )
+        if self.webauthn_challenge_ttl_seconds <= 0:
+            raise ValueError("AuthSettings.webauthn_challenge_ttl_seconds must be positive")
         if self.jwt_leeway_seconds < 0:
             raise ValueError("AuthSettings.jwt_leeway_seconds must be non-negative")
         if self.password_max_length < 64:
@@ -455,6 +521,39 @@ class AuthSettings:
         if self.refresh_cookie_prefix and self.is_deployed:
             return f"{self.refresh_cookie_prefix}{self.refresh_cookie_name}"
         return self.refresh_cookie_name
+
+    @property
+    def resolved_webauthn_rp_id(self) -> str:
+        """WebAuthn Relying Party ID, falling back to the ``base_url`` host.
+
+        Returns the explicit :attr:`webauthn_rp_id` when set, otherwise the
+        hostname parsed from :attr:`base_url` (no scheme or port). Empty when
+        neither is available — the WebAuthn endpoints treat that as a
+        misconfiguration and fail fast.
+        """
+        if self.webauthn_rp_id:
+            return self.webauthn_rp_id
+        return urlparse(self.base_url).hostname or ""
+
+    @property
+    def resolved_webauthn_rp_name(self) -> str:
+        """WebAuthn Relying Party display name, falling back to :attr:`app_name`."""
+        return self.webauthn_rp_name or self.app_name
+
+    @property
+    def resolved_webauthn_origins(self) -> tuple[str, ...]:
+        """Expected WebAuthn origins, falling back to the scheme+host of ``base_url``.
+
+        Returns the explicit :attr:`webauthn_origins` when set, otherwise a
+        single origin derived from :attr:`base_url` (scheme + host + port).
+        Empty when neither is available.
+        """
+        if self.webauthn_origins:
+            return self.webauthn_origins
+        parsed = urlparse(self.base_url)
+        if parsed.scheme and parsed.netloc:
+            return (f"{parsed.scheme}://{parsed.netloc}",)
+        return ()
 
 
 # ---------------------------------------------------------------------------

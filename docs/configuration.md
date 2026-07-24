@@ -57,6 +57,13 @@ the settings and invalidates settings-derived caches (e.g. the token manager).
 | `argon2_parallelism` | `4` | Argon2 parallelism (lanes). |
 | `password_max_length` | `128` | Maximum accepted password length (minimum 64), enforced before hashing. |
 | `mfa_totp_replay_fail_open` | `False` | On a state-store outage, accept a TOTP code without replay protection instead of failing closed (503). |
+| `webauthn_rp_id` | `""` | WebAuthn Relying Party ID (registrable domain, no scheme/port); defaults to the `base_url` host. |
+| `webauthn_rp_name` | `""` | Human-readable RP name shown by the authenticator; defaults to `app_name`. |
+| `webauthn_origins` | `()` | Exact origins (scheme+host+port) a passkey ceremony may complete from; defaults to the `base_url` origin. |
+| `webauthn_user_verification` | `"preferred"` | User-verification requirement (`required`/`preferred`/`discouraged`). |
+| `webauthn_attestation` | `"none"` | Attestation conveyance requested at registration (`none`/`direct`). |
+| `webauthn_second_factor_enabled` | `False` | Require a registered passkey as a second factor after password login. |
+| `webauthn_challenge_ttl_seconds` | `300` | Lifetime of a WebAuthn challenge held in the state store. |
 | `rate_limit_sensitive` | `"10/minute"` | Budget hint for sensitive endpoints. |
 | `rate_limit_write` | `"30/minute"` | Budget hint for write endpoints. |
 | `trusted_proxies` | `()` | Peers whose `X-Forwarded-For`/`X-Real-IP` are honoured (empty = trust only the direct peer). |
@@ -189,6 +196,76 @@ access/refresh tokens, mounted on the auth router:
     deployment needs a shared backend (e.g.
     [`RedisStateStore`](ports-and-adapters.md#redisstatestore)) for revocation to
     apply across workers — the same requirement as progressive lockout.
+
+## WebAuthn / passkeys
+
+JAFAAL ships passkey (WebAuthn) support as the optional `jafaal[webauthn]` extra
+(installs [`py_webauthn`](https://pypi.org/project/webauthn/)). It covers both
+**passwordless** login and passkey-as-**second-factor**, including
+usernameless/discoverable credentials. Install and configure the Relying Party:
+
+```bash
+pip install 'jafaal[webauthn]'
+```
+
+```python
+import jafaal
+
+jafaal.configure(
+    jafaal.AuthSettings(
+        secret_key=...,
+        fernet_key=...,
+        base_url="https://app.example",           # webauthn_rp_id/origins default from this
+        # Or set them explicitly (required if base_url is not the passkey origin):
+        # webauthn_rp_id="app.example",           # registrable domain, no scheme/port
+        # webauthn_origins=("https://app.example",),
+        webauthn_user_verification="preferred",   # "required" makes UV (PIN/biometric) a true 2nd factor
+        webauthn_attestation="none",              # "direct" only if you process attestation
+        webauthn_second_factor_enabled=False,     # True → password login also requires a passkey
+    )
+)
+```
+
+`webauthn_rp_id` and `webauthn_origins` default to the host and origin of
+`base_url`; the endpoints return **503** if neither an explicit value nor a
+usable `base_url` is configured. The companion table `webauthn_credentials` is
+created by `jafaal.map_models` + the packaged migrations (revision
+`0002_webauthn_credentials`).
+
+### Endpoints
+
+Mounted by `create_auth_router` (paths relative to your API root):
+
+| Method & path | Auth | Purpose |
+| --- | --- | --- |
+| `POST /auth/webauthn/register/begin` | access token | Start registration; returns `navigator.credentials.create()` options. |
+| `POST /auth/webauthn/register/complete` | access token | Verify the attestation and store the passkey. |
+| `GET /auth/webauthn/credentials` | access token | List the user's passkeys. |
+| `DELETE /auth/webauthn/credentials/{id}` | access token | Delete a passkey. |
+| `POST /public/webauthn/authenticate/begin` | anonymous | Start passwordless login; returns `{challenge_id, options}`. |
+| `POST /public/webauthn/authenticate/complete` | anonymous | Verify the assertion and issue JAFAAL tokens. |
+| `POST /auth/webauthn/mfa/begin` | anonymous | Start the second-factor ceremony for a pending login. |
+| `POST /auth/webauthn/mfa/complete` | anonymous | Verify the second-factor assertion and complete login. |
+
+The `/authenticate/*` and `/mfa/*` completion endpoints require the
+`X-Client-Type` header (`web`/`mobile`) and return the same token response as
+`/auth/login`. Challenges are single-use and expire after
+`webauthn_challenge_ttl_seconds`.
+
+### Second factor
+
+With `webauthn_second_factor_enabled=True`, a successful password login for a
+user who has registered passkeys returns the standard **MFA-required** response
+(`202` for web) instead of tokens. The client then completes the pending login
+with a passkey via `/auth/webauthn/mfa/begin` → `/auth/webauthn/mfa/complete`
+(or, if the account also has TOTP MFA, `/auth/mfa/verify`). Passwordless login is
+always available regardless of this flag.
+
+!!! note "Distributed deployments"
+    WebAuthn challenges live in the state store, so a multi-worker deployment
+    needs a shared backend (e.g.
+    [`RedisStateStore`](ports-and-adapters.md#redisstatestore)) — the same
+    requirement as progressive lockout.
 
 ## Database: your `Base` and the session factory
 

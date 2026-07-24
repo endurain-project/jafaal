@@ -120,6 +120,7 @@ _MODEL_MODULES: tuple[str, ...] = (
     "jafaal.oauth_state.models",
     "jafaal.password_reset_tokens.models",
     "jafaal.sign_up_tokens.models",
+    "jafaal.webauthn.models",
 )
 
 

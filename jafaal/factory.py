@@ -58,6 +58,8 @@ class RouterPrefixes:
     identity_providers_public: str = "/public/idp"
     password_reset: str = "/auth"
     sign_up: str = "/auth"
+    webauthn: str = "/auth/webauthn"
+    webauthn_public: str = "/public/webauthn"
 
 
 def _warn_on_insecure_defaults() -> None:
@@ -279,6 +281,8 @@ def create_auth_router(
     from jafaal.router import router as auth_router
     from jafaal.sessions.router import router as sessions_router
     from jafaal.sign_up_tokens.router import router as sign_up_router
+    from jafaal.webauthn.router import public_router as webauthn_public_router
+    from jafaal.webauthn.router import router as webauthn_router
 
     aggregate = APIRouter()
     aggregate.include_router(auth_router, prefix=prefixes.auth, tags=["auth"])
@@ -292,6 +296,8 @@ def create_auth_router(
     )
     aggregate.include_router(password_reset_router, prefix=prefixes.password_reset, tags=["password_reset"])
     aggregate.include_router(sign_up_router, prefix=prefixes.sign_up, tags=["sign_up"])
+    aggregate.include_router(webauthn_router, prefix=prefixes.webauthn, tags=["webauthn"])
+    aggregate.include_router(webauthn_public_router, prefix=prefixes.webauthn_public, tags=["webauthn"])
     # JWKS is mounted at the aggregate root (no sub-prefix) so it lands at
     # ``<api-root>/.well-known/jwks.json`` — the URL to advertise as the
     # ``jwks_uri`` for resource servers verifying asymmetric tokens.

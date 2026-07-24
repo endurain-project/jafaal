@@ -44,6 +44,10 @@ mfa = [
 sso = [
     "authlib>=1.6.11",
 ]
+# WebAuthn / passkeys (registration + authentication ceremonies).
+webauthn = [
+    "webauthn>=2.0.0",
+]
 # Distributed state store (shared lockout / MFA-replay across workers) via the
 # jafaal.adapters.RedisStateStore adapter.
 redis = [
@@ -60,6 +64,7 @@ all = [
     "authlib>=1.6.11",
     "redis>=5.0.0",
     "alembic>=1.13",
+    "webauthn>=2.0.0",
 ]
 
 [dependency-groups]
@@ -89,6 +94,8 @@ test = [
     "fakeredis>=2.21.0",
     # The migrations suite drives the packaged Alembic revisions.
     "alembic>=1.13",
+    # The WebAuthn/passkey suite exercises the registration/authentication ceremonies.
+    "webauthn>=2.0.0",
 ]
 # Real database drivers for the CI database matrix (Postgres + MySQL). The
 # default test run uses in-memory SQLite (built into Python) and needs neither;
@@ -210,6 +217,7 @@ module = [
     "jafaal.sessions.models",
     "jafaal.sessions.rotated_refresh_tokens.models",
     "jafaal.sign_up_tokens.models",
+    "jafaal.webauthn.models",
 ]
 follow_imports = "skip"
 
@@ -282,6 +290,7 @@ forbidden_modules = [
     "jafaal.password_reset_tokens",
     "jafaal.sessions",
     "jafaal.sign_up_tokens",
+    "jafaal.webauthn",
 ]
 
 # The batteries-included adapters depend on the core (ports/orm/state_store),
@@ -323,6 +332,7 @@ source_modules = [
     "jafaal.token_hashing",
     "jafaal.user_model",
     "jafaal.utils",
+    "jafaal.webauthn",
 ]
 forbidden_modules = ["jafaal.adapters"]
 
@@ -353,4 +363,5 @@ forbidden_modules = [
     "jafaal.sessions",
     "jafaal.sign_up_tokens",
     "jafaal.utils",
+    "jafaal.webauthn",
 ]
