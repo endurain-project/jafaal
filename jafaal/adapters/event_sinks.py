@@ -18,9 +18,12 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from jafaal.ports import (
+        AccountLocked,
         AuthEventSink,
         EmailVerificationRequested,
+        NewDeviceLogin,
         PasswordResetRequested,
+        RefreshTokenTheftDetected,
         SignupApproved,
         SignupPendingAdminApproval,
     )
@@ -81,6 +84,34 @@ class LoggingAuthEventSink:
             event.email,
         )
 
+    async def on_new_device_login(self, event: NewDeviceLogin) -> None:
+        self._logger.log(
+            self._level,
+            "new-device login: user=%s ip=%s device=%s",
+            event.user_id,
+            event.ip,
+            event.device_description,
+        )
+
+    async def on_account_locked(self, event: AccountLocked) -> None:
+        self._logger.log(
+            self._level,
+            "account locked (%s): %s=%s after %s failed attempts (%s)",
+            event.store,
+            event.subject_kind,
+            event.subject,
+            event.failed_attempts,
+            event.lockout_label,
+        )
+
+    async def on_refresh_token_theft_detected(self, event: RefreshTokenTheftDetected) -> None:
+        self._logger.log(
+            self._level,
+            "refresh-token theft detected: user=%s family=%s",
+            event.user_id,
+            event.token_family_id,
+        )
+
 
 class CompositeAuthEventSink:
     """Dispatch each event to several sinks in order.
@@ -116,3 +147,12 @@ class CompositeAuthEventSink:
 
     async def on_signup_approved(self, event: SignupApproved) -> None:
         await self._dispatch("on_signup_approved", event)
+
+    async def on_new_device_login(self, event: NewDeviceLogin) -> None:
+        await self._dispatch("on_new_device_login", event)
+
+    async def on_account_locked(self, event: AccountLocked) -> None:
+        await self._dispatch("on_account_locked", event)
+
+    async def on_refresh_token_theft_detected(self, event: RefreshTokenTheftDetected) -> None:
+        await self._dispatch("on_refresh_token_theft_detected", event)

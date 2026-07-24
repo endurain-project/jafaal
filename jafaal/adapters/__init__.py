@@ -28,6 +28,10 @@ Provided:
   ``RateLimiter`` (fixed-window, per-client-IP) backed by the configured
   ``StateStore``; no extra dependency, and distributed automatically when
   ``RedisStateStore`` is configured.
+* :class:`~jafaal.adapters.password_breach.HibpBreachChecker` /
+  :class:`~jafaal.adapters.password_breach.BlocklistBreachChecker` — reference
+  ``PasswordBreachChecker`` implementations (free HIBP k-anonymity range API /
+  in-memory blocklist) for NIST SP 800-63B breached-password screening.
 
 Install and wire, for example::
 
@@ -46,6 +50,7 @@ Install and wire, for example::
 from __future__ import annotations
 
 from jafaal.adapters.event_sinks import CompositeAuthEventSink, LoggingAuthEventSink
+from jafaal.adapters.password_breach import BlocklistBreachChecker, HibpBreachChecker
 from jafaal.adapters.rate_limiter import StateStoreRateLimiter
 from jafaal.adapters.redis_state_store import RedisStateStore
 from jafaal.adapters.sqlalchemy_user_repository import SqlAlchemyUserRepository
@@ -58,7 +63,9 @@ from jafaal.adapters.static_settings import (
 __all__ = [
     "DEFAULT_PASSWORD_POLICY",
     "DEFAULT_SIGNUP_CONFIG",
+    "BlocklistBreachChecker",
     "CompositeAuthEventSink",
+    "HibpBreachChecker",
     "LoggingAuthEventSink",
     "RedisStateStore",
     "SqlAlchemyUserRepository",

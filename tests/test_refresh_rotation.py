@@ -116,6 +116,23 @@ def test_reuse_after_grace_is_theft_and_kills_the_family(client, make_user):
     assert client.post(REFRESH, headers=WEB).status_code in (401, 404)
 
 
+def test_theft_emits_security_event(client, make_user, event_sink):
+    from jafaal.ports import RefreshTokenTheftDetected
+
+    make_user(username="alice")
+    _login(client)
+    stolen = _refresh_cookie(client)
+
+    assert client.post(REFRESH, headers=WEB).status_code == 200  # legitimate rotation
+    _force_rotated_tokens_past_grace()
+    _set_refresh_cookie(client, stolen)
+    assert client.post(REFRESH, headers=WEB).status_code == 401  # theft detected
+
+    theft = [e for e in event_sink.events if isinstance(e, RefreshTokenTheftDetected)]
+    assert len(theft) == 1
+    assert theft[0].token_family_id
+
+
 def test_in_grace_replay_is_idempotent(client, make_user):
     make_user(username="alice")
     _login(client)

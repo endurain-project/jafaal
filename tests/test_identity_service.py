@@ -73,6 +73,23 @@ def test_authenticate_password_sso_only_account(db, make_user):
         _svc(db).authenticate_password("ssoonly", "anything")
 
 
+def test_validate_and_hash_password_rejects_breached(db):
+    # A policy-valid password is rejected when the configured breach checker
+    # flags it (NIST SP 800-63B breach screening). Default null checker allows it.
+    class _BreachAll:
+        def is_breached(self, password: str) -> bool:
+            return True
+
+    svc = _svc(db)
+    assert svc.validate_and_hash_password("Str0ng!Pass", 8, "strict")  # null checker → allowed
+    jafaal.configure_password_breach_checker(_BreachAll())
+    try:
+        with pytest.raises(exc.PasswordPolicyError, match="breach"):
+            svc.validate_and_hash_password("Str0ng!Pass", 8, "strict")
+    finally:
+        jafaal.configure_password_breach_checker(jafaal.NullPasswordBreachChecker())
+
+
 # --------------------------------------------------------------------------- #
 # Access token resolution
 # --------------------------------------------------------------------------- #

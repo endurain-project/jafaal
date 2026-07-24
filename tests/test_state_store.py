@@ -1,5 +1,6 @@
 """Tests for the in-memory StateStore, including TTL and atomic lockout tiers."""
 
+import threading
 import time
 
 import pytest
@@ -51,6 +52,52 @@ def test_iter_keys_only_live(store, monkeypatch):
     store.set("p:dead", b"1", ttl_seconds=1)
     clock["t"] += 5
     assert list(store.iter_keys("p:")) == ["p:live"]
+
+
+def _run_concurrently(fn, n):
+    """Run ``fn`` on ``n`` threads that start together, returning their results."""
+    barrier = threading.Barrier(n)
+    results: list = []
+    lock = threading.Lock()
+
+    def worker():
+        barrier.wait()  # maximise contention: all threads hit the store at once
+        outcome = fn()
+        with lock:
+            results.append(outcome)
+
+    threads = [threading.Thread(target=worker) for _ in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return results
+
+
+def test_record_tiered_failure_increments_atomically_under_threads(store):
+    # A threshold that never trips: every concurrent call increments exactly
+    # once, so the observed counts are 1..N with no lost updates or duplicates.
+    n = 50
+    results = _run_concurrently(lambda: store.record_tiered_failure("c", "g", ((10_000, 60),), 300), n)
+    assert sorted(r.count for r in results) == list(range(1, n + 1))
+    assert store.get("c") == str(n).encode()
+    assert all(not r.newly_locked for r in results)
+
+
+def test_record_tiered_failure_locks_exactly_once_under_threads(store):
+    # Under contention the lock trips for exactly one caller, and once locked the
+    # counter stops advancing (further calls return without incrementing).
+    n = 30
+    results = _run_concurrently(lambda: store.record_tiered_failure("c", "g", ((5, 60),), 300), n)
+    assert sum(1 for r in results if r.newly_locked) == 1
+    assert int(store.get("c")) == 5
+
+
+def test_increment_is_atomic_under_threads(store):
+    n = 50
+    results = _run_concurrently(lambda: store.increment("k", 300), n)
+    assert sorted(results) == list(range(1, n + 1))
+    assert store.get("k") == str(n).encode()
 
 
 def test_increment_counts_up(store):

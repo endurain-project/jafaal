@@ -298,6 +298,33 @@ def test_verify_id_token_at_hash_valid_and_mismatch():
         asyncio.run(svc._verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE, access_token="different-token"))
 
 
+def test_get_userinfo_forwards_access_token_for_at_hash():
+    # Confirms the wiring exercised by the SSO/mobile-PKCE callback: _get_userinfo
+    # forwards the token response's access_token into ID-token verification, so
+    # at_hash is validated end-to-end (not just in the unit above).
+    svc = IdentityProviderService()
+    key, jwks = _rsa_jwks()
+    svc._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
+    access_token = "exchanged-access-token"
+    digest = hashlib.sha256(access_token.encode("ascii")).digest()
+    at_hash = base64.urlsafe_b64encode(digest[: len(digest) // 2]).rstrip(b"=").decode("ascii")
+    id_token = jwt.encode({"alg": "RS256", "kid": "test-key-1"}, _id_token_claims(at_hash=at_hash), key)
+
+    # No userinfo endpoint → verification runs against the id_token directly.
+    ok = asyncio.run(
+        svc._get_userinfo({"id_token": id_token, "access_token": access_token}, None, None, JWKS_URI, ISSUER, AUDIENCE)
+    )
+    assert ok["sub"] == "idp-subject"
+
+    # A swapped access token breaks the at_hash binding through the same path.
+    with pytest.raises(exc.InvalidTokenError, match="at_hash"):
+        asyncio.run(
+            svc._get_userinfo(
+                {"id_token": id_token, "access_token": "swapped-token"}, None, None, JWKS_URI, ISSUER, AUDIENCE
+            )
+        )
+
+
 def test_verify_id_token_missing_kid():
     svc = IdentityProviderService()
     key, _jwks = _rsa_jwks()

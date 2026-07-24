@@ -666,6 +666,15 @@ async def refresh_token(
     if is_reused and not in_grace:
         # Token theft detected - invalidate entire family
         jafaal_sessions_rotated_tokens_utils.invalidate_token_family(session.token_family_id, db)
+        # Best-effort security notification so the host can alert the user; the
+        # 401 below is unaffected by delivery success/failure.
+        await jafaal_ports.adispatch_event(
+            "on_refresh_token_theft_detected",
+            jafaal_ports.RefreshTokenTheftDetected(
+                user_id=token_user_id,
+                token_family_id=session.token_family_id,
+            ),
+        )
         raise jafaal_exceptions.InvalidTokenError("Token reuse detected. All sessions invalidated.")
 
     if is_reused and in_grace:

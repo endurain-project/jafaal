@@ -39,15 +39,20 @@ the settings and invalidates settings-derived caches (e.g. the token manager).
 | `fernet_key_fallbacks` | `()` | Extra Fernet keys accepted only when *decrypting* at-rest tokens (rotation overlap). |
 | `access_token_expire_minutes` | `15` | Access-token lifetime. |
 | `refresh_token_expire_days` | `7` | Refresh-token lifetime. |
+| `jwt_leeway_seconds` | `0` | Clock-skew tolerance (seconds) for JWT `exp`/`nbf`; `0` is strict, keep any value small. |
 | `session_idle_timeout_hours` | `1` | Idle-session timeout (when enabled). |
 | `session_absolute_timeout_hours` | `24` | Absolute session lifetime. |
 | `base_url` | `""` | Public base URL; default JWT issuer/audience and SSO redirect base. |
 | `environment` | `"production"` | `production`/`demo` are treated as deployed (cookie `Secure`). |
+| `refresh_cookie_prefix` | `""` | Optional `__Secure-`/`__Host-` refresh-cookie name prefix, applied only when deployed (`__Host-` requires `refresh_cookie_path="/"`). |
 | `allow_api_key_query_param` | `False` | Whether API keys may be sent via `?api_key=` (header only by default). |
 | `allow_in_memory_state_store_when_deployed` | `False` | Permit the in-memory state store in a deployed environment (single-worker only; otherwise `create_auth_router()` raises at startup). |
+| `allow_no_rate_limit_when_deployed` | `False` | Permit a deployed environment with no enforcing rate limiter (otherwise `create_auth_router()`/`verify_configuration()` raise at startup). |
 | `argon2_time_cost` | `3` | Argon2 time cost (iterations) for password hashing. |
 | `argon2_memory_cost` | `65536` | Argon2 memory cost, in KiB. |
 | `argon2_parallelism` | `4` | Argon2 parallelism (lanes). |
+| `password_max_length` | `128` | Maximum accepted password length (minimum 64), enforced before hashing. |
+| `mfa_totp_replay_fail_open` | `False` | On a state-store outage, accept a TOTP code without replay protection instead of failing closed (503). |
 | `rate_limit_sensitive` | `"10/minute"` | Budget hint for sensitive endpoints. |
 | `rate_limit_write` | `"30/minute"` | Budget hint for write endpoints. |
 | `trusted_proxies` | `()` | Peers whose `X-Forwarded-For`/`X-Real-IP` are honoured (empty = trust only the direct peer). |

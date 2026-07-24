@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import logging
 from datetime import UTC, datetime
 
+import httpx
 import pytest
 from fastapi import Request
 
@@ -15,7 +17,9 @@ import jafaal.rate_limit as rate_limit
 from jafaal.adapters import (
     DEFAULT_PASSWORD_POLICY,
     DEFAULT_SIGNUP_CONFIG,
+    BlocklistBreachChecker,
     CompositeAuthEventSink,
+    HibpBreachChecker,
     LoggingAuthEventSink,
     SqlAlchemyUserRepository,
     StateStoreRateLimiter,
@@ -548,3 +552,95 @@ class TestStateStoreRateLimiter:
                 assert endpoint(request=_make_request("1.1.1.1")) == "ok"
         finally:
             jafaal.configure(original)
+
+
+# --------------------------------------------------------------------------- #
+# Password breach checkers
+# --------------------------------------------------------------------------- #
+
+
+def _hibp_prefix_suffix(password: str) -> tuple[str, str]:
+    digest = hashlib.sha1(password.encode("utf-8"), usedforsecurity=False).hexdigest().upper()
+    return digest[:5], digest[5:]
+
+
+class TestBlocklistBreachChecker:
+    def test_blocks_listed_password_case_insensitively(self):
+        checker = BlocklistBreachChecker(["Password123", "hunter2"])
+        assert checker.is_breached("password123") is True  # casefold match
+        assert checker.is_breached("HUNTER2") is True
+        assert checker.is_breached("uniqueP@ss") is False
+
+    def test_case_sensitive_mode(self):
+        checker = BlocklistBreachChecker(["Password123"], case_insensitive=False)
+        assert checker.is_breached("Password123") is True
+        assert checker.is_breached("password123") is False
+
+
+class TestHibpBreachChecker:
+    def _checker(self, handler, **kwargs):
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        return HibpBreachChecker(client=client, **kwargs)
+
+    def test_detects_breached_password(self):
+        password = "password123"
+        prefix, suffix = _hibp_prefix_suffix(password)
+
+        def handler(request):
+            # k-anonymity: only the 5-char prefix is sent, plus the padding header.
+            assert request.url.path == f"/range/{prefix}"
+            assert request.headers["Add-Padding"] == "true"
+            return httpx.Response(200, text=f"{suffix}:42\r\nFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF:1\r\n")
+
+        assert self._checker(handler).is_breached(password) is True
+
+    def test_password_not_in_range_is_allowed(self):
+        def handler(request):
+            return httpx.Response(200, text="0000000000000000000000000000000000000:5\r\n")
+
+        assert self._checker(handler).is_breached("anything-unique") is False
+
+    def test_min_count_filters_low_counts(self):
+        password = "seen-a-few-times"
+        _prefix, suffix = _hibp_prefix_suffix(password)
+
+        def handler(request):
+            return httpx.Response(200, text=f"{suffix}:3\r\n")
+
+        assert self._checker(handler, min_count=5).is_breached(password) is False  # 3 < 5
+        assert self._checker(handler).is_breached(password) is True  # default min_count=1
+
+    def test_padding_rows_are_ignored(self):
+        password = "padded"
+        _prefix, suffix = _hibp_prefix_suffix(password)
+
+        def handler(request):
+            return httpx.Response(200, text=f"{suffix}:0\r\n")  # padding rows carry count 0
+
+        assert self._checker(handler).is_breached(password) is False
+
+    def test_fails_open_on_http_error(self):
+        def handler(request):
+            return httpx.Response(503)
+
+        assert self._checker(handler).is_breached("whatever") is False
+
+    def test_rejects_bad_min_count(self):
+        with pytest.raises(ValueError, match="min_count"):
+            HibpBreachChecker(min_count=0)
+
+
+def test_blocklist_checker_wired_into_password_validation(db):
+    # End-to-end: a blocklisted password is rejected by validate_and_hash_password.
+    from jafaal._internal.password_hasher import get_password_hasher
+    from jafaal._internal.token_manager import get_token_manager
+    from jafaal.exceptions import PasswordPolicyError
+    from jafaal.identity_service import DefaultIdentityService
+
+    jafaal.configure_password_breach_checker(BlocklistBreachChecker(["Str0ng!Pass"]))
+    svc = DefaultIdentityService(db, get_token_manager(), get_password_hasher())
+    try:
+        with pytest.raises(PasswordPolicyError, match="breach"):
+            svc.validate_and_hash_password("Str0ng!Pass", 8, "strict")
+    finally:
+        jafaal.configure_password_breach_checker(jafaal.NullPasswordBreachChecker())

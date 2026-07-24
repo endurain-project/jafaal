@@ -47,3 +47,12 @@ jobs:
       - name: Run tests
         working-directory: jafaal
         run: uv run --no-sync pytest
+
+      # Re-run the suite against the RedisStateStore adapter (backed by an
+      # in-process fakeredis) so the distributed state-store backend gets the
+      # same coverage as the default in-memory store.
+      - name: Run tests (Redis state store)
+        working-directory: jafaal
+        env:
+          JAFAAL_TEST_STATE_STORE: redis
+        run: uv run --no-sync pytest

@@ -20,6 +20,9 @@ Value types that cross the boundary (:class:`IdpIdentity`, :class:`SignupConfig`
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -29,6 +32,8 @@ from jafaal._core.registry import ConfigSlot
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 
 # ===========================================================================
@@ -238,6 +243,51 @@ class SignupApproved:
     locale: str | None
 
 
+@dataclass(frozen=True)
+class NewDeviceLogin:
+    """A user signed in from a device/browser not seen on any prior session.
+
+    Emitted best-effort after a successful login so the host can alert the user
+    ("new sign-in from …"). ``device_description`` is a human-readable summary
+    parsed from the User-Agent (browser + OS).
+    """
+
+    user_id: Any
+    username: str
+    ip: str | None
+    device_description: str
+    session_id: str
+
+
+@dataclass(frozen=True)
+class AccountLocked:
+    """Progressive lockout was applied to a login / MFA / step-up subject.
+
+    Emitted best-effort when a lockout tier trips so the host can notify the
+    account owner. ``subject`` is the locked value (a username or an IP address),
+    ``subject_kind`` distinguishes the two, and ``store`` names the flow
+    (``"Login"`` / ``"MFA"`` / ``"Step-up"``).
+    """
+
+    subject: str
+    subject_kind: str
+    store: str
+    failed_attempts: int
+    lockout_label: str
+
+
+@dataclass(frozen=True)
+class RefreshTokenTheftDetected:
+    """A rotated refresh token was replayed past the grace window (likely theft).
+
+    Emitted when reuse detection invalidates a token family, so the host can
+    force a re-login notification / security alert for the affected user.
+    """
+
+    user_id: Any
+    token_family_id: str
+
+
 class AuthEventSink(Protocol):
     """Host-owned delivery of JAFAAL's outbound notifications.
 
@@ -257,6 +307,17 @@ class AuthEventSink(Protocol):
 
     async def on_signup_approved(self, event: SignupApproved) -> None: ...
 
+    # --- Security events (best-effort, fire-and-forget) ---
+    # Emitted from the auth flow via jafaal.ports.dispatch_event / adispatch_event,
+    # which skip a sink that does not implement the method — so a host sink written
+    # before these existed keeps working without change.
+
+    async def on_new_device_login(self, event: NewDeviceLogin) -> None: ...
+
+    async def on_account_locked(self, event: AccountLocked) -> None: ...
+
+    async def on_refresh_token_theft_detected(self, event: RefreshTokenTheftDetected) -> None: ...
+
 
 class NullAuthEventSink:
     """Default no-op sink — a host that skips these flows implements nothing."""
@@ -272,6 +333,40 @@ class NullAuthEventSink:
 
     async def on_signup_approved(self, event: SignupApproved) -> None:
         return None
+
+    async def on_new_device_login(self, event: NewDeviceLogin) -> None:
+        return None
+
+    async def on_account_locked(self, event: AccountLocked) -> None:
+        return None
+
+    async def on_refresh_token_theft_detected(self, event: RefreshTokenTheftDetected) -> None:
+        return None
+
+
+@runtime_checkable
+class PasswordBreachChecker(Protocol):
+    """Host-owned check for whether a password appears in a breach corpus/blocklist.
+
+    Consulted during sign-up and password change, *after* the length/complexity
+    policy passes and *before* the password is hashed. Return ``True`` to reject
+    the password. This is the NIST SP 800-63B-recommended companion to the
+    ``length_only`` policy — a common implementation is an HIBP k-anonymity range
+    query or a local blocklist.
+
+    It runs in the request path (synchronously), so keep it fast and fail open
+    (return ``False``) on an upstream error, so a breach-service outage cannot
+    block all password changes.
+    """
+
+    def is_breached(self, password: str) -> bool: ...
+
+
+class NullPasswordBreachChecker:
+    """Default checker that treats every password as not breached (no-op)."""
+
+    def is_breached(self, password: str) -> bool:
+        return False
 
 
 # ===========================================================================
@@ -290,6 +385,7 @@ _settings_provider: ConfigSlot[SettingsProvider] = ConfigSlot(
     )
 )
 _event_sink: ConfigSlot[AuthEventSink] = ConfigSlot(default_factory=NullAuthEventSink)
+_password_breach_checker: ConfigSlot[PasswordBreachChecker] = ConfigSlot(default_factory=NullPasswordBreachChecker)
 
 
 def configure_user_repository(repository: UserRepository) -> None:
@@ -340,30 +436,121 @@ def get_event_sink() -> AuthEventSink:
     return _event_sink.get()
 
 
+def configure_password_breach_checker(checker: PasswordBreachChecker) -> None:
+    """Install the host's :class:`PasswordBreachChecker` (defaults to a no-op)."""
+    _password_breach_checker.configure(checker)
+
+
+def get_password_breach_checker() -> PasswordBreachChecker:
+    """Return the installed :class:`PasswordBreachChecker` (no-op by default)."""
+    return _password_breach_checker.get()
+
+
+def _log_event_failure(method_name: str, err: BaseException) -> None:
+    """Log a swallowed :class:`AuthEventSink` delivery failure."""
+    logger.warning("AuthEventSink %s failed: %s", method_name, type(err).__name__, exc_info=err)
+
+
+def _consume_task_result(task: asyncio.Task[Any]) -> None:
+    """Retrieve a background event task's result so a failure is logged, not lost."""
+    if task.cancelled():
+        return
+    err = task.exception()
+    if err is not None:
+        _log_event_failure("task", err)
+
+
+def dispatch_event(method_name: str, event: object) -> None:
+    """Best-effort emit of an :class:`AuthEventSink` notification from sync code.
+
+    Security/notification events are fired from synchronous auth paths (login,
+    lockout) through this helper. Delivery must never break the auth flow, so
+    every failure is swallowed and logged, and a sink that does not implement
+    ``method_name`` is skipped — so a host sink written before an event existed
+    keeps working unchanged. In a running event loop the coroutine is scheduled
+    as a background task; from a sync worker thread it is run to completion.
+
+    Args:
+        method_name: The :class:`AuthEventSink` method to invoke.
+        event: The event value passed to the handler.
+    """
+    handler = getattr(get_event_sink(), method_name, None)
+    if handler is None:
+        return
+    try:
+        coro = handler(event)
+    except Exception as err:
+        _log_event_failure(method_name, err)
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop is not None:
+        task = loop.create_task(coro)
+        task.add_done_callback(_consume_task_result)
+        return
+    try:
+        asyncio.run(coro)
+    except Exception as err:
+        _log_event_failure(method_name, err)
+        with contextlib.suppress(Exception):
+            coro.close()
+
+
+async def adispatch_event(method_name: str, event: object) -> None:
+    """Awaitable best-effort emit for async auth paths (e.g. token-theft).
+
+    Same forward-compatible, never-raises contract as :func:`dispatch_event`, but
+    awaited inline so a caller in an async endpoint delivers before returning.
+
+    Args:
+        method_name: The :class:`AuthEventSink` method to invoke.
+        event: The event value passed to the handler.
+    """
+    handler = getattr(get_event_sink(), method_name, None)
+    if handler is None:
+        return
+    try:
+        await handler(event)
+    except Exception as err:
+        _log_event_failure(method_name, err)
+
+
 def reset_ports() -> None:
     """Clear all installed adapters. Intended for test isolation."""
     _user_repository.reset()
     _settings_provider.reset()
     _event_sink.reset()
+    _password_breach_checker.reset()
 
 
 __all__ = [
+    "AccountLocked",
     "AuthEventSink",
     "EmailVerificationRequested",
     "IdpIdentity",
+    "NewDeviceLogin",
     "NullAuthEventSink",
+    "NullPasswordBreachChecker",
+    "PasswordBreachChecker",
     "PasswordPolicy",
     "PasswordResetRequested",
+    "RefreshTokenTheftDetected",
     "SettingsProvider",
     "SignupApproved",
     "SignupConfig",
     "SignupPendingAdminApproval",
     "UserProtocol",
     "UserRepository",
+    "adispatch_event",
     "configure_event_sink",
+    "configure_password_breach_checker",
     "configure_settings_provider",
     "configure_user_repository",
+    "dispatch_event",
     "get_event_sink",
+    "get_password_breach_checker",
     "get_settings_provider",
     "get_user_repository",
     "is_settings_provider_configured",

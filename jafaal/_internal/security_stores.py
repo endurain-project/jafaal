@@ -15,6 +15,7 @@ from typing import NoReturn, Protocol, runtime_checkable
 from urllib.parse import unquote
 
 import jafaal.audit as jafaal_audit
+import jafaal.ports as jafaal_ports
 import jafaal.settings as jafaal_settings
 from jafaal._core import hashing
 from jafaal.exceptions import StoreUnavailableError
@@ -161,6 +162,18 @@ def _log_lockout(
         failed_attempts=failed_count,
         lockout=duration_label,
         **{subject: value, f"{subject}_hash": digest},
+    )
+    # Best-effort host notification (e.g. "your account was locked"). Skipped for
+    # sinks that do not implement it; never breaks the auth flow.
+    jafaal_ports.dispatch_event(
+        "on_account_locked",
+        jafaal_ports.AccountLocked(
+            subject=value,
+            subject_kind=subject,
+            store=display_name,
+            failed_attempts=failed_count,
+            lockout_label=duration_label,
+        ),
     )
 
 

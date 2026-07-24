@@ -132,6 +132,15 @@ class RecordingEventSink:
     async def on_signup_approved(self, event):
         self.events.append(event)
 
+    async def on_new_device_login(self, event):
+        self.events.append(event)
+
+    async def on_account_locked(self, event):
+        self.events.append(event)
+
+    async def on_refresh_token_theft_detected(self, event):
+        self.events.append(event)
+
 
 # --------------------------------------------------------------------------- #
 # Fixtures
@@ -178,15 +187,34 @@ def _configure_jafaal(engine):
     jafaal.reset()
 
 
+def _configure_test_state_store() -> None:
+    """Install the state store for a test, honouring ``JAFAAL_TEST_STATE_STORE``.
+
+    Defaults to the process-local in-memory store. Set the env var to ``redis``
+    (or ``fakeredis``) to run the whole suite against the ``RedisStateStore``
+    adapter backed by a fresh in-process ``fakeredis`` — the CI state-store matrix
+    uses this to prove the distributed backend behaves identically.
+    """
+    mode = os.environ.get("JAFAAL_TEST_STATE_STORE", "").lower()
+    if mode in ("redis", "fakeredis"):
+        import fakeredis
+
+        from jafaal.adapters import RedisStateStore
+
+        jafaal.configure_state_store(RedisStateStore(client=fakeredis.FakeStrictRedis()))
+
+
 @pytest.fixture(autouse=True)
 def _isolate(engine):
     """Fresh schema + fresh state store for every test."""
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
     jafaal.reset_state_store()
+    _configure_test_state_store()
     jafaal.reset_scopes()
     jafaal.reset_api_key_scopes()
     jafaal.configure_event_sink(jafaal.NullAuthEventSink())
+    jafaal.configure_password_breach_checker(jafaal.NullPasswordBreachChecker())
     yield
     jafaal.reset_state_store()
 

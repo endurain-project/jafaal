@@ -83,6 +83,30 @@ are swallowed and logged so they can never change the HTTP response or leak
 whether an account exists. If you skip these flows, the default
 [`NullAuthEventSink`][jafaal.NullAuthEventSink] is a no-op.
 
+### `PasswordBreachChecker`
+
+Optionally screen a proposed password against a breach corpus / blocklist during
+sign-up and password change (NIST SP 800-63B, the recommended companion to a
+`length_only` policy). The port is one method that returns whether the password
+should be rejected:
+
+```python
+from jafaal import configure_password_breach_checker
+
+class MyChecker:
+    def is_breached(self, password: str) -> bool:
+        return password in my_local_blocklist
+
+configure_password_breach_checker(MyChecker())
+```
+
+It is consulted **after** the length/complexity policy passes and **before**
+hashing, runs synchronously in the request path (keep it fast), and should fail
+open (return `False` on an upstream error). It checks the *password alone* — not
+a username/email pair. The default
+[`NullPasswordBreachChecker`][jafaal.NullPasswordBreachChecker] disables
+screening; ready-made adapters are [below](#hibpbreachchecker-blocklistbreachchecker).
+
 ## Batteries-included adapters
 
 Ready-made implementations live in `jafaal.adapters`. They are **not** imported
@@ -178,5 +202,42 @@ Budgets come from settings (`rate_limit_sensitive` / `rate_limit_write`, e.g.
 limiting is defense-in-depth, so the limiter **fails open** (does not block) when
 the client IP is unknown, the budget is malformed, or the state store is
 unavailable — an infrastructure fault must never take down authentication.
+
+### `HibpBreachChecker` / `BlocklistBreachChecker`
+
+Reference `PasswordBreachChecker` implementations for breached-password
+screening.
+
+`HibpBreachChecker` queries the *Have I Been Pwned* "Pwned Passwords" range API.
+That endpoint is **free and unauthenticated** (no API key) and k-anonymous: the
+password is SHA-1 hashed locally and only the first five hex characters of the
+digest are sent, so the password (and full hash) never leave the process.
+`httpx` is already a JAFAAL dependency, so no extra install is needed.
+
+```python
+import jafaal
+from jafaal.adapters import HibpBreachChecker
+
+jafaal.configure_password_breach_checker(HibpBreachChecker())
+```
+
+It **fails open** (allows the password) on any network/HTTP error so a
+breach-service outage never blocks password changes. Raise `min_count` to only
+reject widely-seen passwords, and pass `client=` to reuse one `httpx.Client`.
+
+`BlocklistBreachChecker` is a dependency-free, in-memory alternative for a
+bundled "top-N breached passwords" list or a custom deny-list:
+
+```python
+from jafaal.adapters import BlocklistBreachChecker
+
+jafaal.configure_password_breach_checker(BlocklistBreachChecker(load_top_passwords()))
+```
+
+!!! note "Password-only, by design"
+    Both check the *password alone*, not a username/email + password pair.
+    Pair / credential-stuffing checks require a commercial service and send more
+    sensitive data to a third party; JAFAAL's server-side progressive lockout
+    already mitigates credential stuffing.
 Per-account and per-IP progressive lockout still apply.
 

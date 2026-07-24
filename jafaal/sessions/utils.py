@@ -19,7 +19,7 @@ import jafaal.sessions.schema as jafaal_sessions_schema
 import jafaal.settings as jafaal_settings
 import jafaal.token_hashing as token_hashing
 from jafaal._core import network, timeutils
-from jafaal.orm import session_scope
+from jafaal.orm import UserId, session_scope
 
 logger = logging.getLogger(__name__)
 
@@ -377,6 +377,47 @@ def parse_user_agent(user_agent: str) -> DeviceInfo:
         browser=ua.browser.family or "Unknown",
         browser_version=ua.browser.version_string or "Unknown",
     )
+
+
+def device_fingerprint(request: Request) -> tuple[str, str]:
+    """Return a coarse device ``(fingerprint, human description)`` for a request.
+
+    The fingerprint is a ``device_type|os|browser`` key used to decide whether a
+    login comes from a device already seen on a prior session; the description is
+    a human-readable summary suitable for a "new sign-in" notification.
+
+    Args:
+        request: The incoming HTTP request.
+
+    Returns:
+        Tuple of ``(fingerprint, description)``.
+    """
+    info = parse_user_agent(get_user_agent(request))
+    fingerprint = f"{info.device_type.value}|{info.operating_system}|{info.browser}"
+    description = f"{info.browser} on {info.operating_system} ({info.device_type.value})"
+    return fingerprint, description
+
+
+def is_known_device(user_id: UserId, request: Request, db: Session) -> bool:
+    """Return ``True`` if the user has a prior session from the same device.
+
+    Compares the request's coarse device fingerprint against the user's existing
+    sessions. Used to decide whether to emit an ``on_new_device_login`` event.
+
+    Args:
+        user_id: The authenticating user's ID.
+        request: The incoming HTTP request.
+        db: SQLAlchemy database session.
+
+    Returns:
+        True when a prior session shares the request's device fingerprint.
+    """
+    fingerprint, _ = device_fingerprint(request)
+    for session in jafaal_sessions_crud.get_user_sessions(user_id, db):
+        existing = f"{session.device_type}|{session.operating_system}|{session.browser}"
+        if existing == fingerprint:
+            return True
+    return False
 
 
 def cleanup_idle_sessions() -> None:

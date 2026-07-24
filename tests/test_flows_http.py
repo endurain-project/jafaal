@@ -256,3 +256,39 @@ def test_mfa_verify_login_flow_with_zero_user_id(client, make_user):
     )
     assert verify.status_code == 200
     assert verify.json()["access_token"]
+
+
+# --------------------------------------------------------------------------- #
+# Security events (event sink)
+# --------------------------------------------------------------------------- #
+
+
+def test_new_device_login_emits_event(client, make_user, event_sink):
+    from jafaal.ports import NewDeviceLogin
+
+    make_user(username="alice", password="Str0ng!Pass")
+
+    # First login is from a device with no prior session → new-device event.
+    assert _login(client, "alice", "Str0ng!Pass").status_code == 200
+    new_device = [e for e in event_sink.events if isinstance(e, NewDeviceLogin)]
+    assert len(new_device) == 1
+    assert new_device[0].username == "alice"
+
+    # A second login from the same client/device does not re-emit.
+    event_sink.events.clear()
+    assert _login(client, "alice", "Str0ng!Pass").status_code == 200
+    assert not [e for e in event_sink.events if isinstance(e, NewDeviceLogin)]
+
+
+def test_account_lockout_emits_event(client, make_user, event_sink):
+    from jafaal.ports import AccountLocked
+
+    make_user(username="alice", password="Str0ng!Pass")
+
+    # Five failed logins trip the first per-username lockout tier.
+    for _ in range(5):
+        _login(client, "alice", "WrongPass1")
+
+    locked = [e for e in event_sink.events if isinstance(e, AccountLocked)]
+    assert locked
+    assert any(e.subject_kind == "username" and e.subject == "alice" for e in locked)

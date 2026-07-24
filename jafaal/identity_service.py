@@ -1071,6 +1071,13 @@ class DefaultIdentityService:
             password_type,
             max_length,
         )
+        # NIST SP 800-63B: screen against a breach corpus / blocklist after the
+        # cheap local policy passes and before hashing. No-op unless the host
+        # installs a checker via jafaal.configure_password_breach_checker(...).
+        if jafaal_ports.get_password_breach_checker().is_breached(password):
+            raise jafaal_exceptions.PasswordPolicyError(
+                "This password has appeared in a known data breach; choose a different one."
+            )
         return self._password_hasher.hash_password(password)
 
     def hash_password(self, password: str) -> str:

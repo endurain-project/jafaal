@@ -345,6 +345,19 @@ def complete_login(
         csrf_token,
     ) = create_tokens(user, token_manager)
 
+    # Decide whether this login is from a not-previously-seen device *before*
+    # the new session is written. Only pay the lookup when a host sink actually
+    # wants the event (the default null sink and older sinks skip it).
+    sink = jafaal_ports.get_event_sink()
+    emit_new_device = not isinstance(sink, jafaal_ports.NullAuthEventSink) and hasattr(sink, "on_new_device_login")
+    known_device = True
+    if emit_new_device:
+        try:
+            known_device = jafaal_sessions_utils.is_known_device(user.id, request, db)
+        except Exception:
+            # Never let new-device detection break login; treat as known.
+            known_device = True
+
     # Create the session and store it in the database
     # Note: csrf_token is NOT stored on initial login (csrf_token_hash = None).
     # This enables the OAuth 2.1 bootstrap pattern where the first /refresh call
@@ -370,6 +383,21 @@ def complete_login(
         client_type=client_type,
         ip=request.client.host if request.client else None,
     )
+
+    # Best-effort security notification: a login from a device fingerprint not
+    # seen on any prior session. Never blocks or fails the login.
+    if emit_new_device and not known_device:
+        _fingerprint, device_description = jafaal_sessions_utils.device_fingerprint(request)
+        jafaal_ports.dispatch_event(
+            "on_new_device_login",
+            jafaal_ports.NewDeviceLogin(
+                user_id=user.id,
+                username=user.username,
+                ip=request.client.host if request.client else None,
+                device_description=device_description,
+                session_id=session_id,
+            ),
+        )
     return build_token_response(
         response,
         client_type,

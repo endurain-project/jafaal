@@ -80,6 +80,15 @@ Each record carries `event` (a stable slug such as `login.failure`), `outcome`
 `username`, `ip`, `session_id`, `key_prefix`, `token_family_id`, …). The log
 message is the event slug, so even a plain-text handler stays readable.
 
+!!! tip "Actionable security events"
+    Beyond the SIEM-facing audit stream, the host
+    [`AuthEventSink`][jafaal.AuthEventSink] also receives best-effort
+    **security notifications** it can turn into user-facing alerts:
+    `on_new_device_login`, `on_account_locked`, and
+    `on_refresh_token_theft_detected`. They are fire-and-forget (never block or
+    fail the auth flow) and forward-compatible — a sink that does not implement a
+    method simply skips it.
+
 !!! warning "Audit records are sensitive"
     To be useful for a SIEM, audit records contain identifiers the application
     logs deliberately omit — plaintext usernames from failed logins and client
@@ -141,7 +150,11 @@ validation applied at sign-up and password change:
 - **`"length_only"`** — enforces only minimum/maximum length. This is the choice
   aligned with NIST SP 800-63B, which advises **against** composition rules in
   favour of length plus breached-password screening. Pair it with a longer
-  `min_length` and a host-side breach check (e.g. an HIBP k-anonymity lookup).
+  `min_length` and a host-side breach check: install a
+  [`PasswordBreachChecker`][jafaal.PasswordBreachChecker] via
+  `jafaal.configure_password_breach_checker(...)` (e.g. an HIBP k-anonymity
+  lookup or a local blocklist) — it is consulted after the length/complexity
+  policy and before hashing, and should fail open on an upstream error.
 - **`"strict"`** — additionally requires upper/lower/digit/special. Available for
   hosts bound by legacy composition requirements.
 

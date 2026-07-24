@@ -271,6 +271,34 @@ def test_rotated_token_in_grace_replay(db, make_user):
     assert replacement_exp.tzinfo is not None  # normalized to UTC-aware
 
 
+def test_grace_replay_is_idempotent_across_duplicate_reads(db, make_user):
+    # Duplicate in-grace refresh retries (a lost rotation response, or a racing
+    # background refresh) must converge on the single replacement minted by the
+    # original rotation — never diverge, escalate to theft, or re-rotate.
+    # (True thread-parallelism of the lockout primitive is covered in
+    # test_state_store.py; in-memory SQLite shares one connection, so the DB-level
+    # guarantee is asserted here deterministically.)
+    user = make_user()
+    session_utils.create_session("fam-cc", user, _request(), "initial-rt", password_hasher, db)
+    exp = datetime.now(UTC) + timedelta(days=7)
+    rotated_utils.store_rotated_token(
+        "old-cc",
+        "fam-cc",
+        0,
+        db,
+        replacement_refresh_token="new-cc",
+        replacement_refresh_token_exp=exp,
+    )
+
+    # Many duplicate presentations of the same rotated token...
+    results = [rotated_utils.get_grace_replay_token("old-cc", db) for _ in range(12)]
+    assert all(r is not None for r in results)
+    # ...all converge on the one stored replacement (idempotent, no divergence).
+    assert {r[0] for r in results} == {"new-cc"}
+    # It stays an in-grace reuse throughout: no theft escalation, no re-rotation.
+    assert rotated_utils.check_token_reuse("old-cc", db) == (True, True)
+
+
 def test_rotated_token_reuse_after_grace_is_theft(db, make_user):
     user = make_user()
     session_utils.create_session("fam-t", user, _request(), "rt", password_hasher, db)
