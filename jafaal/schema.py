@@ -48,13 +48,18 @@ class MFALoginRequest(BaseModel):
     Schema for MFA login requests.
 
     Attributes:
-        username: Username of the user attempting to log in.
+        mfa_token: The opaque, single-use ticket returned by ``/auth/login``
+            in :class:`MFARequiredResponse`. It proves *this caller* satisfied
+            the password factor. The username is deliberately **not** accepted
+            here: it is public or guessable, so addressing the pending login by
+            username would let anyone holding a valid one-time code finish a
+            login that somebody else's password step opened.
         mfa_code: Either a 6-digit TOTP code or a backup code.
     """
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    username: StrictStr = Field(..., min_length=1, max_length=250)
+    mfa_token: StrictStr = Field(..., min_length=1, max_length=512)
     mfa_code: StrictStr = Field(
         ...,
         pattern=r"^(\d{6}|[A-Z0-9]{4}-[A-Z0-9]{4})$",
@@ -100,13 +105,19 @@ class MFARequiredResponse(BaseModel):
 
     Attributes:
         mfa_required: Indicates whether MFA is required.
-        username: Username for which MFA is required.
+        mfa_token: Opaque, single-use ticket proving the password factor was
+            satisfied by this caller. Hold it in memory (never persist it) and
+            present it to ``/auth/mfa/verify`` or the WebAuthn second-factor
+            endpoints. It expires in five minutes.
+        username: Username for which MFA is required, echoed back for display.
+            It is *not* a credential and does not address the pending login.
         message: Message describing the requirement.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     mfa_required: StrictBool = True
+    mfa_token: StrictStr
     username: StrictStr
     message: StrictStr = "MFA verification required"
 

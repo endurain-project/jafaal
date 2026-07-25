@@ -23,13 +23,18 @@ def hash_idp_link_token(token: str) -> str:
     """
     Hash an IdP link token for storage or lookup.
 
+    Keyed HMAC-SHA256 under the IdP-link subkey, so database read access alone
+    does not let an attacker verify a captured token. No legacy fallback is
+    needed: these tokens live for 60 seconds (:data:`TOKEN_EXPIRY_SECONDS`), so
+    any issued under the previous unkeyed digest have already expired.
+
     Args:
         token: Plaintext link token.
 
     Returns:
-        SHA-256 hexadecimal digest of the token.
+        Lowercase hex-encoded HMAC-SHA256 digest of the token.
     """
-    return token_hashing.sha256_hex(token)
+    return token_hashing.hmac_sha256(token, token_hashing.KeyPurpose.IDP_LINK)
 
 
 def generate_idp_link_token(

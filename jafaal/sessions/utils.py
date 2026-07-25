@@ -60,11 +60,12 @@ class DeviceInfo:
 
 
 def _hash_csrf_token(token: str) -> str:
-    """Compute HMAC-SHA256 of a CSRF token using the server secret key.
+    """Compute the keyed HMAC-SHA256 digest of a CSRF token.
 
-    Uses the JWT_SECRET_KEY as the HMAC key so the MAC is unforgeable
-    without knowledge of the server secret, while being microseconds-fast
-    (unlike Argon2 which is designed for password storage).
+    Keyed with the CSRF subkey derived from ``AuthSettings.secret_key``, so the
+    MAC is unforgeable without the server secret and cannot be confused with a
+    digest computed for any other purpose, while being microseconds-fast (unlike
+    Argon2, which is designed for password storage).
 
     Args:
         token: The plain CSRF token string.
@@ -73,9 +74,9 @@ def _hash_csrf_token(token: str) -> str:
         Hex-encoded HMAC-SHA256 digest.
 
     Raises:
-        ValueError: If JWT_SECRET_KEY is not configured.
+        RuntimeError: If JAFAAL has not been configured.
     """
-    return token_hashing.hmac_sha256(token)
+    return token_hashing.hmac_sha256(token, token_hashing.KeyPurpose.CSRF)
 
 
 def verify_csrf_token(candidate: str, stored_hmac: str) -> bool:
@@ -130,9 +131,9 @@ def hash_refresh_token(refresh_token: str) -> str:
         refresh_token: The raw refresh-token JWT.
 
     Returns:
-        Hex-encoded HMAC-SHA256 digest, keyed with ``AuthSettings.secret_key``.
+        Hex-encoded HMAC-SHA256 digest under the session refresh-token subkey.
     """
-    return token_hashing.hmac_sha256(refresh_token)
+    return token_hashing.hmac_sha256(refresh_token, token_hashing.KeyPurpose.REFRESH_SESSION)
 
 
 def verify_refresh_token(

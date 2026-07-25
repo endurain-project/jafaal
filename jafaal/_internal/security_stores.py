@@ -8,8 +8,11 @@ increment-and-lock step is delegated to
 contains no backend-specific code or memory-vs-Redis split.
 """
 
+import json
 import logging
+import secrets
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import NoReturn, Protocol, runtime_checkable
 from urllib.parse import unquote
@@ -121,6 +124,20 @@ def _now_epoch() -> int:
     return int(datetime.now(UTC).timestamp())
 
 
+@dataclass(frozen=True)
+class PendingLogin:
+    """A password-verified login awaiting its second factor.
+
+    Attributes:
+        user_id: The user who completed the password step.
+        username: The username as supplied at login, used for the MFA lockout
+            key and for audit records.
+    """
+
+    user_id: UserId
+    username: str
+
+
 def _datetime_from_epoch(epoch_seconds: int) -> datetime:
     """Convert an epoch timestamp to a timezone-aware UTC datetime."""
     return datetime.fromtimestamp(epoch_seconds, tz=UTC)
@@ -202,17 +219,23 @@ class FailedLoginStore(Protocol):
 
 @runtime_checkable
 class PendingMFAStore(Protocol):
-    """Contract for pending-MFA login stores (bookkeeping + MFA lockout)."""
+    """Contract for pending-MFA login stores (bookkeeping + MFA lockout).
 
-    def add_pending_login(self, username: str, user_id: UserId) -> None: ...
+    Pending logins are addressed by the opaque ``mfa_token`` minted when the
+    password step succeeds — never by username. The lockout half of the contract
+    is still keyed by username, because that is the subject being protected from
+    brute force.
+    """
 
-    def get_pending_login(self, username: str) -> UserId | None: ...
+    def add_pending_login(self, username: str, user_id: UserId) -> str: ...
 
-    def claim_pending_login(self, username: str) -> UserId | None: ...
+    def get_pending_login(self, mfa_token: str) -> PendingLogin | None: ...
 
-    def delete_pending_login(self, username: str) -> None: ...
+    def claim_pending_login(self, mfa_token: str) -> PendingLogin | None: ...
 
-    def has_pending_login(self, username: str) -> bool: ...
+    def delete_pending_login(self, mfa_token: str) -> None: ...
+
+    def has_pending_login(self, mfa_token: str) -> bool: ...
 
     def clear_for_user(self, user_id: UserId) -> int: ...
 
@@ -490,6 +513,18 @@ class PendingMFALogin:
     """
     Manage pending MFA logins plus per-username MFA failure lockout (5/10/15).
 
+    A pending login is addressed by an **opaque, single-use ``mfa_token``**
+    minted when the password step succeeds and returned to that caller only. The
+    username is *not* an address: it is public (or guessable), so keying the
+    pending record on it would mean anyone holding a valid one-time code could
+    complete a login during the window a legitimate password step opened —
+    collapsing two factors back to one. Possession of the ticket is the proof
+    that the password factor was satisfied *by this caller*.
+
+    The ticket survives failed code attempts (a user may mistype) and is
+    consumed atomically by :meth:`claim_pending_login` on success; the MFA
+    lockout tiers bound how many attempts it can absorb.
+
     Attributes:
         PENDING_MFA_TTL_SECONDS: TTL for pending MFA entries.
         _state_override: Explicit provider (tests); ``None`` resolves lazily.
@@ -512,84 +547,105 @@ class PendingMFALogin:
     def _get_state(self) -> StateStore:
         return self._state_override if self._state_override is not None else get_state_store()
 
-    def _pending_key(self, username: str) -> str:
-        return f"{_key_prefix()}:mfa:pending:{_username_digest(username)}"
+    def _pending_key(self, mfa_token: str) -> str:
+        # The stored key is a digest of the ticket, so the state store never
+        # holds anything that could be replayed as the ticket itself.
+        return f"{_key_prefix()}:mfa:pending:{hashing.sha256_hex(mfa_token)}"
 
-    def add_pending_login(self, username: str, user_id: UserId) -> None:
-        """Add a pending MFA login entry for a user."""
+    @staticmethod
+    def _encode(user_id: UserId, username: str) -> bytes:
+        """Serialise a pending login for storage."""
+        return json.dumps({"uid": str(user_id), "un": username}).encode()
+
+    @staticmethod
+    def _decode(raw: bytes) -> PendingLogin | None:
+        """Parse a stored pending login, or ``None`` if it is unusable."""
+        try:
+            payload = json.loads(raw.decode())
+            # The id is stored in its string form and coerced back to the host
+            # user table's primary-key type (``int`` or ``uuid.UUID``) on read,
+            # so the store works for both integer- and UUID-keyed hosts.
+            return PendingLogin(coerce_user_id(payload["uid"]), payload["un"])
+        except (TypeError, ValueError, KeyError, AttributeError):
+            return None
+
+    def add_pending_login(self, username: str, user_id: UserId) -> str:
+        """Record a pending MFA login and return its opaque ticket.
+
+        Args:
+            username: The username that just passed the password step.
+            user_id: The user the pending login belongs to.
+
+        Returns:
+            The ``mfa_token`` to hand to the caller; it must be presented to
+            complete the second factor.
+        """
+        mfa_token = secrets.token_urlsafe(32)
         try:
             self._get_state().set(
-                self._pending_key(username),
-                str(user_id).encode(),
+                self._pending_key(mfa_token),
+                self._encode(user_id, username),
                 ttl_seconds=self.PENDING_MFA_TTL_SECONDS,
             )
         except StateStoreUnavailableError as err:
             _raise_store_unavailable("add pending MFA login", err)
+        return mfa_token
 
-    def get_pending_login(self, username: str) -> UserId | None:
-        """Retrieve the user ID for a pending MFA login, evicting corrupt entries.
-
-        The id is stored as its string form and coerced back to the host user
-        table's primary-key type (``int`` or :class:`uuid.UUID`) on read, so the
-        store works for both integer- and UUID-keyed hosts.
-        """
-        pending_key = self._pending_key(username)
+    def get_pending_login(self, mfa_token: str) -> PendingLogin | None:
+        """Resolve a pending MFA login from its ticket, evicting corrupt entries."""
+        pending_key = self._pending_key(mfa_token)
         try:
-            raw_user_id = self._get_state().get(pending_key)
+            raw = self._get_state().get(pending_key)
         except StateStoreUnavailableError as err:
             _raise_store_unavailable("get pending MFA login", err)
-        if raw_user_id is None:
+        if raw is None:
             return None
-        try:
-            return coerce_user_id(raw_user_id.decode())
-        except (TypeError, ValueError):
+        pending = self._decode(raw)
+        if pending is None:
             try:
                 self._get_state().delete(pending_key)
             except StateStoreUnavailableError as err:
                 _raise_store_unavailable("delete invalid pending MFA login", err)
-            return None
+        return pending
 
-    def claim_pending_login(self, username: str) -> UserId | None:
-        """Atomically retrieve and remove a pending MFA login.
-
-        Like :meth:`get_pending_login`, the id is coerced back to the host user
-        table's primary-key type so both integer- and UUID-keyed hosts work.
-        """
+    def claim_pending_login(self, mfa_token: str) -> PendingLogin | None:
+        """Atomically consume a pending MFA login, so one ticket logs in once."""
         try:
-            raw_user_id = self._get_state().get_and_delete(self._pending_key(username))
+            raw = self._get_state().get_and_delete(self._pending_key(mfa_token))
         except StateStoreUnavailableError as err:
             _raise_store_unavailable("claim pending MFA login", err)
-        if raw_user_id is None:
+        if raw is None:
             return None
-        try:
-            return coerce_user_id(raw_user_id.decode())
-        except (TypeError, ValueError):
-            return None
+        return self._decode(raw)
 
-    def delete_pending_login(self, username: str) -> None:
-        """Remove the pending MFA login entry for a username."""
+    def delete_pending_login(self, mfa_token: str) -> None:
+        """Remove the pending MFA login addressed by ``mfa_token``."""
         try:
-            self._get_state().delete(self._pending_key(username))
+            self._get_state().delete(self._pending_key(mfa_token))
         except StateStoreUnavailableError as err:
             _raise_store_unavailable("delete pending MFA login", err)
 
     def clear_for_user(self, user_id: UserId) -> int:
         """Remove every pending MFA login entry tied to a user ID."""
-        target_value = str(user_id).encode()
+        target = str(user_id)
         removed = 0
         state = self._get_state()
         try:
             for pending_key in list(state.iter_keys(f"{_key_prefix()}:mfa:pending:")):
-                if state.get(pending_key) == target_value:
+                raw = state.get(pending_key)
+                if raw is None:
+                    continue
+                pending = self._decode(raw)
+                if pending is not None and str(pending.user_id) == target:
                     state.delete(pending_key)
                     removed += 1
         except StateStoreUnavailableError as err:
             _raise_store_unavailable("clear pending MFA logins for user", err)
         return removed
 
-    def has_pending_login(self, username: str) -> bool:
-        """Check if a username has a valid pending MFA login."""
-        return self.get_pending_login(username) is not None
+    def has_pending_login(self, mfa_token: str) -> bool:
+        """Check whether ``mfa_token`` addresses a valid pending MFA login."""
+        return self.get_pending_login(mfa_token) is not None
 
     def cleanup_expired(self) -> int:
         """Return zero because the backend expires pending entries by TTL."""

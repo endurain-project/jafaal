@@ -256,6 +256,7 @@ ignore = [
 "jafaal/user_model.py" = ["N805"]  # SQLAlchemy @declared_attr methods receive `cls`, not `self`
 "jafaal/exceptions.py" = ["RUF012"]  # class-level header dicts are immutable defaults overridden per-instance
 "jafaal/audit.py" = ["S105"]  # audit event-name constants (TOKEN_*), not secrets
+"jafaal/token_hashing.py" = ["S105"]  # KeyPurpose members are HKDF info labels, not secrets
 "jafaal/_internal/services/token_admin_service.py" = ["S105", "S106"]  # false positive on the token_type audit field
 "jafaal/settings.py" = ["S105"]  # false positive on the login_token_url default
 "jafaal/factory.py" = ["S105"]  # false positive on the password_reset route-prefix attribute

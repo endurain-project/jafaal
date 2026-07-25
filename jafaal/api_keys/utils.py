@@ -56,19 +56,37 @@ def generate_api_key() -> str:
 
 def hash_api_key(raw_key: str) -> str:
     """
-    Compute the SHA-256 hex digest of a raw API key.
+    Compute the stored digest of a raw API key.
 
-    High-entropy secrets do not require a slow KDF
-    (Argon2/bcrypt). SHA-256 is the industry standard
-    for hashing tokens of this entropy level.
+    A keyed HMAC-SHA256 under the API-key subkey derived from
+    ``AuthSettings.secret_key``. High-entropy secrets do not need a slow KDF
+    (Argon2/bcrypt), but keying the digest means database read access alone does
+    not let an attacker verify a stolen key offline, and an API-key digest can
+    never collide with a digest computed for another purpose.
 
     Args:
         raw_key: The plain-text API key to hash.
 
     Returns:
-        Lowercase hex-encoded SHA-256 digest (64 chars).
+        Lowercase hex-encoded HMAC-SHA256 digest (64 chars).
     """
-    return token_hashing.sha256_hex(raw_key)
+    return token_hashing.hmac_sha256(raw_key, token_hashing.KeyPurpose.API_KEY)
+
+
+def api_key_lookup_digests(raw_key: str) -> tuple[str, str]:
+    """Return the digests an API-key lookup should match.
+
+    Keys issued before the move to keyed HMACs are stored as an unkeyed SHA-256
+    digest, so a lookup accepts either form; the row is rewritten with the keyed
+    digest on first use (see ``api_keys.crud.get_api_key_by_hash``).
+
+    Args:
+        raw_key: The plain-text API key presented by the caller.
+
+    Returns:
+        Tuple of ``(keyed_digest, legacy_unkeyed_digest)``.
+    """
+    return token_hashing.legacy_lookup_digests(raw_key, token_hashing.KeyPurpose.API_KEY)
 
 
 def validate_api_key_scopes(

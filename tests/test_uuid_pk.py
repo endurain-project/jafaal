@@ -187,12 +187,14 @@ _UUID_E2E = textwrap.dedent(
     from jafaal._internal.security_stores import PendingMFALogin
 
     pending = PendingMFALogin()
-    pending.add_pending_login("alice", uid)
-    fetched = pending.get_pending_login("alice")
-    assert isinstance(fetched, uuid.UUID) and fetched == uid, (fetched, type(fetched))
-    claimed = pending.claim_pending_login("alice")
-    assert isinstance(claimed, uuid.UUID) and claimed == uid, (claimed, type(claimed))
-    assert pending.get_pending_login("alice") is None
+    ticket = pending.add_pending_login("alice", uid)
+    fetched = pending.get_pending_login(ticket)
+    assert fetched is not None
+    assert isinstance(fetched.user_id, uuid.UUID) and fetched.user_id == uid, (fetched, type(fetched.user_id))
+    claimed = pending.claim_pending_login(ticket)
+    assert claimed is not None
+    assert isinstance(claimed.user_id, uuid.UUID) and claimed.user_id == uid, (claimed, type(claimed.user_id))
+    assert pending.get_pending_login(ticket) is None
 
     # 4. Cascade delete through the UUID FK.
     db.delete(user)

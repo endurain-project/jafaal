@@ -339,9 +339,11 @@ def login_for_access_token(
         and webauthn_crud.user_has_credentials(user.id, db)
     )
     if require_second_factor:
-        # Store the user for pending MFA verification
+        # Store the user for pending MFA verification. The returned ticket is
+        # the caller's proof that *it* satisfied the password factor; without
+        # it the second factor alone cannot complete a login.
         with _translate_store_outage():
-            pending_mfa_store.add_pending_login(form_data.username, user.id)
+            mfa_token = pending_mfa_store.add_pending_login(form_data.username, user.id)
 
         # Don't reset failed login attempts yet - wait for MFA verification
         # This prevents bypassing lockout by triggering MFA flow
@@ -351,12 +353,14 @@ def login_for_access_token(
             response.status_code = status.HTTP_202_ACCEPTED
             return jafaal_schema.MFARequiredResponse(
                 mfa_required=True,
+                mfa_token=mfa_token,
                 username=form_data.username,
                 message="MFA verification required",
             )
         if client_type == "mobile":
             return {
                 "mfa_required": True,
+                "mfa_token": mfa_token,
                 "username": form_data.username,
                 "message": "MFA verification required",
             }
@@ -442,7 +446,8 @@ def verify_mfa_and_login(
         response: The HTTP response object
         request: The HTTP request object
         failed_attempts: Failed login attempts tracker for progressive lockout
-        mfa_request: MFA login request containing username and MFA code
+        mfa_request: MFA login request carrying the ``mfa_token`` ticket issued
+            by ``/auth/login`` and the MFA code
         client_type: The type of client making the request ("web" or "mobile")
         pending_mfa_store: Store for pending MFA logins
         identity_service: Identity service used to verify backup codes.
@@ -456,7 +461,8 @@ def verify_mfa_and_login(
         Result from jafaal_utils.complete_login() or PKCE session response
 
     Raises:
-        JafaalError: If no pending login found, MFA code is invalid, or user not found
+        JafaalError: If the ticket is unknown/expired, the MFA code is invalid,
+            or the user is not found
     """
     _validate_pkce_query_params(
         client_type,
@@ -464,12 +470,30 @@ def verify_mfa_and_login(
         code_challenge_method,
     )
 
-    username_log_id = jafaal_security_stores.username_log_identifier(mfa_request.username)
+    # Resolve the pending login from the opaque ticket. Because the ticket is a
+    # 256-bit secret handed only to the caller that passed the password step,
+    # this lookup is itself an authentication check — an attacker holding a
+    # valid one-time code but no ticket cannot reach the verification below.
+    # It also means this endpoint is no longer a "is user X mid-login?" oracle,
+    # so the timing-equalising dummy verify the username-addressed version
+    # needed here is obsolete (and its ~50 ms Argon2 cost is not spent on every
+    # rejected request).
+    with _translate_store_outage():
+        pending = pending_mfa_store.get_pending_login(mfa_request.mfa_token)
+    if pending is None:
+        logger.warning("No pending MFA login found for the presented ticket")
+        raise jafaal_exceptions.InvalidRequestError(
+            "No pending MFA login found. Please start the login again.",
+        )
+
+    user_id = pending.user_id
+    username = pending.username
+    username_log_id = jafaal_security_stores.username_log_identifier(username)
 
     # Check if user is locked out from too many failed attempts
     with _translate_store_outage():
-        if pending_mfa_store.is_locked_out(mfa_request.username):
-            lockout_until = pending_mfa_store.get_lockout_time(mfa_request.username)
+        if pending_mfa_store.is_locked_out(username):
+            lockout_until = pending_mfa_store.get_lockout_time(username)
             if lockout_until:
                 seconds_remaining = int((lockout_until - datetime.now(UTC)).total_seconds())
                 raise jafaal_exceptions.RateLimitedError(
@@ -477,41 +501,32 @@ def verify_mfa_and_login(
                     retry_after=seconds_remaining,
                 )
 
-    # Check if there's a pending MFA login for this username
-    with _translate_store_outage():
-        user_id = pending_mfa_store.get_pending_login(mfa_request.username)
-    if user_id is None:
-        # Run a dummy Argon2 verify so the wall-clock latency of the
-        # "no pending MFA login" branch matches the "pending login,
-        # wrong code" branch (where backup-code verification performs
-        # an Argon2 verify). Without this, an attacker could enumerate
-        # which usernames are mid-login by measuring response time.
-        password_hasher.dummy_verify()
-        logger.warning(f"No pending MFA login found for {username_log_id}")
-        raise jafaal_exceptions.InvalidRequestError("No pending MFA login found for this username")
-
     # Verify the MFA code (TOTP or backup code)
     if not mfa_service.verify_user_mfa(user_id, mfa_request.mfa_code, identity_service, db):
         # Record failed attempt and apply lockout if threshold exceeded
         with _translate_store_outage():
-            failed_count = pending_mfa_store.record_failed_attempt(mfa_request.username)
+            failed_count = pending_mfa_store.record_failed_attempt(username)
         logger.warning(f"Invalid MFA code for {username_log_id}. Failed attempts: {failed_count}")
         jafaal_audit.record(
             jafaal_audit.Event.MFA_FAILURE,
             outcome=jafaal_audit.Outcome.FAILURE,
             level=logging.WARNING,
             user_id=user_id,
-            username=mfa_request.username,
+            username=username,
             ip=request.client.host if request.client else None,
             failed_attempts=failed_count,
         )
         raise jafaal_exceptions.InvalidMFACodeError("Invalid MFA code, backup code or backup code already used.")
 
+    # Consume the ticket atomically: one password step authorises exactly one
+    # completed login, so a leaked ticket cannot be replayed after use.
     with _translate_store_outage():
-        claimed_user_id = pending_mfa_store.claim_pending_login(mfa_request.username)
-    if claimed_user_id != user_id:
+        claimed = pending_mfa_store.claim_pending_login(mfa_request.mfa_token)
+    if claimed is None or claimed.user_id != user_id:
         logger.warning(f"Pending MFA login for {username_log_id} was missing or already claimed")
-        raise jafaal_exceptions.InvalidRequestError("No pending MFA login found for this username")
+        raise jafaal_exceptions.InvalidRequestError(
+            "No pending MFA login found. Please start the login again.",
+        )
 
     # Get the user and complete login
     user = jafaal_ports.get_user_repository().get_by_id(user_id, db)
@@ -524,8 +539,8 @@ def verify_mfa_and_login(
 
     # MFA verification successful - reset both MFA and login failed attempts counters
     with _translate_store_outage():
-        pending_mfa_store.reset_attempts(mfa_request.username)
-        failed_attempts.reset_attempts(mfa_request.username)
+        pending_mfa_store.reset_attempts(username)
+        failed_attempts.reset_attempts(username)
         failed_attempts.reset_ip_attempts(network.get_ip_address(request))
 
     # Mobile clients with PKCE use secure token exchange flow
@@ -643,31 +658,42 @@ async def refresh_token(
     # Validate session hasn't exceeded idle or absolute timeout
     jafaal_sessions_utils.validate_session_timeout(session)
 
-    # Verify CSRF token for web clients only
-    # Mobile clients don't use CSRF tokens
-    # OAuth 2.1 Bootstrap Pattern for page reload:
-    # - On EVERY page reload, in-memory tokens (incl. CSRF) are lost but the
-    #   httpOnly refresh cookie persists. The client therefore POSTs to
-    #   /refresh without an X-CSRF-Token header to bootstrap a new in-memory
-    #   token. This must continue to work even after a CSRF binding has been
-    #   minted on the session, otherwise the user is logged out on reload.
-    # - When the client DOES send a header, it MUST be valid. An empty/wrong
-    #   value is rejected (prevents partial-CSRF where script can read the
-    #   cookie but not the bound token).
-    # - CSRF protection at this endpoint is defense-in-depth; the primary
-    #   protections are HttpOnly + SameSite=Strict on the refresh cookie,
-    #   which prevent a cross-site attacker from issuing this POST at all.
-    if (
-        client_type == "web"
-        and x_csrf_token
-        and session.csrf_token_hash is not None
-        and not jafaal_sessions_utils.verify_csrf_token(x_csrf_token, session.csrf_token_hash)
-    ):
-        # CSRF token was provided: validate it
-        raise jafaal_exceptions.AuthorizationError(
-            "Invalid CSRF token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    # Verify CSRF for web clients only; mobile clients don't use CSRF tokens.
+    #
+    # Two layers, because each covers the other's blind spot:
+    #
+    # 1. Off-site rejection (always enforced for web). ``Origin`` and
+    #    ``Sec-Fetch-Site`` are forbidden header names, so page script cannot
+    #    forge or strip them — unlike a custom ``X-CSRF-Token`` header, which a
+    #    cross-site attacker simply omits. This is what makes the bootstrap rule
+    #    below genuinely safe rather than merely optional for the attacker.
+    # 2. CSRF-token binding (when the client sends one). OAuth 2.1 bootstrap
+    #    pattern for page reload: on EVERY reload the in-memory tokens (incl.
+    #    the CSRF token) are lost while the httpOnly refresh cookie persists, so
+    #    the client POSTs here without an X-CSRF-Token header to bootstrap a new
+    #    one. That must keep working after a binding has been minted, otherwise
+    #    the user is logged out on reload. When the client DOES send a header it
+    #    MUST be valid (prevents partial-CSRF, where script can read the cookie
+    #    but not the bound token).
+    #
+    # The refresh cookie's HttpOnly + SameSite=Strict attributes remain the
+    # primary protection; both checks here are defense-in-depth.
+    if client_type == "web":
+        if network.is_off_site_request(request, jafaal_settings.get_settings().resolved_csrf_trusted_origins):
+            logger.warning("Rejected off-site refresh request")
+            raise jafaal_exceptions.AuthorizationError(
+                "Refresh requests must originate from a trusted origin",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        if (
+            x_csrf_token
+            and session.csrf_token_hash is not None
+            and not jafaal_sessions_utils.verify_csrf_token(x_csrf_token, session.csrf_token_hash)
+        ):
+            raise jafaal_exceptions.AuthorizationError(
+                "Invalid CSRF token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
 
     # Verify session has a refresh token (not pending PKCE exchange)
     if not session.refresh_token:

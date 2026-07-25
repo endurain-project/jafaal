@@ -900,10 +900,11 @@ class DefaultIdentityService:
                 revoked, or expired.
         """
         computed_hash = jafaal_api_keys_utils.hash_api_key(raw_key)
-        db_key = jafaal_api_keys_crud.get_api_key_by_hash(computed_hash, self._db)
+        db_key = jafaal_api_keys_crud.get_api_key_by_hash(raw_key, self._db)
 
         # Constant-time comparison prevents timing attacks
-        # even when the key is not found.
+        # even when the key is not found. A legacy row was rewritten to the
+        # keyed digest by the lookup above, so both sides are the keyed form.
         stored_hash = db_key.key_hash if db_key else ("0" * 64)
         if not hmac.compare_digest(stored_hash, computed_hash):
             db_key = None

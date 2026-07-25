@@ -441,15 +441,17 @@ def test_second_factor_completes_login(client, make_user, mock_verify):
     _register_credential(user.id, raw_id=b"cred-1")
 
     with override_settings(webauthn_second_factor_enabled=True):
-        assert _login(client).status_code == 202
+        challenge = _login(client)
+        assert challenge.status_code == 202
+        mfa_token = challenge.json()["mfa_token"]
 
-        begin = client.post(MFA_BEGIN, json={"username": "alice"})
+        begin = client.post(MFA_BEGIN, json={"mfa_token": mfa_token})
         assert begin.status_code == 200
         assert begin.json()["challenge"]
 
         resp = client.post(
             MFA_COMPLETE,
-            json={"username": "alice", "credential": _assertion_credential()},
+            json={"mfa_token": mfa_token, "credential": _assertion_credential()},
             headers=WEB,
         )
     assert resp.status_code == 200
@@ -471,14 +473,16 @@ def test_second_factor_uses_configured_user_verification(client, make_user, monk
     monkeypatch.setattr(webauthn_service._webauthn, "verify_authentication_response", _capture)
 
     with override_settings(webauthn_second_factor_enabled=True, webauthn_user_verification="discouraged"):
-        assert _login(client).status_code == 202
-        begin = client.post(MFA_BEGIN, json={"username": "alice"})
+        challenge = _login(client)
+        assert challenge.status_code == 202
+        mfa_token = challenge.json()["mfa_token"]
+        begin = client.post(MFA_BEGIN, json={"mfa_token": mfa_token})
         assert begin.status_code == 200
         # The second-factor ceremony advertises the configured (non-forced) UV level.
         assert begin.json()["userVerification"] == "discouraged"
         resp = client.post(
             MFA_COMPLETE,
-            json={"username": "alice", "credential": _assertion_credential()},
+            json={"mfa_token": mfa_token, "credential": _assertion_credential()},
             headers=WEB,
         )
     assert resp.status_code == 200
@@ -492,12 +496,14 @@ def test_second_factor_rejects_foreign_credential(client, make_user):
     bob_cred = _register_credential(bob.id, raw_id=b"bob-key")
 
     with override_settings(webauthn_second_factor_enabled=True):
-        assert _login(client, "alice").status_code == 202
-        client.post(MFA_BEGIN, json={"username": "alice"})
+        challenge = _login(client, "alice")
+        assert challenge.status_code == 202
+        mfa_token = challenge.json()["mfa_token"]
+        client.post(MFA_BEGIN, json={"mfa_token": mfa_token})
         # Present Bob's credential to satisfy Alice's pending second factor.
         resp = client.post(
             MFA_COMPLETE,
-            json={"username": "alice", "credential": _assertion_credential(b"bob-key")},
+            json={"mfa_token": mfa_token, "credential": _assertion_credential(b"bob-key")},
             headers=WEB,
         )
     assert resp.status_code == 401
@@ -509,13 +515,44 @@ def test_second_factor_complete_without_pending_login_rejected(client, make_user
     _register_credential(user.id, raw_id=b"cred-1")
     with override_settings(webauthn_second_factor_enabled=True):
         # No prior password login → no pending second factor.
-        client.post(MFA_BEGIN, json={"username": "alice"})
+        client.post(MFA_BEGIN, json={"mfa_token": "not-a-real-ticket"})
         resp = client.post(
+            MFA_COMPLETE,
+            json={"mfa_token": "not-a-real-ticket", "credential": _assertion_credential()},
+            headers=WEB,
+        )
+    assert resp.status_code == 400
+
+
+def test_second_factor_rejects_a_passkey_assertion_without_the_ticket(client, make_user, mock_verify):
+    """Knowing the username must not let a caller finish someone else's login.
+
+    The WebAuthn second factor is addressed by the same opaque ticket as the
+    TOTP path, so an attacker who can produce an assertion but never passed the
+    password step has nothing to present.
+    """
+    user = make_user(username="alice")
+    _register_credential(user.id, raw_id=b"cred-1")
+
+    with override_settings(webauthn_second_factor_enabled=True):
+        # The victim performs the password step, opening the window.
+        assert _login(client).status_code == 202
+
+        # The attacker guesses the username — the old address for this ceremony.
+        resp = client.post(
+            MFA_COMPLETE,
+            json={"mfa_token": "alice", "credential": _assertion_credential()},
+            headers=WEB,
+        )
+        assert resp.status_code == 400
+
+        # And the legacy username field is no longer accepted at all.
+        legacy = client.post(
             MFA_COMPLETE,
             json={"username": "alice", "credential": _assertion_credential()},
             headers=WEB,
         )
-    assert resp.status_code == 400
+        assert legacy.status_code == 422
 
 
 # --------------------------------------------------------------------------- #

@@ -79,21 +79,22 @@ class WebAuthnSecondFactorBegin(BaseModel):
     """Payload starting a WebAuthn second-factor ceremony after password login.
 
     Attributes:
-        username: The username of the pending (password-verified) login.
+        mfa_token: The opaque ticket returned by ``/auth/login``, proving this
+            caller satisfied the password factor.
     """
 
-    username: StrictStr = Field(..., max_length=250, description="Username of the pending login")
+    mfa_token: StrictStr = Field(..., max_length=512, description="Pending-login ticket from /auth/login")
 
 
 class WebAuthnSecondFactorComplete(BaseModel):
     """Payload finishing a WebAuthn second-factor ceremony.
 
     Attributes:
-        username: The username of the pending login.
+        mfa_token: The opaque ticket returned by ``/auth/login``.
         credential: The authenticator assertion response.
     """
 
-    username: StrictStr = Field(..., max_length=250, description="Username of the pending login")
+    mfa_token: StrictStr = Field(..., max_length=512, description="Pending-login ticket from /auth/login")
     credential: dict[str, Any] = Field(..., description="Authenticator assertion response")
 
 

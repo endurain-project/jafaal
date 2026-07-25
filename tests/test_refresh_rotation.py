@@ -8,11 +8,14 @@ detection with whole-family invalidation, and the web CSRF bootstrap rules.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
 import jafaal.orm as jafaal_orm
 import jafaal.sessions.utils as session_utils
+import jafaal.settings as jafaal_settings
 from jafaal._internal.password_hasher import password_hasher
 from jafaal._internal.token_manager import TokenType, get_token_manager
 from jafaal.sessions.models import UsersSessions
@@ -30,6 +33,25 @@ def _login(client, username="alice", password="Str0ng!Pass"):
         data={"username": username, "password": password},
         headers=WEB,
     )
+
+
+def _login_mobile(client, username="alice", password="Str0ng!Pass"):
+    return client.post(
+        "/api/v1/auth/login",
+        data={"username": username, "password": password},
+        headers={"X-Client-Type": "mobile"},
+    )
+
+
+@contextmanager
+def _override_settings(**overrides):
+    """Temporarily reconfigure JAFAAL, restoring the suite settings afterwards."""
+    original = jafaal_settings.get_settings()
+    jafaal_settings.configure(dataclasses.replace(original, **overrides))
+    try:
+        yield
+    finally:
+        jafaal_settings.configure(original)
 
 
 def _refresh_cookie(client) -> str | None:
@@ -224,6 +246,98 @@ def test_missing_csrf_header_still_allowed_after_binding(client, make_user):
 
     # Omitting the header on a later reload must still bootstrap (no lockout).
     assert client.post(REFRESH, headers=WEB).status_code == 200
+
+
+# --------------------------------------------------------------------------- #
+# Off-site rejection (what makes the header-less bootstrap safe)
+#
+# A cross-site attacker can simply omit the X-CSRF-Token header, so the token
+# check alone never protected the bootstrap path. ``Origin`` and
+# ``Sec-Fetch-Site`` are forbidden header names — page script cannot forge or
+# strip them — so the browser's own classification is the load-bearing signal.
+# --------------------------------------------------------------------------- #
+
+
+def test_cross_site_refresh_is_rejected_even_without_a_csrf_header(client, make_user):
+    make_user(username="alice")
+    _login(client)
+
+    resp = client.post(REFRESH, headers={**WEB, "Sec-Fetch-Site": "cross-site"})
+    assert resp.status_code == 403
+    assert "origin" in resp.json()["detail"].lower()
+
+
+def test_cross_site_refresh_is_rejected_even_with_a_valid_csrf_token(client, make_user):
+    make_user(username="alice")
+    _login(client)
+    csrf = client.post(REFRESH, headers=WEB).json()["csrf_token"]
+
+    resp = client.post(
+        REFRESH,
+        headers={**WEB, "X-CSRF-Token": csrf, "Sec-Fetch-Site": "cross-site"},
+    )
+    assert resp.status_code == 403
+
+
+def test_sibling_subdomain_refresh_is_rejected(client, make_user):
+    # SameSite=Strict still sends the cookie for a same-*site* request, so a
+    # sibling subdomain (or a subdomain takeover) must be rejected too.
+    make_user(username="alice")
+    _login(client)
+
+    resp = client.post(REFRESH, headers={**WEB, "Sec-Fetch-Site": "same-site"})
+    assert resp.status_code == 403
+
+
+def test_same_origin_and_direct_navigation_are_allowed(client, make_user):
+    make_user(username="alice")
+    _login(client)
+
+    for fetch_site in ("same-origin", "none"):
+        assert client.post(REFRESH, headers={**WEB, "Sec-Fetch-Site": fetch_site}).status_code == 200
+
+
+def test_mismatched_origin_header_is_rejected(client, make_user):
+    make_user(username="alice")
+    _login(client)
+
+    resp = client.post(REFRESH, headers={**WEB, "Origin": "https://evil.test"})
+    assert resp.status_code == 403
+
+
+def test_trusted_origin_header_is_accepted(client, make_user):
+    # The suite configures base_url=https://app.test, which is the default
+    # trusted origin.
+    make_user(username="alice")
+    _login(client)
+
+    assert client.post(REFRESH, headers={**WEB, "Origin": "https://app.test"}).status_code == 200
+
+
+def test_explicit_csrf_trusted_origins_enable_a_split_origin_frontend(client, make_user):
+    # Frontend and API on different hosts: the frontend origin must be listed,
+    # and only that origin is accepted.
+    make_user(username="alice")
+    _login(client)
+
+    with _override_settings(csrf_trusted_origins=("https://spa.test",)):
+        assert client.post(REFRESH, headers={**WEB, "Origin": "https://spa.test"}).status_code == 200
+        # base_url no longer implicitly trusted once an explicit list is set.
+        assert client.post(REFRESH, headers={**WEB, "Origin": "https://app.test"}).status_code == 403
+
+
+def test_mobile_clients_are_not_subject_to_the_origin_check(client, make_user):
+    # Mobile clients send the refresh token in the Authorization header, not a
+    # cookie, so they are not a CSRF target.
+    make_user(username="alice")
+    mobile = {"X-Client-Type": "mobile"}
+    refresh_token = _login_mobile(client).json()["refresh_token"]
+
+    resp = client.post(
+        REFRESH,
+        headers={**mobile, "Authorization": f"Bearer {refresh_token}", "Sec-Fetch-Site": "cross-site"},
+    )
+    assert resp.status_code == 200
 
 
 # --------------------------------------------------------------------------- #

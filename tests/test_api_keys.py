@@ -15,9 +15,15 @@ def test_generate_api_key_format():
     assert len(key.split("_", 1)[1]) >= 43
 
 
-def test_hash_api_key_is_sha256():
+def test_hash_api_key_is_a_keyed_hmac():
     raw = "jafaal_abc"
-    assert api_keys_utils.hash_api_key(raw) == api_keys_utils.token_hashing.sha256_hex(raw)
+    # Keyed under the API-key subkey: neither a bare SHA-256 (which anyone with
+    # database read access could recompute offline) nor a digest any other
+    # purpose could produce.
+    assert api_keys_utils.hash_api_key(raw) != api_keys_utils.token_hashing.sha256_hex(raw)
+    assert api_keys_utils.hash_api_key(raw) == api_keys_utils.token_hashing.hmac_sha256(
+        raw, api_keys_utils.token_hashing.KeyPurpose.API_KEY
+    )
 
 
 def test_scope_allow_list_is_empty_by_default():
@@ -50,3 +56,77 @@ def test_scopes_json_roundtrip():
     scopes = ["reports:read", "reports:write"]
     encoded = api_keys_utils.scopes_to_json(scopes)
     assert api_keys_utils.json_to_scopes(encoded) == scopes
+
+
+# --------------------------------------------------------------------------- #
+# Keyed-digest migration
+#
+# Keys issued before the move from an unkeyed SHA-256 to a keyed HMAC must keep
+# authenticating, and be rewritten to the keyed form on first use so the
+# fallback drains.
+# --------------------------------------------------------------------------- #
+
+
+def _fake_request():
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        client=SimpleNamespace(host="127.0.0.1"),
+        url=SimpleNamespace(path="/api/v1/whatever"),
+    )
+
+
+def _identity_service(db):
+    from jafaal._internal.password_hasher import get_password_hasher
+    from jafaal._internal.token_manager import get_token_manager
+    from jafaal.identity_service import DefaultIdentityService
+
+    return DefaultIdentityService(db, get_token_manager(), get_password_hasher())
+
+
+def _create_key(user_id, db):
+    import jafaal.api_keys.crud as api_keys_crud
+    import jafaal.api_keys.schema as api_keys_schema
+
+    jafaal.configure_api_key_scopes(["reports:read"])
+    return api_keys_crud.create_api_key(
+        user_id,
+        api_keys_schema.UsersApiKeyCreate(name="k", scopes=["reports:read"]),
+        db,
+    )
+
+
+def test_new_api_keys_are_stored_as_keyed_digests(db, make_user):
+    user = make_user(username="keyowner")
+    row, raw_key = _create_key(user.id, db)
+    assert row.key_hash == api_keys_utils.hash_api_key(raw_key)
+    assert row.key_hash != api_keys_utils.token_hashing.sha256_hex(raw_key)
+
+
+def test_legacy_sha256_api_key_still_authenticates_and_is_upgraded(db, make_user):
+    user = make_user(username="legacyowner")
+    row, raw_key = _create_key(user.id, db)
+
+    # Rewind the row to the pre-migration unkeyed digest.
+    legacy_hash = api_keys_utils.token_hashing.sha256_hex(raw_key)
+    row.key_hash = legacy_hash
+    db.commit()
+
+    principal = _identity_service(db).resolve_from_api_key(raw_key, _fake_request())
+    assert principal.user_id == user.id
+
+    # The row was transparently rewritten in the keyed form.
+    db.refresh(row)
+    assert row.key_hash == api_keys_utils.hash_api_key(raw_key)
+    assert row.key_hash != legacy_hash
+
+    # And it still authenticates after the upgrade.
+    assert _identity_service(db).resolve_from_api_key(raw_key, _fake_request()).user_id == user.id
+
+
+def test_unknown_api_key_is_rejected(db, make_user):
+    from jafaal.exceptions import InvalidApiKeyError
+
+    make_user(username="someone")
+    with pytest.raises(InvalidApiKeyError):
+        _identity_service(db).resolve_from_api_key("jafaal_not-a-real-key", _fake_request())

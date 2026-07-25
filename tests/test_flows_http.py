@@ -1,5 +1,6 @@
 """End-to-end HTTP tests for the password-reset, sign-up, and MFA-verify flows."""
 
+import secrets
 import time
 from contextlib import contextmanager
 
@@ -206,12 +207,14 @@ def test_mfa_verify_login_flow(client, make_user):
     secret = pyotp.random_base32()
     _enable_mfa(user.id, secret)
 
-    assert _login(client, "mfauser", "Str0ng!Pass").status_code == 202
+    challenge = _login(client, "mfauser", "Str0ng!Pass")
+    assert challenge.status_code == 202
+    mfa_token = challenge.json()["mfa_token"]
 
     code = pyotp.TOTP(secret).now()
     verify = client.post(
         "/api/v1/auth/mfa/verify",
-        json={"username": "mfauser", "mfa_code": code},
+        json={"mfa_token": mfa_token, "mfa_code": code},
         headers=WEB,
     )
     assert verify.status_code == 200
@@ -222,23 +225,91 @@ def test_mfa_verify_rejects_wrong_code(client, make_user):
     user = make_user(username="mfauser", password="Str0ng!Pass")
     secret = pyotp.random_base32()
     _enable_mfa(user.id, secret)
-    _login(client, "mfauser", "Str0ng!Pass")
+    mfa_token = _login(client, "mfauser", "Str0ng!Pass").json()["mfa_token"]
 
     wrong = pyotp.TOTP(secret).at(int(time.time()) - 300)
     verify = client.post(
         "/api/v1/auth/mfa/verify",
-        json={"username": "mfauser", "mfa_code": wrong},
+        json={"mfa_token": mfa_token, "mfa_code": wrong},
         headers=WEB,
     )
     assert verify.status_code == 400
 
 
+def test_mfa_verify_rejects_a_valid_code_without_the_ticket(client, make_user):
+    """A valid OTP alone must not complete a login somebody else's password opened.
+
+    This is the second-factor invariant: the password step hands its ticket only
+    to the caller that passed it. An attacker who knows the username and holds a
+    currently-valid TOTP code (phished, shoulder-surfed, or read off a shared
+    authenticator) must still be unable to finish the login.
+    """
+    user = make_user(username="victim", password="Str0ng!Pass")
+    secret = pyotp.random_base32()
+    _enable_mfa(user.id, secret)
+
+    # The victim performs the password step, opening the MFA window.
+    assert _login(client, "victim", "Str0ng!Pass").status_code == 202
+
+    code = pyotp.TOTP(secret).now()
+    # The attacker knows the username and has a valid code, but no ticket.
+    for guess in ("victim", "", "not-a-real-ticket", secrets.token_urlsafe(32)):
+        attacker = client.post(
+            "/api/v1/auth/mfa/verify",
+            json={"mfa_token": guess, "mfa_code": code},
+            headers=WEB,
+        )
+        assert attacker.status_code in (400, 422)
+        assert "access_token" not in attacker.json()
+
+    # Sending the username under its old field name is rejected outright.
+    legacy = client.post(
+        "/api/v1/auth/mfa/verify",
+        json={"username": "victim", "mfa_code": code},
+        headers=WEB,
+    )
+    assert legacy.status_code == 422
+
+
+def test_mfa_ticket_is_single_use(client, make_user):
+    user = make_user(username="onceuser", password="Str0ng!Pass")
+    secret = pyotp.random_base32()
+    _enable_mfa(user.id, secret)
+    mfa_token = _login(client, "onceuser", "Str0ng!Pass").json()["mfa_token"]
+
+    payload = {"mfa_token": mfa_token, "mfa_code": pyotp.TOTP(secret).now()}
+    assert client.post("/api/v1/auth/mfa/verify", json=payload, headers=WEB).status_code == 200
+    # The ticket was consumed: one password step authorises exactly one login.
+    assert client.post("/api/v1/auth/mfa/verify", json=payload, headers=WEB).status_code == 400
+
+
+def test_mfa_tickets_are_not_interchangeable_between_users(client, make_user):
+    """One user's ticket must not complete another user's pending login."""
+    alice = make_user(username="alice-mfa", password="Str0ng!Pass")
+    bob = make_user(username="bob-mfa", password="Str0ng!Pass")
+    alice_secret = pyotp.random_base32()
+    bob_secret = pyotp.random_base32()
+    _enable_mfa(alice.id, alice_secret)
+    _enable_mfa(bob.id, bob_secret)
+
+    alice_ticket = _login(client, "alice-mfa", "Str0ng!Pass").json()["mfa_token"]
+    _login(client, "bob-mfa", "Str0ng!Pass")
+
+    # Alice's ticket with Bob's code resolves to Alice, whose TOTP rejects it.
+    crossed = client.post(
+        "/api/v1/auth/mfa/verify",
+        json={"mfa_token": alice_ticket, "mfa_code": pyotp.TOTP(bob_secret).now()},
+        headers=WEB,
+    )
+    assert crossed.status_code == 400
+
+
 def test_mfa_verify_login_flow_with_zero_user_id(client, make_user):
     """A user whose integer id is the falsy value ``0`` can still complete MFA login.
 
-    Regression for the ``if not user_id`` check (now ``if user_id is None``):
-    ``get_pending_login`` returns ``0`` for such a user, which the old truthiness
-    test wrongly treated as "no pending login".
+    Regression for the ``if not user_id`` check (now ``if pending is None``):
+    the resolved pending login carries ``0``, which a truthiness test would
+    wrongly treat as "no pending login".
     """
     user = make_user(username="zerouser", user_id=0, password="Str0ng!Pass")
     assert user.id == 0
@@ -246,12 +317,14 @@ def test_mfa_verify_login_flow_with_zero_user_id(client, make_user):
     secret = pyotp.random_base32()
     _enable_mfa(user.id, secret)
 
-    assert _login(client, "zerouser", "Str0ng!Pass").status_code == 202
+    challenge = _login(client, "zerouser", "Str0ng!Pass")
+    assert challenge.status_code == 202
+    mfa_token = challenge.json()["mfa_token"]
 
     code = pyotp.TOTP(secret).now()
     verify = client.post(
         "/api/v1/auth/mfa/verify",
-        json={"username": "zerouser", "mfa_code": code},
+        json={"mfa_token": mfa_token, "mfa_code": code},
         headers=WEB,
     )
     assert verify.status_code == 200

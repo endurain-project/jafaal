@@ -179,13 +179,16 @@ def _user_handle(user: jafaal_ports.UserProtocol) -> bytes:
     application's internal (often sequential) identifier to every authenticator.
 
     Instead derive an opaque 32-byte handle as a keyed HMAC of the user id under
-    the server secret: it is stable per user (so every passkey a user registers
-    shares one account handle, as WebAuthn requires), non-identifying, and not
-    derivable or correlatable without ``AuthSettings.secret_key``. Authentication
-    resolves the user from the presented credential id, never from this handle,
-    so the derivation only needs to be deterministic - never reversible.
+    a dedicated subkey of the server secret: it is stable per user (so every
+    passkey a user registers shares one account handle, as WebAuthn requires),
+    non-identifying, and not derivable or correlatable without
+    ``AuthSettings.secret_key``. Authentication resolves the user from the
+    presented credential id, never from this handle, so the derivation only needs
+    to be deterministic - never reversible.
     """
-    return bytes.fromhex(jafaal_token_hashing.hmac_sha256(f"webauthn:user-handle:{user.id}"))
+    return bytes.fromhex(
+        jafaal_token_hashing.hmac_sha256(str(user.id), jafaal_token_hashing.KeyPurpose.WEBAUTHN_USER_HANDLE)
+    )
 
 
 def begin_registration(user: jafaal_ports.UserProtocol, db: Session) -> dict[str, Any]:
@@ -344,14 +347,14 @@ def complete_authentication(
 # ---------------------------------------------------------------------------
 
 
-def begin_second_factor(username: str, user_id: UserId | None, db: Session) -> dict[str, Any]:
+def begin_second_factor(mfa_token: str, user_id: UserId | None, db: Session) -> dict[str, Any]:
     """Generate second-factor options for a pending login and store the challenge.
 
-    The challenge is keyed by ``username`` (bound to the pending-MFA login). When
-    ``user_id`` is ``None`` (no pending login for this username) an empty
-    allow-list is used so the endpoint does not disclose whether a login is
-    pending or which passkeys the account holds; the ceremony simply cannot be
-    completed.
+    The challenge is keyed by the opaque ``mfa_token`` ticket that addresses the
+    pending-MFA login. When ``user_id`` is ``None`` (the ticket does not address
+    a live pending login) an empty allow-list is used so the endpoint does not
+    disclose whether a login is pending or which passkeys the account holds; the
+    ceremony simply cannot be completed.
     """
     _require_webauthn()
 
@@ -361,7 +364,7 @@ def begin_second_factor(username: str, user_id: UserId | None, db: Session) -> d
         allow_credentials=allow_credentials or None,
         user_verification=_user_verification(),
     )
-    challenge_store.store_second_factor_challenge(username, options.challenge)
+    challenge_store.store_second_factor_challenge(mfa_token, options.challenge)
     return _options_to_dict(options)
 
 

@@ -265,6 +265,14 @@ class AuthSettings:
     sso_error_path: str = "/login"
     sso_link_result_path: str = "/settings/security"
 
+    # Origins allowed to drive the web refresh flow. The refresh cookie is
+    # HttpOnly + SameSite=Strict, and /refresh additionally refuses a request
+    # that a browser marks as off-site (via the unforgeable ``Sec-Fetch-Site``
+    # header or a mismatched ``Origin``). Defaults to the origin of ``base_url``;
+    # set it explicitly when the frontend is served from a different origin than
+    # the API (e.g. app.example.com calling api.example.com).
+    csrf_trusted_origins: tuple[str, ...] = ()
+
     # --- environment ---
     environment: str = "production"
 
@@ -547,6 +555,25 @@ class AuthSettings:
         return self.environment in ("production", "demo")
 
     @property
+    def _base_url_origin(self) -> tuple[str, ...]:
+        """The scheme+host+port origin of :attr:`base_url`, or empty when unusable."""
+        parsed = urlparse(self.base_url)
+        if parsed.scheme and parsed.netloc:
+            return (f"{parsed.scheme}://{parsed.netloc}",)
+        return ()
+
+    @property
+    def resolved_csrf_trusted_origins(self) -> tuple[str, ...]:
+        """Origins permitted to drive the web refresh flow.
+
+        Returns the explicit :attr:`csrf_trusted_origins` when set, otherwise the
+        origin of :attr:`base_url`. Empty when neither is available, in which
+        case the ``Origin`` comparison is skipped and only the browser's
+        ``Sec-Fetch-Site`` signal is enforced.
+        """
+        return self.csrf_trusted_origins or self._base_url_origin
+
+    @property
     def effective_refresh_cookie_name(self) -> str:
         """Refresh-cookie name including any ``__Secure-`` / ``__Host-`` prefix.
 
@@ -586,12 +613,7 @@ class AuthSettings:
         single origin derived from :attr:`base_url` (scheme + host + port).
         Empty when neither is available.
         """
-        if self.webauthn_origins:
-            return self.webauthn_origins
-        parsed = urlparse(self.base_url)
-        if parsed.scheme and parsed.netloc:
-            return (f"{parsed.scheme}://{parsed.netloc}",)
-        return ()
+        return self.webauthn_origins or self._base_url_origin
 
 
 # ---------------------------------------------------------------------------

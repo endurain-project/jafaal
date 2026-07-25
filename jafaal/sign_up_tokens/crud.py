@@ -1,5 +1,6 @@
 """CRUD operations for sign-up tokens."""
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -69,7 +70,7 @@ def create_sign_up_token(
 
 
 @db_errors.handle_db_errors
-def claim_sign_up_token(token_hash: str, db: Session) -> UserId | None:
+def claim_sign_up_token(token_hashes: Sequence[str], db: Session) -> UserId | None:
     """Atomically claim a valid sign-up token.
 
     Marks the matching unused, unexpired token as used in a single statement
@@ -78,7 +79,8 @@ def claim_sign_up_token(token_hash: str, db: Session) -> UserId | None:
     select + update).
 
     Args:
-        token_hash: SHA-256 hash of the plaintext sign-up token.
+        token_hashes: Candidate digests of the plaintext sign-up token (the keyed
+            HMAC plus, during migration, the legacy unkeyed SHA-256).
         db: SQLAlchemy database session.
 
     Returns:
@@ -91,7 +93,7 @@ def claim_sign_up_token(token_hash: str, db: Session) -> UserId | None:
     stmt = (
         sa_update(sign_up_tokens_models.SignUpToken)
         .where(
-            sign_up_tokens_models.SignUpToken.token_hash == token_hash,
+            sign_up_tokens_models.SignUpToken.token_hash.in_(tuple(token_hashes)),
             sign_up_tokens_models.SignUpToken.used.is_(False),
             sign_up_tokens_models.SignUpToken.expires_at > datetime.now(UTC),
         )

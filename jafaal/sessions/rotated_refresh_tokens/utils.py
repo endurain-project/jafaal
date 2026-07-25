@@ -30,11 +30,13 @@ ROTATED_TOKEN_CLEANUP_BUFFER_SECONDS: int = 10
 
 def hmac_hash_token(token: str) -> str:
     """
-    Compute HMAC-SHA256 hash of a token for secure lookup.
+    Compute the keyed HMAC-SHA256 digest of a rotated token for secure lookup.
 
-    Uses the server's SECRET_KEY as the HMAC key, providing
-    defense-in-depth: even if the database is compromised,
-    an attacker cannot verify stolen tokens without the key.
+    Keyed with the rotated-refresh-token subkey derived from the server's
+    ``secret_key``, providing defense-in-depth: even if the database is
+    compromised, an attacker cannot verify stolen tokens without the key. The
+    subkey is distinct from the one used for the session's own refresh-token
+    digest, so a rotated-token digest can never be mistaken for a live one.
 
     Args:
         token: The raw refresh token to hash.
@@ -43,9 +45,9 @@ def hmac_hash_token(token: str) -> str:
         Hex-encoded HMAC-SHA256 hash of the token.
 
     Raises:
-        ValueError: If JWT_SECRET_KEY is not configured.
+        RuntimeError: If JAFAAL has not been configured.
     """
-    return token_hashing.hmac_sha256(token)
+    return token_hashing.hmac_sha256(token, token_hashing.KeyPurpose.REFRESH_ROTATED)
 
 
 def store_rotated_token(

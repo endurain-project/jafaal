@@ -10,8 +10,8 @@ Three namespaces, by ceremony:
 * registration — keyed by the authenticated ``user_id``.
 * passwordless authentication — keyed by an opaque random ``challenge_id``
   handed to the client (the user is unknown until the assertion is presented).
-* second factor — keyed by the pending login's ``username`` (bound to the
-  password-verified pending-MFA login).
+* second factor — keyed by the pending login's opaque ``mfa_token`` ticket (the
+  same secret that addresses the password-verified pending-MFA login).
 """
 
 from __future__ import annotations
@@ -39,10 +39,11 @@ def _key(namespace: str, discriminator: str) -> str:
     return f"{prefix}:{namespace}:{discriminator}"
 
 
-def _username_discriminator(username: str) -> str:
-    # Hash the (host-controlled but arbitrary) username into a fixed, delimiter
-    # free key segment so it can never collide with or escape the key structure.
-    return hashlib.sha256(username.encode("utf-8"), usedforsecurity=False).hexdigest()
+def _opaque_discriminator(value: str) -> str:
+    # Hash the caller-supplied value into a fixed, delimiter-free key segment so
+    # it can never collide with or escape the key structure — and, for the
+    # second-factor ticket, so the store never holds the ticket itself.
+    return hashlib.sha256(value.encode("utf-8"), usedforsecurity=False).hexdigest()
 
 
 def _ttl() -> int:
@@ -83,11 +84,11 @@ def pop_authentication_challenge(challenge_id: str) -> bytes | None:
     return _pop(_key(_AUTH_PREFIX, challenge_id))
 
 
-def store_second_factor_challenge(username: str, challenge: bytes) -> None:
-    """Persist a second-factor challenge for the pending login ``username``."""
-    _store(_key(_SF_PREFIX, _username_discriminator(username)), challenge)
+def store_second_factor_challenge(mfa_token: str, challenge: bytes) -> None:
+    """Persist a second-factor challenge for the pending login ``mfa_token``."""
+    _store(_key(_SF_PREFIX, _opaque_discriminator(mfa_token)), challenge)
 
 
-def pop_second_factor_challenge(username: str) -> bytes | None:
-    """Retrieve and consume the second-factor challenge for ``username``."""
-    return _pop(_key(_SF_PREFIX, _username_discriminator(username)))
+def pop_second_factor_challenge(mfa_token: str) -> bytes | None:
+    """Retrieve and consume the second-factor challenge for ``mfa_token``."""
+    return _pop(_key(_SF_PREFIX, _opaque_discriminator(mfa_token)))

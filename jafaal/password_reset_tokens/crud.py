@@ -1,5 +1,6 @@
 """CRUD operations for password reset tokens."""
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -74,11 +75,12 @@ def get_password_reset_token_by_hash(
 
 
 @db_errors.handle_db_errors
-def claim_password_reset_token(token_hash: str, db: Session) -> UserId | None:
+def claim_password_reset_token(token_hashes: Sequence[str], db: Session) -> UserId | None:
     """Atomically claim a valid password reset token.
 
     Args:
-        token_hash: SHA-256 hash of the plaintext reset token.
+        token_hashes: Candidate digests of the plaintext reset token (the keyed
+            HMAC plus, during migration, the legacy unkeyed SHA-256).
         db: SQLAlchemy database session.
 
     Returns:
@@ -91,7 +93,7 @@ def claim_password_reset_token(token_hash: str, db: Session) -> UserId | None:
     stmt = (
         sa_update(password_reset_tokens_models.PasswordResetToken)
         .where(
-            password_reset_tokens_models.PasswordResetToken.token_hash == token_hash,
+            password_reset_tokens_models.PasswordResetToken.token_hash.in_(tuple(token_hashes)),
             password_reset_tokens_models.PasswordResetToken.used.is_(False),
             password_reset_tokens_models.PasswordResetToken.expires_at > datetime.now(UTC),
         )

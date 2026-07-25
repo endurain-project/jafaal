@@ -157,12 +157,17 @@ def begin_second_factor(
 ) -> dict:
     """Start a second-factor passkey ceremony for a pending login.
 
-    Returns the ``navigator.credentials.get()`` options. When no login is pending
-    for the username an empty allow-list is returned so the endpoint never
-    discloses whether a login is pending or which passkeys the account holds.
+    Returns the ``navigator.credentials.get()`` options. When the ticket does not
+    address a live pending login an empty allow-list is returned, so the endpoint
+    never discloses whether a login is pending or which passkeys an account
+    holds; the ceremony simply cannot be completed.
     """
-    user_id = pending_mfa_store.get_pending_login(data.username)
-    return webauthn_service.begin_second_factor(data.username, user_id, db)
+    pending = pending_mfa_store.get_pending_login(data.mfa_token)
+    return webauthn_service.begin_second_factor(
+        data.mfa_token,
+        pending.user_id if pending is not None else None,
+        db,
+    )
 
 
 @router.post("/mfa/complete", response_model=_TokenResponse)
@@ -194,10 +199,21 @@ def complete_second_factor(
     db: Annotated[Session, Depends(jafaal_orm.get_db)],
 ) -> dict:
     """Verify a second-factor passkey assertion and complete the login."""
-    username_log_id = jafaal_security_stores.username_log_identifier(data.username)
+    # The ticket is the caller's proof that it satisfied the password factor;
+    # resolving the pending login from it (rather than from a public username)
+    # is what keeps this a genuine second factor.
+    pending = pending_mfa_store.get_pending_login(data.mfa_token)
+    challenge = webauthn_challenge_store.pop_second_factor_challenge(data.mfa_token)
+    if pending is None or challenge is None:
+        logger.warning("No pending WebAuthn second-factor login for the presented ticket")
+        raise jafaal_exceptions.InvalidRequestError("No pending login found. Please start the login again.")
 
-    if pending_mfa_store.is_locked_out(data.username):
-        lockout_until = pending_mfa_store.get_lockout_time(data.username)
+    user_id = pending.user_id
+    username = pending.username
+    username_log_id = jafaal_security_stores.username_log_identifier(username)
+
+    if pending_mfa_store.is_locked_out(username):
+        lockout_until = pending_mfa_store.get_lockout_time(username)
         if lockout_until:
             seconds_remaining = int((lockout_until - datetime.now(UTC)).total_seconds())
             raise jafaal_exceptions.RateLimitedError(
@@ -205,30 +221,24 @@ def complete_second_factor(
                 retry_after=seconds_remaining,
             )
 
-    user_id = pending_mfa_store.get_pending_login(data.username)
-    challenge = webauthn_challenge_store.pop_second_factor_challenge(data.username)
-    if user_id is None or challenge is None:
-        logger.warning("No pending WebAuthn second-factor login for %s", username_log_id)
-        raise jafaal_exceptions.InvalidRequestError("No pending login found for this username.")
-
     if not webauthn_service.complete_second_factor(user_id, data.credential, challenge, db):
-        failed_count = pending_mfa_store.record_failed_attempt(data.username)
+        failed_count = pending_mfa_store.record_failed_attempt(username)
         logger.warning("Invalid WebAuthn second factor for %s. Failed attempts: %s", username_log_id, failed_count)
         jafaal_audit.record(
             jafaal_audit.Event.MFA_FAILURE,
             outcome=jafaal_audit.Outcome.FAILURE,
             level=logging.WARNING,
             user_id=user_id,
-            username=data.username,
+            username=username,
             ip=request.client.host if request.client else None,
             failed_attempts=failed_count,
         )
         raise jafaal_exceptions.InvalidCredentialsError("WebAuthn authentication failed.")
 
-    claimed_user_id = pending_mfa_store.claim_pending_login(data.username)
-    if claimed_user_id != user_id:
+    claimed = pending_mfa_store.claim_pending_login(data.mfa_token)
+    if claimed is None or claimed.user_id != user_id:
         logger.warning("Pending WebAuthn login for %s was missing or already claimed", username_log_id)
-        raise jafaal_exceptions.InvalidRequestError("No pending login found for this username.")
+        raise jafaal_exceptions.InvalidRequestError("No pending login found. Please start the login again.")
 
     user = jafaal_ports.get_user_repository().get_by_id(user_id, db)
     if not user:
@@ -236,8 +246,8 @@ def complete_second_factor(
         raise jafaal_exceptions.AuthenticationError("Unable to authenticate")
     jafaal_user_guards.check_user_is_active(user)
 
-    pending_mfa_store.reset_attempts(data.username)
-    failed_attempts.reset_attempts(data.username)
+    pending_mfa_store.reset_attempts(username)
+    failed_attempts.reset_attempts(username)
     failed_attempts.reset_ip_attempts(network.get_ip_address(request))
 
     return jafaal_utils.complete_login(response, request, user, client_type, password_hasher, token_manager, db)

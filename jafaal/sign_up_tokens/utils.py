@@ -38,7 +38,7 @@ def create_sign_up_token(user_id: UserId, db: Session) -> tuple[str, datetime]:
         is stored in the database.
     """
     # Generate token and hash
-    token, token_hash = token_hashing.generate_token_and_hash()
+    token, token_hash = token_hashing.generate_token_and_hash(token_hashing.KeyPurpose.SIGN_UP)
 
     # Compute the expiry once so the persisted row and the returned value agree.
     expires_at = datetime.now(UTC) + timedelta(hours=24)  # 24 hour expiration
@@ -192,11 +192,11 @@ def use_sign_up_token(token: str, db: Session) -> UserId:
         JafaalError: 400 if the token is invalid, expired, or already used.
     """
     # Hash the provided token to find the database record
-    token_hash = token_hashing.sha256_hex(token)
+    token_hashes = token_hashing.legacy_lookup_digests(token, token_hashing.KeyPurpose.SIGN_UP)
 
     # Atomically mark the token used and return its owner. A None result means
     # the token was missing, expired, or already consumed.
-    user_id = sign_up_tokens_crud.claim_sign_up_token(token_hash, db)
+    user_id = sign_up_tokens_crud.claim_sign_up_token(token_hashes, db)
     if user_id is None:
         raise jafaal_exceptions.InvalidRequestError("Invalid or expired sign up token")
 

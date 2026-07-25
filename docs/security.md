@@ -34,8 +34,18 @@ protections and the deployment steps you are responsible for.
   `secret_key`, and microseconds to verify, since a refresh token is a
   high-entropy server-minted JWT rather than a user-chosen secret.
 - **CSRF binding** for web clients, with an OAuth 2.1 bootstrap rule for page
-  reloads. Refresh cookies are `HttpOnly`, `SameSite=Strict`, and `Secure` in
-  deployed environments, with an optional `__Secure-`/`__Host-` name prefix.
+  reloads. `/refresh` additionally rejects any request the browser marks as
+  off-site: `Origin` and `Sec-Fetch-Site` are *forbidden header names*, so page
+  script can neither forge nor strip them — unlike a custom `X-CSRF-Token`
+  header, which a cross-site attacker simply omits. Set `csrf_trusted_origins`
+  when the frontend is served from a different origin than the API. Refresh
+  cookies are `HttpOnly`, `SameSite=Strict`, and `Secure` in deployed
+  environments, with an optional `__Secure-`/`__Host-` name prefix.
+- **Per-purpose key derivation.** `secret_key` is never used directly as a MAC
+  key. Each job (session refresh-token digest, rotated-token lookup, CSRF, API
+  keys, password-reset / sign-up / IdP-link tokens, the WebAuthn user handle)
+  gets its own HKDF-SHA256 subkey with a distinct label, so a digest computed
+  for one purpose can never be replayed as another.
 - **Zero-downtime key rotation.** Both the JWT signing key and the Fernet at-rest
   key accept previous keys as verify-/decrypt-only *fallbacks*
   (`secret_key_fallbacks` / `fernet_key_fallbacks`), so keys rotate without
@@ -44,6 +54,13 @@ protections and the deployment steps you are responsible for.
 ### MFA
 
 - **TOTP** with QR provisioning and **single-use backup codes**.
+- **The second factor stays a second factor.** When a password login needs MFA,
+  `/auth/login` returns an opaque, single-use `mfa_token` alongside the
+  challenge. That ticket — not the username — addresses the pending login at
+  `/auth/mfa/verify` and at the WebAuthn second-factor endpoints, so possession
+  of a valid one-time code alone cannot complete a login that somebody else's
+  password step opened. Hold it in memory, never persist it; it expires in five
+  minutes and is consumed atomically on success.
 - **Replay protection**: a matched TOTP timestep is *atomically claimed* and a
   second use within the validity window is rejected (constant-time comparison
   throughout). The claim is a single compare-and-set in the state store, so two

@@ -55,6 +55,7 @@ from ._internal.password_hasher import (
 )
 from ._internal.security_stores import (
     FailedLoginAttempts,
+    PendingLogin,
     PendingMFALogin,
     StepUpAttempts,
     StepUpStore,
@@ -336,6 +337,7 @@ __all__ = [
     "PasswordHasher",
     "PasswordPolicyError",
     # Auth security stores / lockout
+    "PendingLogin",
     "PendingMFALogin",
     "StepUpAttempts",
     "StepUpStore",

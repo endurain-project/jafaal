@@ -220,6 +220,58 @@ def get_ip_address(request: Request) -> str:
     return peer_ip or "unknown"
 
 
+# ``Sec-Fetch-Site`` values that denote a request the browser considers on-site.
+# ``none`` covers a user-initiated navigation (typed URL, bookmark).
+_ON_SITE_FETCH_SITES: frozenset[str] = frozenset({"same-origin", "none"})
+
+
+def _normalize_origin(origin: str) -> str:
+    """Normalise an origin for comparison (case-folded, no trailing slash)."""
+    return origin.strip().rstrip("/").lower()
+
+
+def is_off_site_request(request: Request, allowed_origins: tuple[str, ...]) -> bool:
+    """Return ``True`` when the browser marks this request as coming from off-site.
+
+    A CSRF defence for cookie-authenticated endpoints. Both signals it reads are
+    **forbidden header names**: page script cannot set, alter, or strip
+    ``Origin`` or ``Sec-Fetch-Site``, so a cross-site attacker cannot suppress
+    them the way it can simply omit a custom ``X-CSRF-Token`` header.
+
+    Order of evidence:
+
+    1. ``Origin`` — browsers send it on every ``POST``. When ``allowed_origins``
+       is configured, an origin outside it is off-site. This is also what makes a
+       split-origin deployment work (frontend and API on different hosts): list
+       the frontend origin in ``csrf_trusted_origins``.
+    2. ``Sec-Fetch-Site`` — the browser's own classification, consulted when the
+       ``Origin`` comparison could not be made. Anything other than
+       ``same-origin`` / ``none`` (i.e. ``cross-site``, or ``same-site`` as a
+       sibling subdomain would send) is off-site.
+
+    With both headers absent the request is treated as on-site: that is a
+    non-browser client, which carries no ambient cookie and so cannot be the
+    victim of a CSRF attack in the first place.
+
+    Args:
+        request: The incoming HTTP request.
+        allowed_origins: Origins permitted to make the call (scheme + host +
+            port). Empty disables the ``Origin`` comparison.
+
+    Returns:
+        True when the request demonstrably originates off-site.
+    """
+    origin = request.headers.get("Origin")
+    if origin and allowed_origins:
+        return _normalize_origin(origin) not in {_normalize_origin(allowed) for allowed in allowed_origins}
+
+    fetch_site = request.headers.get("Sec-Fetch-Site")
+    if fetch_site:
+        return fetch_site.strip().lower() not in _ON_SITE_FETCH_SITES
+
+    return False
+
+
 # Schemes JAFAAL is willing to dial. Anything else (file://, gopher://, ftp://,
 # data://, javascript:) is rejected outright.
 _ALLOWED_OUTBOUND_SCHEMES: frozenset[str] = frozenset({"http", "https"})

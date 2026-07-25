@@ -182,13 +182,36 @@ def test_login_ip_lockout_can_be_disabled():
 
 def test_pending_mfa_add_get_claim():
     store = PendingMFALogin()
-    assert store.has_pending_login("alice") is False
-    store.add_pending_login("alice", 42)
-    assert store.has_pending_login("alice") is True
-    assert store.get_pending_login("alice") == 42
+    ticket = store.add_pending_login("alice", 42)
+    assert store.has_pending_login(ticket) is True
+    pending = store.get_pending_login(ticket)
+    assert pending is not None
+    assert (pending.user_id, pending.username) == (42, "alice")
     # Claim is atomic single-use.
-    assert store.claim_pending_login("alice") == 42
+    claimed = store.claim_pending_login(ticket)
+    assert claimed is not None and claimed.user_id == 42
+    assert store.get_pending_login(ticket) is None
+    assert store.has_pending_login(ticket) is False
+
+
+def test_pending_mfa_ticket_is_unguessable_and_unique():
+    # The ticket is what proves the password factor was satisfied *by this
+    # caller*, so it must be high-entropy and never derived from the username.
+    store = PendingMFALogin()
+    tickets = {store.add_pending_login("alice", 42) for _ in range(5)}
+    assert len(tickets) == 5
+    for ticket in tickets:
+        assert len(ticket) >= 32
+        assert "alice" not in ticket
+
+
+def test_pending_mfa_is_not_addressable_by_username():
+    # The core property: knowing the username must not let a caller resolve
+    # (and therefore complete) somebody else's pending login.
+    store = PendingMFALogin()
+    store.add_pending_login("alice", 42)
     assert store.get_pending_login("alice") is None
+    assert store.claim_pending_login("alice") is None
 
 
 def test_pending_mfa_coerces_to_host_pk_type():
@@ -199,24 +222,26 @@ def test_pending_mfa_coerces_to_host_pk_type():
     UUID side).
     """
     store = PendingMFALogin()
-    store.add_pending_login("alice", 42)
-    got = store.get_pending_login("alice")
-    assert got == 42
-    assert isinstance(got, int)
-    claimed = store.claim_pending_login("alice")
-    assert claimed == 42
-    assert isinstance(claimed, int)
+    ticket = store.add_pending_login("alice", 42)
+    got = store.get_pending_login(ticket)
+    assert got is not None and got.user_id == 42
+    assert isinstance(got.user_id, int)
+    claimed = store.claim_pending_login(ticket)
+    assert claimed is not None and claimed.user_id == 42
+    assert isinstance(claimed.user_id, int)
 
 
 def test_pending_mfa_evicts_corrupt_entry():
-    """A stored value that cannot be coerced to the PK type is treated as absent."""
-    from jafaal._internal.security_stores import _key_prefix, _username_digest
+    """A stored value that cannot be parsed back is treated as absent."""
+    from jafaal._core import hashing
+    from jafaal._internal.security_stores import _key_prefix
     from jafaal.state_store import get_state_store
 
     store = PendingMFALogin()
-    key = f"{_key_prefix()}:mfa:pending:{_username_digest('mallory')}"
-    get_state_store().set(key, b"not-a-valid-id", ttl_seconds=300)
-    assert store.get_pending_login("mallory") is None
+    ticket = "a-ticket-whose-entry-was-corrupted"
+    key = f"{_key_prefix()}:mfa:pending:{hashing.sha256_hex(ticket)}"
+    get_state_store().set(key, b"not-a-valid-payload", ttl_seconds=300)
+    assert store.get_pending_login(ticket) is None
     # The corrupt entry was evicted on read.
     assert get_state_store().get(key) is None
 
@@ -225,9 +250,10 @@ def test_pending_mfa_clear_for_user():
     store = PendingMFALogin()
     store.add_pending_login("alice", 1)
     store.add_pending_login("bob", 1)
-    store.add_pending_login("carol", 2)
+    carol = store.add_pending_login("carol", 2)
     assert store.clear_for_user(1) == 2
-    assert store.get_pending_login("carol") == 2
+    remaining = store.get_pending_login(carol)
+    assert remaining is not None and remaining.user_id == 2
 
 
 def test_pending_mfa_lockout():
