@@ -566,8 +566,8 @@ def exchange_tokens_for_session(
         # tokens, and the second overwrite the first — handing the
         # second caller a working refresh token while invalidating
         # the first.
-        # Note: csrf_token_hash is NOT stored here (OAuth 2.1
-        # bootstrap pattern). The first /refresh call after page
+        # Note: csrf_token_hash is NOT stored here (page-reload
+        # bootstrap). The first /refresh call after page
         # reload establishes the CSRF binding.
         claimed = jafaal_sessions_crud.claim_session_for_token_exchange(
             session_id,

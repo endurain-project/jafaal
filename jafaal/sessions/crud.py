@@ -207,8 +207,8 @@ def mark_tokens_exchanged(session_id: str, db: Session) -> None:
     Mark tokens as exchanged and clear OAuth state.
 
     Sets tokens_exchanged flag to prevent duplicate mobile token
-    exchanges. Deletes the associated OAuth state per OAuth 2.1
-    best practices (state is ephemeral).
+    exchanges. Deletes the associated OAuth state per RFC 9700 §4.1
+    (state is ephemeral and single-use).
 
     Args:
         session_id: The unique identifier of the session.

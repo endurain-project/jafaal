@@ -214,13 +214,14 @@ GET  <your-api-root>/.well-known/oauth-authorization-server
 {
   "issuer": "https://app.example.com",
   "jwks_uri": "https://app.example.com/api/v1/.well-known/jwks.json",
-  "token_endpoint": "https://app.example.com/api/v1/auth/login",
+  "token_endpoint": "https://app.example.com/api/v1/auth/refresh",
   "introspection_endpoint": "https://app.example.com/api/v1/auth/introspect",
   "revocation_endpoint": "https://app.example.com/api/v1/auth/revoke",
-  "grant_types_supported": ["password", "refresh_token"],
+  "grant_types_supported": ["refresh_token"],
   "token_endpoint_auth_methods_supported": ["none"],
   "scopes_supported": ["identity_providers:read", "profile", "users:read"],
-  "code_challenge_methods_supported": ["S256"]
+  "code_challenge_methods_supported": ["S256"],
+  "jafaal_required_request_headers": {"X-Client-Type": ["web", "mobile"]}
 }
 ```
 
@@ -229,10 +230,60 @@ and `scopes_supported` reflects the installed scope catalog. The origin is taken
 from `base_url` when it is set, so a forged `Host` header cannot make JAFAAL
 advertise an attacker-controlled `token_endpoint`.
 
-There is no `authorization_endpoint`: JAFAAL is a first-party issuer with no
-client registry or consent screen, so `token_endpoint_auth_methods_supported` is
-`["none"]` — stating that explicitly matters, because RFC 8414 otherwise implies
-`client_secret_basic`.
+!!! warning "What this document does *not* claim"
+    JAFAAL is **not an OAuth 2.0 authorization server**. It has no client
+    registry, no authorization endpoint, and no consent screen, and it issues
+    tokens only for your own resource servers — never to third-party clients.
+    The document advertises exactly what a resource server needs and nothing
+    more:
+
+    - **`refresh_token` is the only grant**, and `token_endpoint` points at
+      `/auth/refresh`, which accepts the standard RFC 6749 §6 request
+      (`grant_type=refresh_token&refresh_token=…`). RFC 8414 §2 requires
+      `authorization_endpoint` only when a supported grant uses one, so omitting
+      it is conformant.
+    - **`/auth/login` is deliberately not advertised.** It authenticates an end
+      user directly and returns JAFAAL's own session tokens (and may return a
+      `202` MFA challenge instead). Advertising it as a `token_endpoint` would
+      invite a client to attempt the resource-owner password-credentials grant,
+      which OAuth 2.1 removes and [RFC 9700](https://www.rfc-editor.org/rfc/rfc9700)
+      §2.4 discourages.
+    - `token_endpoint_auth_methods_supported` is `["none"]` — stating it matters,
+      because RFC 8414 otherwise implies `client_secret_basic`.
+
+### Calling the token endpoint
+
+Two request shapes are accepted, so both a stock OAuth client and a JAFAAL-native
+client work:
+
+=== "RFC 6749 §6 (any OAuth client)"
+
+    ```http
+    POST /api/v1/auth/refresh
+    Content-Type: application/x-www-form-urlencoded
+
+    grant_type=refresh_token&refresh_token=<token>
+    ```
+
+    No `X-Client-Type` needed: carrying the token in the body is itself proof the
+    caller is not a cookie-bearing browser, so the *mobile* delivery mode (tokens
+    in the response body, no CSRF token) is inferred.
+
+=== "JAFAAL native"
+
+    ```http
+    POST /api/v1/auth/refresh
+    X-Client-Type: web          # refresh token read from the HttpOnly cookie
+    ```
+
+    ```http
+    POST /api/v1/auth/refresh
+    X-Client-Type: mobile
+    Authorization: Bearer <refresh token>
+    ```
+
+An explicit `X-Client-Type` always wins, so a native client can ask for web
+delivery even when using the standard form shape.
 
 !!! note "Document location"
     RFC 8414 §3 derives the metadata URL from the issuer identifier. JAFAAL

@@ -267,6 +267,18 @@ def _deliver_login(
 
 @router.post(
     "/login",
+    summary="First-party login (not an OAuth token endpoint)",
+    description=(
+        "Authenticates an end user directly with their username and password and issues JAFAAL's own "
+        "session tokens.\n\n"
+        "**This is not an OAuth 2.0 token endpoint.** JAFAAL is a first-party authentication library, not "
+        "an authorization server: it has no client registry, no authorization endpoint, and does not "
+        "implement the (OAuth 2.1-removed) resource-owner password-credentials grant for third-party "
+        "clients. The request happens to use the `username`/`password` form shape so FastAPI's Swagger "
+        "*Authorize* dialog works out of the box.\n\n"
+        "The endpoint may return `202 Accepted` with an MFA challenge instead of tokens. The only endpoint "
+        "advertised as an OAuth `token_endpoint` is `/auth/refresh`."
+    ),
     response_model=(
         jafaal_schema.MFARequiredResponse
         | jafaal_schema.MobileSessionResponse
@@ -629,22 +641,37 @@ async def refresh_token(
         Depends(jafaal_orm.get_db),
     ],
     client_type: Annotated[
-        jafaal_internal_dependencies.ClientType, Depends(jafaal_internal_dependencies.get_client_type)
+        jafaal_internal_dependencies.ClientType,
+        Depends(jafaal_internal_dependencies.get_refresh_client_type),
     ],
     x_csrf_token: Annotated[str | None, Depends(jafaal_internal_dependencies.header_csrf_token_scheme)] = None,
 ):
     """
-    Handles the refresh token process for user sessions.
+    Exchange a refresh token for a new token bundle (RFC 6749 §6 token endpoint).
 
-    This endpoint validates the provided refresh token, checks session status,
-    validates the CSRF token (web clients only), and issues new tokens.
+    This is the one endpoint JAFAAL advertises as an OAuth ``token_endpoint`` in
+    its RFC 8414 discovery document, and ``refresh_token`` is the only grant it
+    implements — JAFAAL is a first-party issuer with no authorization endpoint
+    and no client registry.
 
-    OAuth 2.1 Bootstrap Pattern for Page Reload:
-        On page reload, in-memory tokens are lost but httpOnly cookie persists.
-        - If no CSRF header: Allow refresh (page reload scenario)
-        - If CSRF header provided: Validate it (legitimate request with cached token)
-        - Security: httpOnly cookie + SameSite=Strict prevents CSRF at browser level
-        - CSRF validation adds defense-in-depth but is not the primary protection
+    Two request shapes are accepted:
+
+    * **RFC 6749 §6** — ``grant_type=refresh_token&refresh_token=...`` as a form
+      body, so a stock OAuth client can drive the refresh. ``X-Client-Type`` is
+      then optional (a token in the body means a non-browser client).
+    * **JAFAAL native** — the ``HttpOnly`` refresh cookie (web) or an
+      ``Authorization`` header (native), with ``X-Client-Type`` set.
+
+    Every refresh rotates the token; presenting an already-rotated one past a
+    short grace window is treated as theft and invalidates the token family.
+
+    CSRF bootstrap for page reload:
+        On page reload, in-memory tokens are lost but the httpOnly cookie
+        persists.
+        - If no CSRF header: allow refresh (page-reload scenario)
+        - If CSRF header provided: validate it (legitimate request with cached token)
+        - The httpOnly + SameSite=Strict cookie, plus the off-site rejection
+          below, are the primary protection; the CSRF token is defense-in-depth.
 
     Args:
         response: The HTTP response object.
@@ -652,7 +679,8 @@ async def refresh_token(
         refresh: The validated refresh token and its ``sub`` / ``sid`` claims.
         token_manager: Utility for creating tokens.
         db: Database session.
-        client_type: Client type (\"web\" or \"mobile\").
+        client_type: Client type (\"web\" or \"mobile\"), inferred as mobile for
+            an RFC 6749 form request.
         x_csrf_token: CSRF token header (web clients only, optional on page reload).
 
     Returns:
@@ -701,8 +729,8 @@ async def refresh_token(
     #    forge or strip them — unlike a custom ``X-CSRF-Token`` header, which a
     #    cross-site attacker simply omits. This is what makes the bootstrap rule
     #    below genuinely safe rather than merely optional for the attacker.
-    # 2. CSRF-token binding (when the client sends one). OAuth 2.1 bootstrap
-    #    pattern for page reload: on EVERY reload the in-memory tokens (incl.
+    # 2. CSRF-token binding (when the client sends one). Page-reload bootstrap:
+    #    on EVERY reload the in-memory tokens (incl.
     #    the CSRF token) are lost while the httpOnly refresh cookie persists, so
     #    the client POSTs here without an X-CSRF-Token header to bootstrap a new
     #    one. That must keep working after a binding has been minted, otherwise

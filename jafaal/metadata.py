@@ -18,27 +18,33 @@ like the JWKS route — it serves the document at the API root instead. A
 deployment that needs the strict issuer-derived URL should mount the pure
 function's output itself; the payload is identical.
 
-**Scope of the document.** JAFAAL is a first-party issuer: it has no client
-registry, no authorization endpoint, and no consent screen. The advertised
-grants are therefore ``password`` and ``refresh_token`` only, and the token
-endpoint performs no client authentication (``token_endpoint_auth_methods_supported``
-is ``["none"]``) — stating that explicitly matters, because RFC 8414 §2 makes
-``client_secret_basic`` the default when the field is absent.
+**Scope of the document.** JAFAAL is **not an OAuth 2.0 authorization server**:
+it has no client registry, no authorization endpoint, and no consent screen, and
+it issues tokens only for the host's own resource servers — never to third-party
+clients. What it *is*, to a resource server, is a JWT issuer with a JWKS, an
+introspection endpoint, and a revocation endpoint. This document advertises
+exactly that and nothing more:
 
-!!! warning "The ``password`` grant"
-    The resource-owner password-credentials grant is removed in OAuth 2.1 and
-    discouraged by the OAuth 2.0 Security BCP (RFC 9700 §2.4). It is advertised
-    here because JAFAAL genuinely implements it: JAFAAL is a **first-party
-    session issuer** whose login endpoint authenticates the *user* directly, not
-    a general-purpose authorization server delegating to third-party clients.
-    Do not expose it to clients you do not control.
+* ``refresh_token`` is the only advertised grant, and ``token_endpoint`` points
+  at ``/auth/refresh``, which implements the RFC 6749 §6 request shape. RFC 8414
+  §2 requires ``authorization_endpoint`` only when a supported grant uses one, so
+  omitting it here is conformant.
+* ``/auth/login`` is deliberately **not** advertised. It authenticates an end
+  user directly and returns JAFAAL's own session tokens (and may return a
+  ``202`` MFA challenge instead); it is a first-party login endpoint, not an
+  OAuth token endpoint. Advertising it as one would invite a client to attempt
+  the resource-owner password-credentials grant, which OAuth 2.1 removes and
+  RFC 9700 §2.4 discourages.
+* ``token_endpoint_auth_methods_supported`` is ``["none"]``. Stating it matters,
+  because RFC 8414 §2 makes ``client_secret_basic`` the default when the field is
+  absent, and JAFAAL authenticates the *user*, never a client credential.
 
-**Non-standard requirement.** JAFAAL's token endpoint additionally requires an
+**Non-standard requirement.** JAFAAL's native request shape additionally uses an
 ``X-Client-Type`` header (``web`` or ``mobile``), because refresh-token delivery
 differs between the two (``HttpOnly`` cookie vs response body). A stock OAuth
-client has no way to guess that, so it is advertised as the
-``jafaal_required_request_headers`` extension member rather than left to fail at
-runtime.
+client has no way to guess that, so the token endpoint infers ``mobile`` for an
+RFC 6749 form request — and the header is advertised as the
+``jafaal_required_request_headers`` extension member for everything else.
 """
 
 from __future__ import annotations
@@ -88,10 +94,12 @@ def get_authorization_server_metadata(*, api_root: str, auth_prefix: str = "/aut
     return {
         "issuer": settings.resolved_issuer,
         "jwks_uri": _join_url(api_root, "/.well-known/jwks.json"),
-        "token_endpoint": _join_url(auth_root, "/login"),
+        # The only endpoint implementing an OAuth grant. /auth/login is NOT
+        # advertised: it is a first-party login endpoint, not a token endpoint.
+        "token_endpoint": _join_url(auth_root, "/refresh"),
         "introspection_endpoint": _join_url(auth_root, "/introspect"),
         "revocation_endpoint": _join_url(auth_root, "/revoke"),
-        "grant_types_supported": ["password", "refresh_token"],
+        "grant_types_supported": ["refresh_token"],
         # No authorization endpoint means no response type can be requested.
         # RFC 8414 §2 still requires the member, so it is advertised as empty
         # rather than omitted.
@@ -109,9 +117,8 @@ def get_authorization_server_metadata(*, api_root: str, auth_prefix: str = "/aut
         # redeem the resulting session for tokens with the verifier.
         "code_challenge_methods_supported": ["S256"],
         # Extension member (RFC 8414 §2 permits additional metadata). Headers a
-        # client MUST send that no standard field can express — without this, a
-        # client built purely from this document would 401/403 on every call and
-        # have no way to discover why.
+        # client sending JAFAAL's *native* request shape must set — the standard
+        # RFC 6749 form request needs none of them.
         "jafaal_required_request_headers": {
             "X-Client-Type": ["web", "mobile"],
         },

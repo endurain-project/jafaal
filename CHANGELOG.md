@@ -45,7 +45,15 @@ First release.
   key published at a JWKS endpoint for stateless verification.
 - RFC 8414 authorization-server metadata at
   `/.well-known/oauth-authorization-server`, so a resource server discovers the
-  issuer, JWKS, and endpoint URLs instead of hard-coding them.
+  issuer, JWKS, and endpoint URLs instead of hard-coding them. It advertises only
+  what JAFAAL genuinely implements: `refresh_token` is the sole grant and
+  `token_endpoint` points at `/auth/refresh`. `/auth/login` is deliberately **not**
+  advertised — it authenticates a first-party user directly and is not the
+  (OAuth 2.1-removed) resource-owner password-credentials grant.
+- `/auth/refresh` accepts the standard RFC 6749 §6 request
+  (`grant_type=refresh_token&refresh_token=…`) alongside JAFAAL's cookie/header
+  shape, so a stock OAuth client can drive the refresh. `X-Client-Type` is
+  optional for that shape (a token in the body implies a non-browser client).
 - Zero-downtime rotation of both the signing key and the at-rest encryption key,
   via verify-/decrypt-only fallbacks. The overlap covers the stored token digests
   too (sessions, API keys, CSRF, password-reset, sign-up, IdP-link, rotated

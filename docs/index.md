@@ -36,6 +36,37 @@ your dynamic settings, and how you deliver notifications). Everything else —
 tables, routers, token logic — ships with the library, and ready-made
 [adapters](ports-and-adapters.md#batteries-included-adapters) cover the common cases.
 
+## What JAFAAL is (and is not)
+
+JAFAAL authenticates **your** users for **your** API. Concretely, it plays four
+roles, and implements the standards that govern each:
+
+| Role | Standards |
+|---|---|
+| **JWT issuer** for your own resource servers | RFC 9068 (`at+jwt` access tokens), RFC 7519, RFC 7517 / 7638 (JWKS + `kid` thumbprints), RFC 8414 (discovery) |
+| **Bearer-token resource server** | RFC 6750 (header extraction, `WWW-Authenticate` challenges incl. `insufficient_scope`) |
+| **OAuth client / OIDC Relying Party** for SSO | RFC 6749 *client* role, RFC 7636 (PKCE S256), OIDC Core 1.0 (`nonce`, `azp`, `at_hash`), RFC 9700 (Security BCP) |
+| **Credential authority** | NIST SP 800-63B (password policy + breach screening), RFC 6238 (TOTP), W3C WebAuthn L2 (passkeys), RFC 7662 (introspection), RFC 7009 (revocation) |
+
+!!! warning "JAFAAL is not an authorization server"
+    JAFAAL is **not** an OAuth 2.0 authorization server or an OpenID Provider. It
+    has no client registry, no authorization endpoint, and no consent screen, and
+    it never issues tokens to third-party clients. For SSO it acts as an OAuth
+    *client* against your IdP — it does not become one. If you need to *be* an
+    identity provider, put a real authorization server in front of JAFAAL.
+
+    `POST /auth/login` therefore authenticates a first-party user directly; it is
+    **not** the (OAuth 2.1-removed) resource-owner password-credentials grant,
+    and the [discovery document](configuration.md#discovery-rfc-8414)
+    deliberately does not advertise it as a `token_endpoint`. The only endpoint
+    advertised as one is `/auth/refresh`, which accepts the standard
+    RFC 6749 §6 request.
+
+Both **web and mobile** clients are first-class. They differ only in
+refresh-token delivery: browsers get an `HttpOnly`, `SameSite=Strict` cookie (so
+page script never touches it, per RFC 9700 §7.2), native clients get it in the
+response body.
+
 ## Installation
 
 ```bash

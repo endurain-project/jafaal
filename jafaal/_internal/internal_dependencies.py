@@ -19,10 +19,11 @@ user exists and is active). Use that instead.
 import logging
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Final
 
 from fastapi import (
     Depends,
+    Form,
     Query,
     Request,
 )
@@ -55,6 +56,13 @@ oauth2_scheme = OAuth2PasswordBearer(
 # Define the API key header for the client type
 header_client_type_scheme = APIKeyHeader(name="X-Client-Type")
 
+# Same header, but optional: the RFC 6749 §6 refresh request has no way to carry
+# it, so the token endpoint infers the client type instead of demanding it.
+header_client_type_optional_scheme = APIKeyHeader(name="X-Client-Type", auto_error=False)
+
+#: The only ``grant_type`` JAFAAL's token endpoint implements (RFC 6749 §6).
+REFRESH_TOKEN_GRANT: Final = "refresh_token"  # noqa: S105 - a grant-type name, not a credential
+
 
 class ClientType(StrEnum):
     """The validated set of ``X-Client-Type`` values.
@@ -68,6 +76,16 @@ class ClientType(StrEnum):
 
     WEB = "web"
     MOBILE = "mobile"
+
+
+def _parse_client_type(value: str) -> ClientType:
+    """Coerce a raw ``X-Client-Type`` value, rejecting anything unrecognised."""
+    try:
+        return ClientType(value)
+    except ValueError as err:
+        raise jafaal_exceptions.InvalidRequestError(
+            f"Invalid X-Client-Type header: expected 'web' or 'mobile', got {value!r}."
+        ) from err
 
 
 def get_client_type(
@@ -91,12 +109,75 @@ def get_client_type(
     Raises:
         JafaalError: 400 if the header value is not ``web`` or ``mobile``.
     """
-    try:
-        return ClientType(client_type)
-    except ValueError as err:
+    return _parse_client_type(client_type)
+
+
+def get_grant_type(
+    grant_type: Annotated[str | None, Form()] = None,
+) -> str | None:
+    """Validate the optional RFC 6749 ``grant_type`` form field.
+
+    Present only on JAFAAL's token endpoint (``/auth/refresh``), which accepts
+    the standard RFC 6749 §6 request shape in addition to its own cookie/header
+    form. Absent means the caller is using JAFAAL's native shape.
+
+    Args:
+        grant_type: The ``grant_type`` form field, if supplied.
+
+    Returns:
+        The validated grant type, or ``None`` when not supplied.
+
+    Raises:
+        JafaalError: 400 (``unsupported_grant_type``) for any other grant. JAFAAL
+            is a first-party issuer with no authorization endpoint, so
+            ``refresh_token`` is the only grant it implements.
+    """
+    if grant_type is None:
+        return None
+    if grant_type != REFRESH_TOKEN_GRANT:
         raise jafaal_exceptions.InvalidRequestError(
-            f"Invalid X-Client-Type header: expected 'web' or 'mobile', got {client_type!r}."
-        ) from err
+            f"unsupported_grant_type: this token endpoint implements only {REFRESH_TOKEN_GRANT!r} "
+            f"(got {grant_type!r}). JAFAAL is a first-party issuer and has no authorization endpoint."
+        )
+    return grant_type
+
+
+def get_refresh_client_type(
+    client_type: Annotated[str | None, Depends(header_client_type_optional_scheme)] = None,
+    grant_type: Annotated[str | None, Depends(get_grant_type)] = None,
+) -> ClientType:
+    """Resolve the client type for the token endpoint, inferring it when absent.
+
+    ``X-Client-Type`` is a JAFAAL-specific header that a stock OAuth client has
+    no way to send. When the caller uses the RFC 6749 §6 request shape the header
+    is therefore optional: carrying the refresh token in the request body is
+    itself proof that the caller is not relying on the browser cookie, so the
+    ``mobile`` delivery mode (tokens in the response body, no CSRF token) is the
+    correct and only sensible interpretation.
+
+    An explicit header always wins, so a native client can still ask for the web
+    delivery mode.
+
+    Args:
+        client_type: The raw ``X-Client-Type`` header value, if sent.
+        grant_type: The validated RFC 6749 ``grant_type``, if sent.
+
+    Returns:
+        The resolved :class:`ClientType`.
+
+    Raises:
+        JafaalError: 400 if the header is present but unrecognised; 403 if
+            neither the header nor a standard grant request identifies the
+            client.
+    """
+    if client_type is not None:
+        return _parse_client_type(client_type)
+    if grant_type == REFRESH_TOKEN_GRANT:
+        return ClientType.MOBILE
+    raise jafaal_exceptions.AuthorizationError(
+        "X-Client-Type header is required (expected 'web' or 'mobile'), or use the "
+        f"RFC 6749 form request with grant_type={REFRESH_TOKEN_GRANT!r}."
+    )
 
 
 # Define the API key header for third-party API key auth
@@ -351,23 +432,45 @@ def get_sid_from_access_token(
 def get_refresh_token(
     request: Request,
     non_cookie_refresh_token: Annotated[str | None, Depends(oauth2_scheme)],
-    client_type: Annotated[ClientType, Depends(get_client_type)],
+    client_type: Annotated[ClientType, Depends(get_refresh_client_type)],
+    grant_type: Annotated[str | None, Depends(get_grant_type)] = None,
+    form_refresh_token: Annotated[str | None, Form(alias="refresh_token")] = None,
 ) -> str | None:
     """
-    Retrieves the refresh token from either the Authorization header or the
-    refresh-token cookie, depending on the client type.
+    Retrieves the refresh token from the request, in RFC 6749 order of preference.
+
+    Three carriers are accepted, because the same endpoint serves three kinds of
+    caller:
+
+    1. the RFC 6749 §6 form body (``grant_type=refresh_token&refresh_token=...``),
+       so a stock OAuth client can drive the refresh without knowing anything
+       JAFAAL-specific;
+    2. the refresh-token cookie, for web clients (the token is ``HttpOnly`` and
+       never handed to page script); and
+    3. the ``Authorization`` header, for native clients using JAFAAL's own shape.
 
     Args:
         request: The incoming request, used to read the refresh-token cookie.
-        non_cookie_refresh_token (str | None): The refresh token provided via the Authorization header (if present).
-        client_type (str): The type of client making the request, extracted from the request headers.
+        non_cookie_refresh_token: The refresh token provided via the Authorization header (if present).
+        client_type: The resolved client type.
+        grant_type: The validated RFC 6749 ``grant_type``, if supplied.
+        form_refresh_token: The RFC 6749 ``refresh_token`` form field, if supplied.
 
     Returns:
-        str: The resolved refresh token based on the provided sources and client type.
+        str: The resolved refresh token.
 
     Raises:
         JafaalError: If no valid refresh token is found or the client type is invalid.
     """
+    if grant_type == REFRESH_TOKEN_GRANT:
+        # Standard request shape: the token is in the body and nowhere else, so a
+        # missing one is a malformed request rather than a missing credential.
+        if not form_refresh_token:
+            raise jafaal_exceptions.InvalidRequestError(
+                f"invalid_request: 'refresh_token' is required when grant_type={REFRESH_TOKEN_GRANT!r}."
+            )
+        return form_refresh_token
+
     cookie_refresh_token = request.cookies.get(jafaal_settings.get_settings().effective_refresh_cookie_name)
     return get_token(
         non_cookie_refresh_token, cookie_refresh_token, client_type, jafaal_token_manager.TokenType.REFRESH

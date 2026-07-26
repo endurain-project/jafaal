@@ -48,7 +48,7 @@ def test_endpoint_urls_follow_custom_router_prefixes():
         api_root="https://app.test/api/v2",
         auth_prefix=prefixes.auth,
     )
-    assert document["token_endpoint"] == "https://app.test/api/v2/identity/login"
+    assert document["token_endpoint"] == "https://app.test/api/v2/identity/refresh"
     assert document["revocation_endpoint"] == "https://app.test/api/v2/identity/revoke"
     assert document["jwks_uri"] == "https://app.test/api/v2/.well-known/jwks.json"
 
@@ -57,8 +57,26 @@ def test_client_auth_is_declared_so_the_spec_default_does_not_apply(doc):
     # Omitting this member means ``client_secret_basic`` per RFC 8414 §2, which
     # would send clients hunting for a secret JAFAAL never issues.
     assert doc["token_endpoint_auth_methods_supported"] == ["none"]
-    assert doc["grant_types_supported"] == ["password", "refresh_token"]
+    assert doc["grant_types_supported"] == ["refresh_token"]
+    # RFC 8414 §2 requires ``authorization_endpoint`` only when a supported grant
+    # uses one; ``refresh_token`` does not, so omitting it stays conformant.
     assert "authorization_endpoint" not in doc
+
+
+def test_password_grant_is_never_advertised(doc):
+    # The resource-owner password-credentials grant is removed in OAuth 2.1 and
+    # discouraged by RFC 9700 §2.4. JAFAAL authenticates first-party users
+    # directly, which is a different thing — advertising it as an OAuth grant
+    # would invite third-party clients to send it user passwords.
+    assert "password" not in doc["grant_types_supported"]
+
+
+def test_login_endpoint_is_not_advertised_as_a_token_endpoint(doc):
+    # /auth/login returns JAFAAL's own session tokens (and may return a 202 MFA
+    # challenge). Advertising it would tell a stock OAuth client to treat it as
+    # an RFC 6749 token endpoint, which it is not.
+    assert not doc["token_endpoint"].endswith("/login")
+    assert "/login" not in " ".join(value for value in doc.values() if isinstance(value, str))
 
 
 def test_scopes_supported_tracks_the_installed_catalog(client):
@@ -86,7 +104,7 @@ def test_origin_falls_back_to_the_request_when_base_url_is_unset(client):
     jafaal.configure(dataclasses.replace(original, base_url="", issuer="https://issuer.test"))
     try:
         document = client.get(METADATA_URL).json()
-        assert document["token_endpoint"] == "http://testserver/api/v1/auth/login"
+        assert document["token_endpoint"] == "http://testserver/api/v1/auth/refresh"
     finally:
         jafaal.configure(original)
 

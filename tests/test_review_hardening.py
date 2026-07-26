@@ -250,7 +250,7 @@ def test_metadata_declares_no_client_authentication():
     # RFC 8414 §2 defaults to client_secret_basic when absent, which JAFAAL does
     # not implement — stating "none" explicitly is what keeps a client honest.
     assert doc["token_endpoint_auth_methods_supported"] == ["none"]
-    assert set(doc["grant_types_supported"]) == {"password", "refresh_token"}
+    assert set(doc["grant_types_supported"]) == {"refresh_token"}
 
 
 # --------------------------------------------------------------------------- #

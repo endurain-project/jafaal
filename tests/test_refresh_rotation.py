@@ -417,3 +417,126 @@ def test_refresh_rejects_a_malformed_stored_digest_without_a_500(client, make_us
         session.close()
 
     assert client.post(REFRESH, headers=WEB).status_code == 401
+
+
+# --------------------------------------------------------------------------- #
+# RFC 6749 §6 token-endpoint request shape
+#
+# /auth/refresh is the one endpoint JAFAAL advertises as an OAuth
+# ``token_endpoint``, so it must accept the standard request a stock OAuth client
+# sends — including the parts such a client has no way to know about
+# (X-Client-Type).
+# --------------------------------------------------------------------------- #
+
+
+def test_standard_grant_request_returns_a_new_token_bundle(client, make_user):
+    make_user()
+    refresh_token = _login_mobile(client).json()["refresh_token"]
+
+    response = client.post(
+        REFRESH,
+        data={"grant_type": "refresh_token", "refresh_token": refresh_token},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    # RFC 6749 §5.1 shape, plus JAFAAL's extras (which the RFC permits).
+    assert body["token_type"] == "bearer"
+    assert isinstance(body["expires_in"], int)
+    assert body["access_token"]
+    assert body["refresh_token"] != refresh_token  # rotated
+
+
+def test_standard_grant_request_needs_no_client_type_header(client, make_user):
+    # A stock OAuth client cannot know about X-Client-Type. Carrying the token in
+    # the body is itself proof this is not a cookie-bearing browser, so the
+    # mobile delivery mode (token in body, no CSRF) is inferred.
+    make_user()
+    refresh_token = _login_mobile(client).json()["refresh_token"]
+
+    body = client.post(
+        REFRESH,
+        data={"grant_type": "refresh_token", "refresh_token": refresh_token},
+    ).json()
+
+    assert "refresh_token" in body
+    assert "csrf_token" not in body
+
+
+def test_explicit_client_type_header_wins_over_the_inference(client, make_user):
+    make_user()
+    refresh_token = _login_mobile(client).json()["refresh_token"]
+
+    body = client.post(
+        REFRESH,
+        data={"grant_type": "refresh_token", "refresh_token": refresh_token},
+        headers=WEB,
+    ).json()
+
+    # Web delivery: refresh token goes back as a cookie, CSRF token in the body.
+    assert "refresh_token" not in body
+    assert body["csrf_token"]
+
+
+def test_unsupported_grant_type_is_rejected(client, make_user):
+    make_user()
+    refresh_token = _login_mobile(client).json()["refresh_token"]
+
+    response = client.post(
+        REFRESH,
+        data={"grant_type": "authorization_code", "refresh_token": refresh_token},
+    )
+
+    assert response.status_code == 400
+    assert "unsupported_grant_type" in response.json()["detail"]
+
+
+def test_standard_grant_without_a_token_is_a_malformed_request(client, make_user):
+    make_user()
+    _login_mobile(client)
+
+    response = client.post(REFRESH, data={"grant_type": "refresh_token"})
+
+    assert response.status_code == 400
+    assert "invalid_request" in response.json()["detail"]
+
+
+def test_standard_grant_rejects_a_forged_token(client, make_user):
+    make_user()
+    _login_mobile(client)
+
+    response = client.post(
+        REFRESH,
+        data={"grant_type": "refresh_token", "refresh_token": "not-a-jwt"},
+    )
+
+    assert response.status_code == 401
+
+
+def test_native_shape_still_requires_the_client_type_header(client, make_user):
+    # Without the standard grant there is nothing to infer from, so the header
+    # stays mandatory for JAFAAL's own request shape.
+    make_user()
+    _login(client)
+
+    assert client.post(REFRESH).status_code == 403
+
+
+def test_standard_grant_rotates_the_token(client, make_user):
+    make_user()
+    first = _login_mobile(client).json()["refresh_token"]
+
+    rotated = client.post(
+        REFRESH,
+        data={"grant_type": "refresh_token", "refresh_token": first},
+    ).json()["refresh_token"]
+    assert rotated != first
+
+    # The replacement works in turn.
+    assert (
+        client.post(
+            REFRESH,
+            data={"grant_type": "refresh_token", "refresh_token": rotated},
+        ).status_code
+        == 200
+    )

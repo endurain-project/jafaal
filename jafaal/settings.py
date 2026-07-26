@@ -160,7 +160,10 @@ class AuthSettings:
         user_agent: ``User-Agent`` header sent on outbound OIDC HTTP calls.
         refresh_cookie_name: Name of the refresh-token cookie.
         refresh_cookie_path: Path scope of the refresh-token cookie.
-        login_token_url: OAuth2 password-flow token URL advertised to Swagger.
+        login_token_url: URL FastAPI's Swagger *Authorize* dialog posts the
+            username/password form to. Cosmetic — it configures the
+            ``OAuth2PasswordBearer`` scheme's ``tokenUrl`` and nothing else;
+            JAFAAL does not implement the OAuth password grant.
         api_key_prefix: Prefix for generated API keys (``<prefix>_<token>``).
         store_key_prefix: Namespace prefix for security-store keys
             (lockout counters, MFA setup secrets, ...).
@@ -405,6 +408,7 @@ class AuthSettings:
     # binds it to the exact host with Path=/ and no Domain (requires
     # refresh_cookie_path="/"). Empty by default. See effective_refresh_cookie_name.
     refresh_cookie_prefix: str = ""
+    # Where Swagger's "Authorize" dialog posts the login form. Cosmetic only.
     login_token_url: str = "/api/v1/auth/login"
     api_key_prefix: str = "jafaal"
     store_key_prefix: str = "jafaal:auth"

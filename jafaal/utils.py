@@ -359,7 +359,7 @@ def complete_login(
 
     # Create the session and store it in the database
     # Note: csrf_token is NOT stored on initial login (csrf_token_hash = None).
-    # This enables the OAuth 2.1 bootstrap pattern where the first /refresh call
+    # This enables the page-reload bootstrap where the first /refresh call
     # after page reload establishes the CSRF binding. The httpOnly cookie is
     # sufficient authentication for the bootstrap refresh.
     jafaal_sessions_utils.create_session(
