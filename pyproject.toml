@@ -15,6 +15,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Security",
     "Topic :: Software Development :: Libraries :: Application Frameworks",
     "Typing :: Typed",
@@ -30,6 +31,14 @@ dependencies = [
     "python-multipart>=0.0.9",
     "user-agents>=2.2.0",
 ]
+
+[project.urls]
+Homepage = "https://jafaal.endurain.com/"
+Documentation = "https://jafaal.endurain.com/"
+Repository = "https://codeberg.org/endurain-project/jafaal"
+Changelog = "https://codeberg.org/endurain-project/jafaal/src/branch/main/CHANGELOG.md"
+Issues = "https://codeberg.org/endurain-project/jafaal/issues"
+Security = "https://codeberg.org/endurain-project/jafaal/src/branch/main/SECURITY.md"
 
 # Optional features. A minimal "login + JWT + sessions" deployment needs none of
 # these; the feature modules import them defensively and fail fast (with an
@@ -120,8 +129,29 @@ docs = [
 ]
 
 [tool.uv]
-required-version = "0.11.18"
+# A floor plus a minor-series ceiling rather than an exact pin: an exact
+# ``==`` match makes every uv patch release a hard build failure (locally and on
+# the CI runner) for no reproducibility gain — the lockfile is what pins the
+# dependency set.
+required-version = ">=0.11.18,<0.12"
+# Supply-chain cooldown: refuse dependency versions published in the last 30
+# days, so a compromised release has time to be caught before it can enter a
+# build.
 exclude-newer = "30 days"
+
+# Cooldown exemptions ("0 days" = no cooldown for this package). The global
+# cooldown above also delays *security* fixes, which is the wrong trade for a
+# package with a published advisory: the audit workflow
+# (.forgejo/workflows/audit-jafaal.yml) fails while the fix sits behind the
+# window. Exempt only the specific packages that need a fix now, so the cooldown
+# keeps protecting everything else. Remove an entry once its fix is older than
+# the window.
+[tool.uv.exclude-newer-package]
+# pillow (via the ``mfa`` extra's qrcode[pil]) — PYSEC-2026-2253..2257,
+# 3451..3454, 3493..3496, fixed in 12.3.0.
+pillow = "0 days"
+# pyasn1 (transitive) — PYSEC-2026-3455..3457, fixed in 0.6.4.
+pyasn1 = "0 days"
 
 [[tool.uv.index]]
 name = "pypi"
@@ -136,7 +166,15 @@ build-backend = "hatchling.build"
 packages = ["jafaal"]
 
 [tool.hatch.build.targets.sdist]
-only-include = ["jafaal"]
+# The package plus the files a downstream consumer (or a distro packager)
+# needs to audit the release: licence, changelog, and security policy.
+include = [
+    "jafaal",
+    "CHANGELOG.md",
+    "LICENSE.md",
+    "README.md",
+    "SECURITY.md",
+]
 
 [tool.hatch.envs.default]
 type = "virtual"
@@ -171,7 +209,10 @@ source = ["jafaal"]
 omit = ["*/tests/*", "*/__pycache__/*"]
 
 [tool.coverage.report]
-fail_under = 80
+# Ratcheted to just under the current figure: high enough that a real regression
+# fails the build, low enough not to trip on incidental churn. Raise it when
+# coverage rises; never lower it to make a build pass.
+fail_under = 87
 exclude_lines = [
     "pragma: no cover",
     "def __repr__",
@@ -257,6 +298,7 @@ ignore = [
 "jafaal/exceptions.py" = ["RUF012"]  # class-level header dicts are immutable defaults overridden per-instance
 "jafaal/audit.py" = ["S105"]  # audit event-name constants (TOKEN_*), not secrets
 "jafaal/token_hashing.py" = ["S105"]  # KeyPurpose members are HKDF info labels, not secrets
+"jafaal/_internal/token_manager.py" = ["S105"]  # JWT claim/header *names*, not secrets
 "jafaal/_internal/services/token_admin_service.py" = ["S105", "S106"]  # false positive on the token_type audit field
 "jafaal/settings.py" = ["S105"]  # false positive on the login_token_url default
 "jafaal/factory.py" = ["S105"]  # false positive on the password_reset route-prefix attribute
@@ -265,6 +307,7 @@ ignore = [
 "jafaal/utils.py" = ["S105", "S106"]  # false positive on cookie name constants
 "jafaal/adapters/static_settings.py" = ["S106"]  # false positive on the password_type policy default
 ".forgejo/scripts/check_conventional_commits.py" = ["T201", "W291"]  # CLI helper prints; regex string carries an intentional escaped space
+".forgejo/scripts/smoke_import.py" = ["T201"]  # CI helper reports its result on stdout
 
 [tool.ruff.format]
 quote-style = "double"

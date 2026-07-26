@@ -5,16 +5,17 @@ on:
     branches:
       - master
       - main
-    paths:
+    paths: &paths
       - jafaal/**
+      - tests/**
+      - pyproject.toml
+      - uv.lock
       - .forgejo/workflows/test-jafaal.yml
   pull_request:
     branches:
       - master
       - main
-    paths:
-      - jafaal/**
-      - .forgejo/workflows/test-jafaal.yml
+    paths: *paths
 
 concurrency:
   group: ${{ forgejo.workflow }}-${{ forgejo.ref }}
@@ -33,26 +34,20 @@ jobs:
 
       - name: Install uv
         uses: https://data.forgejo.org/astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          working-directory: jafaal
 
       - name: Sync dependencies
-        working-directory: jafaal
         run: uv sync --frozen --no-dev --group test --group lint --no-install-project
 
       - name: Check auth import boundaries
-        working-directory: jafaal
         run: uv run --no-sync lint-imports
 
       - name: Run tests
-        working-directory: jafaal
         run: uv run --no-sync pytest
 
       # Re-run the suite against the RedisStateStore adapter (backed by an
       # in-process fakeredis) so the distributed state-store backend gets the
       # same coverage as the default in-memory store.
       - name: Run tests (Redis state store)
-        working-directory: jafaal
         env:
           JAFAAL_TEST_STATE_STORE: redis
         run: uv run --no-sync pytest

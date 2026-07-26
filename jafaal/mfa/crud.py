@@ -50,9 +50,9 @@ def update_user_mfa(user_id: UserId, db: Session, encrypted_secret: str | None =
     stmt = select(jafaal_mfa_models.UsersMFA).where(jafaal_mfa_models.UsersMFA.user_id == user_id)
     mfa_row = db.execute(stmt).scalar_one_or_none()
     if mfa_row is None:
-        # Row may be missing if the backfill migration has
-        # not yet created one for this user; create it on
-        # first write.
+        # A host that adopted JAFAAL against an existing ``users`` table may
+        # have rows that never went through ``initialize_user_mfa``; create the
+        # companion row on first write.
         mfa_row = jafaal_mfa_models.UsersMFA(
             user_id=user_id,
             mfa_enabled=mfa_enabled,

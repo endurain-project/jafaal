@@ -19,7 +19,6 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-import jafaal._internal.password_hasher as jafaal_password_hasher
 import jafaal._internal.token_denylist as token_denylist
 import jafaal._internal.token_manager as jafaal_token_manager
 import jafaal.audit as jafaal_audit
@@ -44,7 +43,6 @@ def _inactive() -> dict[str, Any]:
 def introspect_token(
     token: str,
     token_manager: jafaal_token_manager.TokenManager,
-    password_hasher: jafaal_password_hasher.PasswordHasher,
     db: Session,
 ) -> dict[str, Any]:
     """Return the RFC 7662 introspection response for ``token``.
@@ -58,7 +56,6 @@ def introspect_token(
     Args:
         token: The token to introspect.
         token_manager: Configured token manager.
-        password_hasher: Password hasher (verifies a refresh token against the session).
         db: Database session.
 
     Returns:
@@ -91,19 +88,21 @@ def introspect_token(
         if session is None:
             return _inactive()
         # A refresh token must still be the session's current one (not rotated).
-        if claims.get("typ") == "refresh" and (
-            not session.refresh_token
-            or not jafaal_sessions_utils.verify_refresh_token(token, session.refresh_token, password_hasher)
+        if jafaal_token_manager.token_use(claims) == jafaal_token_manager.TokenType.REFRESH.value and (
+            not session.refresh_token or not jafaal_sessions_utils.verify_refresh_token(token, session.refresh_token)
         ):
             return _inactive()
 
-    scope = claims.get("scope")
+    # RFC 7662 §2.2 defines ``scope`` as a space-delimited string regardless of
+    # how the token itself carries it, so normalise both wire profiles here.
+    scopes = jafaal_token_manager.scopes_from_claims(claims)
     return {
         "active": True,
         "sub": None if claims.get("sub") is None else str(claims.get("sub")),
-        "scope": " ".join(scope) if isinstance(scope, list) else scope,
-        "typ": claims.get("typ"),
+        "scope": None if scopes is None else " ".join(scopes),
+        "typ": jafaal_token_manager.token_use(claims),
         "token_type": "Bearer",
+        "client_id": claims.get("client_id"),
         "exp": claims.get("exp"),
         "iat": claims.get("iat"),
         "nbf": claims.get("nbf"),
@@ -117,7 +116,6 @@ def introspect_token(
 def revoke_token(
     token: str,
     token_manager: jafaal_token_manager.TokenManager,
-    password_hasher: jafaal_password_hasher.PasswordHasher,
     db: Session,
 ) -> None:
     """Revoke ``token`` (RFC 7009). Silently no-ops on an unrecognised token.
@@ -131,7 +129,6 @@ def revoke_token(
     Args:
         token: The token to revoke.
         token_manager: Configured token manager.
-        password_hasher: Password hasher (verifies a refresh token against the session).
         db: Database session.
     """
     try:
@@ -140,10 +137,10 @@ def revoke_token(
         return  # RFC 7009: an invalid token is a successful (no-op) revocation.
 
     claims = decoded.claims
-    typ = claims.get("typ")
+    typ = jafaal_token_manager.token_use(claims)
 
     if typ == jafaal_token_manager.TokenType.REFRESH.value:
-        _revoke_refresh_token(token, claims, password_hasher, db)
+        _revoke_refresh_token(token, claims, db)
     elif typ == jafaal_token_manager.TokenType.ACCESS.value:
         _revoke_access_token(claims)
 
@@ -151,7 +148,6 @@ def revoke_token(
 def _revoke_refresh_token(
     token: str,
     claims: dict[str, Any],
-    password_hasher: jafaal_password_hasher.PasswordHasher,
     db: Session,
 ) -> None:
     """Delete the session behind a refresh token, if the token matches it."""
@@ -168,9 +164,7 @@ def _revoke_refresh_token(
         return
     if session.user_id != user_id:
         return
-    if not session.refresh_token or not jafaal_sessions_utils.verify_refresh_token(
-        token, session.refresh_token, password_hasher
-    ):
+    if not session.refresh_token or not jafaal_sessions_utils.verify_refresh_token(token, session.refresh_token):
         return  # The presented token does not belong to this session; do not revoke.
 
     jafaal_sessions_crud.delete_session(session.id, user_id, db)

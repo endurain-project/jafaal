@@ -1,19 +1,14 @@
 """Shared hashing helpers for opaque auth tokens.
 
-Centralizes the two token-hashing strategies used across the auth token
-modules so the choice is made in one place and cannot drift:
+Every stored token digest is a keyed HMAC-SHA256 under a **per-purpose subkey**
+derived from the configured signing secret (``AuthSettings.secret_key``): the
+session refresh-token digest, refresh-token reuse detection, CSRF tokens, API
+keys, password-reset / sign-up / IdP-link tokens, and the WebAuthn user handle.
 
-- :func:`sha256_hex` — plain, unkeyed SHA-256 hex digest. Retained only to read
-  digests written before the move to keyed HMACs (see
-  :func:`legacy_lookup_digests`); nothing writes it any more.
-- :func:`hmac_sha256` — keyed HMAC-SHA256 under a **per-purpose subkey** derived
-  from the configured signing secret (``AuthSettings.secret_key``). Used for
-  every stored token digest: the session refresh-token digest, refresh-token
-  reuse detection, CSRF tokens, API keys, and the WebAuthn user handle. The
-  keyed MAC adds defense-in-depth — even with database read access an attacker
-  cannot verify stolen tokens without the server secret — while costing
-  microseconds. These are all server-minted, high-entropy values rather than
-  user-chosen secrets, so a password KDF would add no strength, only latency.
+The keyed MAC adds defense-in-depth — even with database read access an attacker
+cannot verify stolen tokens without the server secret — while costing
+microseconds. These are all server-minted, high-entropy values rather than
+user-chosen secrets, so a password KDF would add no strength, only latency.
 
 Domain separation
 -----------------
@@ -24,8 +19,7 @@ different kinds of token can therefore never produce the same digest, and a
 digest computed for one purpose can never be replayed as another. Callers pass a
 :class:`KeyPurpose`; they never touch the raw secret.
 
-Both functions return a lowercase hex digest and are deterministic, enabling
-indexed equality lookups.
+Digests are lowercase hex and deterministic, enabling indexed equality lookups.
 """
 
 import hashlib
@@ -37,7 +31,6 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 import jafaal.settings as jafaal_settings
-from jafaal._core import hashing
 
 
 class KeyPurpose(StrEnum):
@@ -106,21 +99,6 @@ def _subkey(purpose: KeyPurpose) -> bytes:
     return cached
 
 
-def sha256_hex(value: str) -> str:
-    """Return the unkeyed SHA-256 hex digest of ``value``.
-
-    Retained to read digests written before keyed HMACs were adopted; use
-    :func:`hmac_sha256` for anything new.
-
-    Args:
-        value: The plaintext token to hash.
-
-    Returns:
-        Lowercase hex-encoded SHA-256 digest (64 chars).
-    """
-    return hashing.sha256_hex(value)
-
-
 def hmac_sha256(value: str, purpose: KeyPurpose) -> str:
     """Return the keyed HMAC-SHA256 hex digest of ``value`` for ``purpose``.
 
@@ -140,24 +118,6 @@ def hmac_sha256(value: str, purpose: KeyPurpose) -> str:
         RuntimeError: If JAFAAL has not been configured.
     """
     return hmac.new(_subkey(purpose), value.encode(), hashlib.sha256).hexdigest()
-
-
-def legacy_lookup_digests(value: str, purpose: KeyPurpose) -> tuple[str, str]:
-    """Return the current and legacy digests for a stored-token lookup.
-
-    Rows written before keyed HMACs were adopted hold an unkeyed SHA-256 digest.
-    A lookup that matches on either digest keeps those credentials working across
-    the upgrade; the caller re-writes the row with the keyed digest on first use,
-    so the legacy form drains and the fallback can be dropped in a later release.
-
-    Args:
-        value: The plaintext token being looked up.
-        purpose: The job the current digest is for.
-
-    Returns:
-        Tuple of ``(keyed_digest, legacy_unkeyed_digest)``.
-    """
-    return hmac_sha256(value, purpose), sha256_hex(value)
 
 
 def generate_token_and_hash(purpose: KeyPurpose) -> tuple[str, str]:

@@ -192,11 +192,11 @@ def use_sign_up_token(token: str, db: Session) -> UserId:
         JafaalError: 400 if the token is invalid, expired, or already used.
     """
     # Hash the provided token to find the database record
-    token_hashes = token_hashing.legacy_lookup_digests(token, token_hashing.KeyPurpose.SIGN_UP)
+    token_hash = token_hashing.hmac_sha256(token, token_hashing.KeyPurpose.SIGN_UP)
 
     # Atomically mark the token used and return its owner. A None result means
     # the token was missing, expired, or already consumed.
-    user_id = sign_up_tokens_crud.claim_sign_up_token(token_hashes, db)
+    user_id = sign_up_tokens_crud.claim_sign_up_token(token_hash, db)
     if user_id is None:
         raise jafaal_exceptions.InvalidRequestError("Invalid or expired sign up token")
 

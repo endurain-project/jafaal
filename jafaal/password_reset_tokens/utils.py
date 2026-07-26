@@ -120,12 +120,10 @@ def use_password_reset_token(
         JafaalError: 422 if the new password fails the account's password policy.
         JafaalError: 500 if password update or token marking fails.
     """
-    # Hash the provided token to find the database record. Tokens minted before
-    # keyed hashing was adopted are stored as an unkeyed digest, so the claim
-    # accepts either form until they expire (one hour).
-    token_hashes = token_hashing.legacy_lookup_digests(token, token_hashing.KeyPurpose.PASSWORD_RESET)
+    # Hash the provided token to find the database record.
+    token_hash = token_hashing.hmac_sha256(token, token_hashing.KeyPurpose.PASSWORD_RESET)
 
-    token_user_id = password_reset_tokens_crud.claim_password_reset_token(token_hashes, db)
+    token_user_id = password_reset_tokens_crud.claim_password_reset_token(token_hash, db)
     if token_user_id is None:
         raise jafaal_exceptions.InvalidRequestError("Invalid or expired password reset token")
 

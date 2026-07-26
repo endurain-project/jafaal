@@ -37,18 +37,15 @@ jobs:
       - name: Install uv
         uses: https://data.forgejo.org/astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
-          working-directory: jafaal
 
       # jafaal has required runtime deps (fastapi, sqlalchemy, ...) that
       # mkdocstrings must import to render the API reference, so sync the default
       # dependencies plus the docs group (not --only-group) and install the
       # project itself.
       - name: Sync documentation dependencies
-        working-directory: jafaal
         run: uv sync --frozen --group docs
 
       - name: Build documentation
-        working-directory: jafaal
         run: uv run --no-sync mkdocs build --site-dir site
 
       - name: Set dry-run mode

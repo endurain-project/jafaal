@@ -246,6 +246,10 @@ class AuthSettings:
     refresh_token_expire_days: int = 7
     issuer: str = ""
     audience: str = ""
+    # OAuth client identifier stamped into the ``client_id`` claim RFC 9068
+    # requires. JAFAAL is a first-party issuer with no client registry, so this
+    # defaults to the token audience (see :attr:`resolved_client_id`).
+    client_id: str = ""
     # Clock-skew tolerance (seconds) applied when validating the ``exp`` / ``nbf``
     # claims of JAFAAL's own JWTs. 0 keeps validation strict (the historical
     # behaviour); a small value (e.g. 30) avoids spurious 401s when issuing and
@@ -548,6 +552,17 @@ class AuthSettings:
     def resolved_audience(self) -> str:
         """JWT audience, falling back to :attr:`base_url` when unset."""
         return self.audience or self.base_url
+
+    @property
+    def resolved_client_id(self) -> str:
+        """``client_id`` claim value, falling back to the resolved audience.
+
+        RFC 9068 §2.2 requires ``client_id`` on an access token. JAFAAL issues
+        first-party tokens and has no client registry, so the audience (i.e. the
+        application the token is for) is the meaningful identifier unless the
+        host sets one explicitly.
+        """
+        return self.client_id or self.resolved_audience
 
     @property
     def is_deployed(self) -> bool:

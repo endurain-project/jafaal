@@ -1,10 +1,8 @@
 """FastAPI edge handler mapping :class:`~jafaal.exceptions.JafaalError` to HTTP.
 
 This is the single place that imports FastAPI for error mapping. The host
-registers it once at startup via :func:`register_exception_handlers` (Phase 5's
-``create_auth_router`` does this automatically). Registration is a no-op until
-the core raises a :class:`JafaalError`, so it can be installed up-front with no
-behavior change (no broken window during the raise-site migration).
+registers it once at startup via :func:`register_exception_handlers`
+(``create_auth_router`` does this automatically).
 """
 
 from __future__ import annotations

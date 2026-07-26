@@ -39,6 +39,77 @@ class TokenType(Enum):
     REFRESH = "refresh"
 
 
+# JOSE ``typ`` header values. RFC 9068 §2.1 registers ``at+jwt`` as the media
+# type of an OAuth 2.0 access token, which lets a resource server reject a token
+# minted for some other purpose before it even looks at the claims. There is no
+# registered type for refresh tokens; ``rt+jwt`` is the widely-used analogue.
+_TYP_HEADER_BY_TOKEN_TYPE: dict[TokenType, str] = {
+    TokenType.ACCESS: "at+jwt",
+    TokenType.REFRESH: "rt+jwt",
+}
+
+# Payload claim naming the token's use.
+#
+# RFC 9068 puts the token's media type in the JOSE ``typ`` *header*, so the
+# payload claim carrying the same information must not also be called ``typ`` —
+# that would collide with the registered header parameter. ``token_use`` (the
+# AWS Cognito convention) keeps the two distinct.
+TOKEN_USE_CLAIM = "token_use"
+
+
+def token_use(claims: dict[str, Any]) -> str | None:
+    """Return the token's use (``"access"`` / ``"refresh"``) from its claims.
+
+    Args:
+        claims: The decoded JWT payload.
+
+    Returns:
+        The token use, or ``None`` when the claim is absent or not a string.
+    """
+    value = claims.get(TOKEN_USE_CLAIM)
+    return value if isinstance(value, str) else None
+
+
+def scopes_from_claims(claims: dict[str, Any]) -> list[str] | None:
+    """Return the granted scopes from a token's ``scope`` claim.
+
+    ``scope`` is a space-delimited string (RFC 6749 §3.3 / RFC 9068 §2.2), which
+    is what a resource server using a stock JWT library expects.
+
+    Args:
+        claims: The decoded JWT payload.
+
+    Returns:
+        The scope list, or ``None`` when the claim is missing or malformed.
+    """
+    scope = claims.get("scope")
+    if isinstance(scope, str):
+        return scope.split()
+    return None
+
+
+def _validate_token_use(claims: dict[str, Any], expected_type: TokenType) -> None:
+    """Assert the token names ``expected_type`` as its use.
+
+    Raises the same joserfc errors the claims registry would, so the caller's
+    existing handlers map them consistently — in particular, an absent claim
+    surfaces as ``MissingClaimError``, which the refresh-token dependency uses to
+    detect an unusable cookie and clear it rather than looping.
+
+    Args:
+        claims: The decoded JWT payload.
+        expected_type: The token type the caller requires.
+
+    Raises:
+        MissingClaimError: If the claim is not present.
+        InvalidClaimError: If the token names a different use.
+    """
+    if TOKEN_USE_CLAIM not in claims:
+        raise MissingClaimError(TOKEN_USE_CLAIM)
+    if token_use(claims) != expected_type.value:
+        raise InvalidClaimError(TOKEN_USE_CLAIM)
+
+
 class TokenManager:
     """Issue, decode, and validate JWTs (and mint CSRF tokens) for user sessions.
 
@@ -71,6 +142,7 @@ class TokenManager:
         private_key: str = "",
         private_key_fallbacks: tuple[str, ...] = (),
         leeway_seconds: int = 0,
+        client_id: str = "",
     ):
         """
         Initializes the TokenManager with the provided secret key and settings.
@@ -100,6 +172,8 @@ class TokenManager:
                 the ``exp`` / ``nbf`` claims during validation. ``0`` is strict;
                 a small value avoids spurious 401s when the issuing and
                 validating clocks differ slightly.
+            client_id (str): Value of the ``client_id`` claim RFC 9068 requires
+                on an access token.
         """
         if algorithm not in jafaal_settings.ALLOWED_ALGORITHMS:
             raise ValueError(
@@ -112,6 +186,7 @@ class TokenManager:
         self.issuer = issuer
         self.audience = audience
         self.leeway_seconds = leeway_seconds
+        self.client_id = client_id
 
         self._is_symmetric: bool = algorithm not in jwk_keys.ASYMMETRIC_ALGORITHMS
         self._sign_key: Any
@@ -284,9 +359,9 @@ class TokenManager:
         Validates expiration, required claims, and type of a JWT.
 
         Checks that the token contains all essential claims, is not expired or
-        used before its valid time, and that the ``typ`` claim matches the
-        expected token type. This prevents refresh tokens from being used as
-        access tokens and vice versa.
+        used before its valid time, and that it names the expected token use.
+        This prevents refresh tokens from being used as access tokens and vice
+        versa.
 
         Args:
             token: The JWT token to validate.
@@ -302,6 +377,7 @@ class TokenManager:
             # Define required claims. ``leeway`` applies a small clock-skew
             # tolerance to the time-based claims (``exp`` / ``nbf``) so slightly
             # skewed nodes do not spuriously reject otherwise-valid tokens.
+            # The token-use claim is checked separately below.
             claims_requests = jwt.JWTClaimsRegistry(
                 leeway=self.leeway_seconds,
                 sid={"essential": True},
@@ -319,14 +395,11 @@ class TokenManager:
                 nbf={"essential": True},
                 exp={"essential": True},
                 jti={"essential": True},
-                typ={
-                    "essential": True,
-                    "value": expected_type.value,
-                },
             )
 
             # Decode the token to get the payload
             payload = self.decode_token(token)
+            _validate_token_use(payload.claims, expected_type)
 
             # Validate token claims (incl. expiration and typ)
             claims_requests.validate(payload.claims)
@@ -424,28 +497,31 @@ class TokenManager:
         # Set now
         now = int(datetime.now(UTC).timestamp())
 
-        # The JWT ``sub`` is JSON: an integer PK is kept as an int (byte-identical
-        # to legacy tokens), while a UUID PK is serialised to its string form so
-        # it round-trips. ``resolve_from_access_token`` / ``get_sub_from_*`` coerce
-        # it back to the user table's PK type on the way in.
-        sub = user.id if isinstance(user.id, int) else str(user.id)
-
-        scope_dict = {
+        claims: dict[str, Any] = {
             "sid": session_id,
             "iss": self.issuer,
             "aud": self.audience,
-            "sub": sub,
-            "scope": scope,
             "iat": now,
             "nbf": now,
             "exp": exp,
             "jti": str(uuid.uuid4()),
-            "typ": token_type.value,
+            # RFC 9068 / RFC 7519 shapes, so a resource server verifying against
+            # the published JWKS with a stock JWT library reads what it expects:
+            # ``sub`` is a string (RFC 7519 §4.1.2 defines it as StringOrURI),
+            # ``scope`` is space-delimited (RFC 6749 §3.3), and ``client_id`` is
+            # present (RFC 9068 §2.2). ``coerce_user_id`` converts ``sub`` back
+            # to the host user table's primary-key type on the way in.
+            "sub": str(user.id),
+            "scope": " ".join(scope),
+            "client_id": self.client_id,
+            TOKEN_USE_CLAIM: token_type.value,
         }
+        # The media type goes in the JOSE ``typ`` header, not a payload claim.
+        header = {**self._sign_header, "typ": _TYP_HEADER_BY_TOKEN_TYPE[token_type]}
 
         encoded_token = jwt.encode(
-            self._sign_header,
-            scope_dict.copy(),
+            header,
+            claims.copy(),
             self._sign_key,
             algorithms=self._encode_algorithms,
         )
@@ -504,6 +580,7 @@ def get_token_manager() -> TokenManager:
             private_key=settings.private_key,
             private_key_fallbacks=settings.private_key_fallbacks,
             leeway_seconds=settings.jwt_leeway_seconds,
+            client_id=settings.resolved_client_id,
         )
         _token_manager_generation = generation
     return _token_manager

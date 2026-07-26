@@ -10,7 +10,6 @@ from fastapi import Request
 from sqlalchemy.orm import Session
 from user_agents import parse
 
-import jafaal._internal.password_hasher as jafaal_password_hasher
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.ports as jafaal_ports
 import jafaal.sessions.crud as jafaal_sessions_crud
@@ -107,21 +106,7 @@ def verify_csrf_token(candidate: str, stored_hmac: str) -> bool:
 # stolen token, while costing microseconds instead of the ~50 ms an Argon2
 # verify costs — which /refresh would otherwise pay twice (verify the old token,
 # hash the new one) on every single call, and /logout once.
-#
-# It also removes an inconsistency: ``sessions.rotated_refresh_tokens`` already
-# stores *the same token* as an HMAC-SHA256 for reuse detection.
 # --------------------------------------------------------------------------- #
-
-# An HMAC-SHA256 digest renders as exactly 64 lowercase hex characters. Legacy
-# rows hold an Argon2/bcrypt PHC string (always starting with "$"), so the shape
-# is an unambiguous discriminator between the two formats.
-_HMAC_DIGEST_LENGTH = 64
-_HEX_DIGITS = frozenset("0123456789abcdef")
-
-
-def _is_hmac_digest(stored_hash: str) -> bool:
-    """Return True when ``stored_hash`` is an HMAC-SHA256 hex digest."""
-    return len(stored_hash) == _HMAC_DIGEST_LENGTH and _HEX_DIGITS.issuperset(stored_hash)
 
 
 def hash_refresh_token(refresh_token: str) -> str:
@@ -136,38 +121,17 @@ def hash_refresh_token(refresh_token: str) -> str:
     return token_hashing.hmac_sha256(refresh_token, token_hashing.KeyPurpose.REFRESH_SESSION)
 
 
-def verify_refresh_token(
-    candidate: str,
-    stored_hash: str,
-    password_hasher: jafaal_password_hasher.SupportsVerifyPassword,
-) -> bool:
+def verify_refresh_token(candidate: str, stored_hash: str) -> bool:
     """Verify a presented refresh token against a session's stored digest.
-
-    Accepts both digest formats so existing sessions survive the upgrade:
-
-    * **Current** — keyed HMAC-SHA256, compared with ``hmac.compare_digest``.
-    * **Legacy** — an Argon2/bcrypt hash written before the switch, verified
-      through ``password_hasher``. Such rows are re-hashed to the HMAC format on
-      the session's next rotation (``/refresh`` calls :func:`edit_session`), so
-      the fallback drains naturally and can be removed in a later release.
 
     Args:
         candidate: The raw refresh token presented by the caller.
         stored_hash: The digest persisted on the session row.
-        password_hasher: Verifier used only for the legacy format.
 
     Returns:
         True if the candidate matches the stored digest, False otherwise.
     """
-    if _is_hmac_digest(stored_hash):
-        return hmac.compare_digest(hash_refresh_token(candidate), stored_hash)
-    try:
-        return password_hasher.verify_password(candidate, stored_hash)
-    except Exception as err:
-        # A malformed/unrecognised legacy hash must fail the comparison, not
-        # crash the request with a 500 (pwdlib raises on an unknown hash type).
-        logger.warning(f"Unverifiable stored refresh-token hash: {type(err).__name__}", exc_info=err)
-        return False
+    return hmac.compare_digest(hash_refresh_token(candidate), stored_hash)
 
 
 def validate_session_timeout(
@@ -378,9 +342,7 @@ def edit_session(
     # Compute HMAC-SHA256 of the new CSRF token if provided
     csrf_hash = _hash_csrf_token(new_csrf_token) if new_csrf_token else None
 
-    # Update the session. Rotating a session that still holds a legacy
-    # Argon2/bcrypt refresh-token hash rewrites it in the HMAC format, so the
-    # legacy verification fallback drains as sessions refresh.
+    # Update the session.
     updated_session = edit_session_object(
         request,
         hash_refresh_token(new_refresh_token),

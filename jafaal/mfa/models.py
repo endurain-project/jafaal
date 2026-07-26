@@ -3,9 +3,8 @@
 This module defines the 1:1 companion table that owns MFA
 state for a user. Rows are written by
 ``jafaal.mfa.crud.update_user_mfa`` and created by
-``jafaal.mfa.crud.create_users_mfa_row``; the legacy
-``users.mfa_enabled`` / ``users.mfa_secret`` columns no
-longer exist.
+``jafaal.mfa.crud.create_users_mfa_row``. MFA state lives
+here, never on the host-owned ``users`` table.
 """
 
 from typing import TYPE_CHECKING

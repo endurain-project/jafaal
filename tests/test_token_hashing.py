@@ -1,6 +1,7 @@
 """Tests for the shared token-hashing helpers."""
 
 import dataclasses
+import hashlib
 
 import pytest
 
@@ -9,19 +10,15 @@ import jafaal.token_hashing as token_hashing
 from jafaal.token_hashing import KeyPurpose
 
 
-def test_sha256_hex_is_deterministic_and_64_hex():
-    d = token_hashing.sha256_hex("hello")
-    assert d == token_hashing.sha256_hex("hello")
-    assert len(d) == 64
-    assert all(c in "0123456789abcdef" for c in d)
-
-
-def test_hmac_differs_from_plain_sha256():
+def test_hmac_is_not_a_bare_sha256():
+    # A bare SHA-256 would let anyone with database read access verify a stolen
+    # token offline; the keyed HMAC does not.
     value = "some-token-value"
     keyed = token_hashing.hmac_sha256(value, KeyPurpose.CSRF)
-    assert keyed != token_hashing.sha256_hex(value)
+    assert keyed != hashlib.sha256(value.encode()).hexdigest()
     assert keyed == token_hashing.hmac_sha256(value, KeyPurpose.CSRF)
     assert len(keyed) == 64
+    assert all(c in "0123456789abcdef" for c in keyed)
 
 
 def test_every_purpose_yields_a_distinct_digest():
@@ -60,13 +57,3 @@ def test_generate_token_and_hash_roundtrip():
     token2, hash2 = token_hashing.generate_token_and_hash(KeyPurpose.PASSWORD_RESET)
     assert token != token2
     assert token_hash != hash2
-
-
-def test_legacy_lookup_digests_returns_keyed_and_unkeyed():
-    # Rows written before keyed hashing hold the unkeyed digest; a lookup must
-    # accept either form so those credentials survive the upgrade.
-    token = "a-token"
-    keyed, legacy = token_hashing.legacy_lookup_digests(token, KeyPurpose.API_KEY)
-    assert keyed == token_hashing.hmac_sha256(token, KeyPurpose.API_KEY)
-    assert legacy == token_hashing.sha256_hex(token)
-    assert keyed != legacy

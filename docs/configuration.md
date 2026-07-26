@@ -41,11 +41,13 @@ the settings and invalidates settings-derived caches (e.g. the token manager).
 | `refresh_token_expire_days` | `7` | Refresh-token lifetime. |
 | `jwt_leeway_seconds` | `0` | Clock-skew tolerance (seconds) for JWT `exp`/`nbf`; `0` is strict, keep any value small. |
 | `algorithm` | `"HS256"` | JWT signing algorithm: `HS256` (symmetric) or an asymmetric RSA/EC algorithm (see [below](#asymmetric-signing-jwks)). |
+| `client_id` | `""` | Value of the RFC 9068 `client_id` claim; defaults to the resolved audience. |
 | `private_key` | `""` | PEM private key for asymmetric signing (required when `algorithm` is asymmetric). |
 | `private_key_fallbacks` | `()` | Verify-only PEM keys kept in the published JWKS during a signing-key rotation. |
 | `session_idle_timeout_hours` | `1` | Idle-session timeout (when enabled). |
 | `session_absolute_timeout_hours` | `24` | Absolute session lifetime. |
 | `base_url` | `""` | Public base URL; default JWT issuer/audience and SSO redirect base. |
+| `csrf_trusted_origins` | `()` | Origins allowed to drive the web refresh flow; defaults to the `base_url` origin. **Set this when the frontend is served from a different origin than the API.** |
 | `environment` | `"production"` | `production`/`demo` are treated as deployed (cookie `Secure`). |
 | `refresh_cookie_prefix` | `""` | Optional `__Secure-`/`__Host-` refresh-cookie name prefix, applied only when deployed (`__Host-` requires `refresh_cookie_path="/"`). |
 | `allow_api_key_query_param` | `False` | Whether API keys may be sent via `?api_key=` (header only by default). |
@@ -78,6 +80,32 @@ the settings and invalidates settings-derived caches (e.g. the token manager).
     behind a reverse proxy, set it to your proxy addresses/CIDRs so the real
     client IP is used; `("*",)` trusts every peer (only safe when a trusted proxy
     always overwrites the header).
+
+!!! warning "Split-origin frontends"
+    `/auth/refresh` rejects any request a browser marks as off-site, using the
+    unforgeable `Origin` / `Sec-Fetch-Site` headers. If your frontend and API are
+    served from different origins (for example `https://app.example.com` calling
+    `https://api.example.com`), list the **frontend** origin in
+    `csrf_trusted_origins` or every refresh will be rejected with a 403.
+
+## JWT wire format
+
+JAFAAL publishes a [JWKS](#asymmetric-signing-jwks) so third-party resource
+servers can verify its access tokens statelessly. The tokens follow RFC 9068,
+*JWT Profile for OAuth 2.0 Access Tokens*, so a stock JWT library reads them
+without any JAFAAL-specific parsing:
+
+| Claim | Form |
+| --- | --- |
+| `scope` | `"profile users:read"` — space-delimited string (RFC 6749 §3.3) |
+| `sub` | `"42"` — string (RFC 7519 §4.1.2 defines it as StringOrURI) |
+| `client_id` | present (RFC 9068 §2.2); see the `client_id` setting |
+| `sid` | session identifier (JAFAAL extension) |
+| `token_use` | `access` / `refresh` (JAFAAL extension) |
+
+The token's media type lives in the JOSE `typ` **header** — `at+jwt` for access
+tokens, `rt+jwt` for refresh tokens — so a resource server can reject a token
+minted for another purpose before parsing a single claim.
 
 ### Key rotation
 

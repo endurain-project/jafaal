@@ -198,6 +198,7 @@ class TokenIntrospectionResponse(BaseModel):
         scope: Space-delimited granted scopes.
         typ: JAFAAL token type (``access`` or ``refresh``).
         token_type: ``Bearer`` for an active token.
+        client_id: OAuth client identifier the token was issued to.
         exp: Expiry (epoch seconds).
         iat: Issued-at (epoch seconds).
         nbf: Not-before (epoch seconds).
@@ -214,6 +215,7 @@ class TokenIntrospectionResponse(BaseModel):
     scope: StrictStr | None = None
     typ: StrictStr | None = None
     token_type: StrictStr | None = None
+    client_id: StrictStr | None = None
     exp: StrictInt | None = None
     iat: StrictInt | None = None
     nbf: StrictInt | None = None

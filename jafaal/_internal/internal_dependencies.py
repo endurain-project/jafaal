@@ -407,14 +407,13 @@ def validate_refresh_token(
             exc_info=None if is_expired else http_err,
             extra={"refresh_token": "[REDACTED]"},
         )
-        # If a pre-upgrade token (e.g. missing the ``typ`` claim) reaches
-        # this point the SPA would otherwise loop forever: every page load
-        # would resend the same stale cookie, refresh would 401, and the
-        # client would never recover. A custom exception handler clears
-        # both the legacy root-scoped cookie and the current auth-scoped
-        # cookie using separate Set-Cookie headers. We only do this for
-        # ``MissingClaimError``-style failures to avoid logging users out
-        # on transient issues.
+        # A refresh cookie that cannot possibly be valid here (it is missing a
+        # required claim, so it was not minted by this configuration) would
+        # otherwise strand the SPA: every page load resends the same cookie,
+        # /refresh 401s, and the client never recovers. Signal the edge handler
+        # to clear the cookie so the user lands on the login page instead of
+        # looping. Restricted to ``MissingClaimError`` failures so a transient
+        # problem does not log anyone out.
         if isinstance(http_err.__cause__, MissingClaimError):
             raise jafaal_exceptions.StaleRefreshTokenError(http_err.detail) from http_err
         raise
@@ -511,9 +510,10 @@ async def validate_api_key(
 
     Delegates to
     :meth:`~jafaal.identity_service.IdentityService.resolve_from_api_key`
-    and wraps the returned
-    :class:`~jafaal.principal.Principal` in an
-    :class:`AuthContext` for backward compatibility.
+    and adapts the returned
+    :class:`~jafaal.principal.Principal` to the
+    :class:`AuthContext` shape endpoints accepting either
+    credential type consume.
 
     Args:
         raw_key: The plain-text API key from the

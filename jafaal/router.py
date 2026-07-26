@@ -381,12 +381,11 @@ def login_for_access_token(
             user,
             code_challenge,
             code_challenge_method,
-            password_hasher,
             db,
         )
 
     # Web clients and mobile without PKCE get tokens directly
-    return jafaal_utils.complete_login(response, request, user, client_type, password_hasher, token_manager, db)
+    return jafaal_utils.complete_login(response, request, user, client_type, token_manager, db)
 
 
 @router.post(
@@ -414,10 +413,6 @@ def verify_mfa_and_login(
     identity_service: Annotated[
         jafaal_identity_service.IdentityService,
         Depends(jafaal_identity_service.get_identity_service),
-    ],
-    password_hasher: Annotated[
-        jafaal_password_hasher.PasswordHasher,
-        Depends(jafaal_password_hasher.get_password_hasher),
     ],
     token_manager: Annotated[
         jafaal_token_manager.TokenManager,
@@ -553,12 +548,11 @@ def verify_mfa_and_login(
             user,
             code_challenge,
             code_challenge_method,
-            password_hasher,
             db,
         )
 
     # Web clients and mobile without PKCE get tokens directly
-    return jafaal_utils.complete_login(response, request, user, client_type, password_hasher, token_manager, db)
+    return jafaal_utils.complete_login(response, request, user, client_type, token_manager, db)
 
 
 @router.post(
@@ -581,10 +575,6 @@ async def refresh_token(
     refresh_token_value: Annotated[
         str,
         Depends(jafaal_internal_dependencies.get_and_return_refresh_token),
-    ],
-    password_hasher: Annotated[
-        jafaal_password_hasher.PasswordHasher,
-        Depends(jafaal_password_hasher.get_password_hasher),
     ],
     token_manager: Annotated[
         jafaal_token_manager.TokenManager,
@@ -734,7 +724,7 @@ async def refresh_token(
             db,
         )
 
-    is_valid = jafaal_sessions_utils.verify_refresh_token(refresh_token_value, session.refresh_token, password_hasher)
+    is_valid = jafaal_sessions_utils.verify_refresh_token(refresh_token_value, session.refresh_token)
 
     if not is_valid:
         raise jafaal_exceptions.InvalidTokenError("Invalid refresh token")
@@ -823,10 +813,6 @@ async def logout(
         int,
         Depends(jafaal_internal_dependencies.get_sub_from_refresh_token),
     ],
-    password_hasher: Annotated[
-        jafaal_password_hasher.PasswordHasher,
-        Depends(jafaal_password_hasher.get_password_hasher),
-    ],
     db: Annotated[
         Session,
         Depends(jafaal_orm.get_db),
@@ -865,9 +851,7 @@ async def logout(
             )
 
         # Verify the refresh token
-        is_valid = jafaal_sessions_utils.verify_refresh_token(
-            refresh_token_value, session.refresh_token, password_hasher
-        )
+        is_valid = jafaal_sessions_utils.verify_refresh_token(refresh_token_value, session.refresh_token)
 
         # If the refresh token is not valid, raise an exception
         if not is_valid:
@@ -901,10 +885,6 @@ def introspect_token_endpoint(
         jafaal_token_manager.TokenManager,
         Depends(jafaal_token_manager.get_token_manager),
     ],
-    password_hasher: Annotated[
-        jafaal_password_hasher.PasswordHasher,
-        Depends(jafaal_password_hasher.get_password_hasher),
-    ],
     db: Annotated[Session, Depends(jafaal_orm.get_db)],
     token_type_hint: Annotated[str | None, Form()] = None,
 ):
@@ -922,7 +902,7 @@ def introspect_token_endpoint(
     Returns:
         The RFC 7662 introspection response.
     """
-    return token_admin_service.introspect_token(token, token_manager, password_hasher, db)
+    return token_admin_service.introspect_token(token, token_manager, db)
 
 
 @router.post("/revoke", response_model=None, status_code=status.HTTP_200_OK)
@@ -932,10 +912,6 @@ def revoke_token_endpoint(
     token_manager: Annotated[
         jafaal_token_manager.TokenManager,
         Depends(jafaal_token_manager.get_token_manager),
-    ],
-    password_hasher: Annotated[
-        jafaal_password_hasher.PasswordHasher,
-        Depends(jafaal_password_hasher.get_password_hasher),
     ],
     db: Annotated[Session, Depends(jafaal_orm.get_db)],
     token_type_hint: Annotated[str | None, Form()] = None,
@@ -955,5 +931,5 @@ def revoke_token_endpoint(
     Returns:
         An empty object (RFC 7009 mandates a 200 with no error).
     """
-    token_admin_service.revoke_token(token, token_manager, password_hasher, db)
+    token_admin_service.revoke_token(token, token_manager, db)
     return {}

@@ -31,18 +31,20 @@ def test_access_token_roundtrip_and_claims():
     tm = get_token_manager()
     _exp, token = tm.create_token("sid-1", _user(7), TokenType.ACCESS)
     tm.validate_token_expiration(token, TokenType.ACCESS)  # does not raise
-    assert tm.get_token_claim(token, "sub") == 7
+    # RFC 9068 shape (the default profile): string ``sub``, space-delimited
+    # ``scope``, token use in ``token_use``.
+    assert tm.get_token_claim(token, "sub") == "7"
     assert tm.get_token_claim(token, "sid") == "sid-1"
-    assert tm.get_token_claim(token, "typ") == "access"
-    assert isinstance(tm.get_token_claim(token, "scope"), list)
+    assert tm.get_token_claim(token, "token_use") == "access"
+    assert isinstance(tm.get_token_claim(token, "scope"), str)
 
 
 def test_superuser_gets_admin_scope():
     tm = get_token_manager()
     _, admin_token = tm.create_token("s", _user(1, is_superuser=True), TokenType.ACCESS)
     _, regular_token = tm.create_token("s", _user(2, is_superuser=False), TokenType.ACCESS)
-    admin_scopes = set(tm.get_token_claim(admin_token, "scope"))
-    regular_scopes = set(tm.get_token_claim(regular_token, "scope"))
+    admin_scopes = set(tm.get_token_claim(admin_token, "scope").split())
+    regular_scopes = set(tm.get_token_claim(regular_token, "scope").split())
     assert regular_scopes.issubset(admin_scopes)
     assert admin_scopes - regular_scopes  # admin has strictly more
 

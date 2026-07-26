@@ -27,11 +27,6 @@ import jafaal.schema as jafaal_schema
 import jafaal.sessions.utils as jafaal_sessions_utils
 import jafaal.settings as jafaal_settings
 
-# Legacy root-path ("/") refresh cookie, kept only so that old, root-scoped
-# cookies are cleared during migration; the canonical cookie name and path come
-# from AuthSettings.
-LEGACY_REFRESH_TOKEN_COOKIE_PATHS = ("/",)
-
 
 def authenticate_user(
     username: str,
@@ -204,10 +199,10 @@ def set_refresh_token_cookie(
 
 
 def clear_refresh_token_cookies(response: Response) -> None:
-    """Clear refresh-token cookies on all known paths.
+    """Clear the refresh-token cookie.
 
     Args:
-        response: Response object to receive cookie-deletion headers.
+        response: Response object to receive the cookie-deletion header.
 
     Returns:
         None.
@@ -216,20 +211,13 @@ def clear_refresh_token_cookies(response: Response) -> None:
         None.
     """
     settings = jafaal_settings.get_settings()
-    clear_paths = (*LEGACY_REFRESH_TOKEN_COOKIE_PATHS, settings.refresh_cookie_path)
-    # Clear both the effective (possibly ``__Secure-``/``__Host-`` prefixed) name
-    # and the plain name, so a deployment that later adds a cookie-name prefix
-    # still evicts the previously-set unprefixed cookie.
-    cookie_names = {settings.effective_refresh_cookie_name, settings.refresh_cookie_name}
-    for name in cookie_names:
-        for path in clear_paths:
-            response.delete_cookie(
-                key=name,
-                path=path,
-                secure=_is_secure_cookie_environment(),
-                httponly=True,
-                samesite="strict",
-            )
+    response.delete_cookie(
+        key=settings.effective_refresh_cookie_name,
+        path=settings.refresh_cookie_path,
+        secure=_is_secure_cookie_environment(),
+        httponly=True,
+        samesite="strict",
+    )
 
 
 def build_token_response(
@@ -300,7 +288,6 @@ def complete_login(
     request: Request,
     user: jafaal_ports.UserProtocol,
     client_type: str,
-    password_hasher: jafaal_password_hasher.PasswordHasher,
     token_manager: jafaal_token_manager.TokenManager,
     db: Session,
 ) -> dict:
@@ -319,10 +306,6 @@ def complete_login(
         request (Request): The HTTP request object containing client information.
         user (jafaal_ports.UserProtocol): The authenticated user object.
         client_type (str): The type of client ("web" or "mobile").
-        password_hasher (jafaal_password_hasher.PasswordHasher): Retained for
-            signature compatibility; no longer used. Refresh tokens are
-            high-entropy JWTs and are stored as a keyed HMAC-SHA256 digest (see
-            :func:`jafaal.sessions.utils.hash_refresh_token`), not a password hash.
         token_manager (jafaal_token_manager.TokenManager): Utility for token generation and management.
         db (Session): Database session for storing session information.
 
@@ -418,7 +401,6 @@ def create_mobile_pkce_session_response(
     user: jafaal_ports.UserProtocol,
     code_challenge: str,
     code_challenge_method: str,
-    password_hasher: jafaal_password_hasher.PasswordHasher,
     db: Session,
 ) -> jafaal_schema.MobileSessionResponse:
     """
@@ -437,9 +419,6 @@ def create_mobile_pkce_session_response(
         user: Authenticated user object
         code_challenge: PKCE code challenge (base64url-encoded SHA256)
         code_challenge_method: PKCE method (must be S256)
-        password_hasher: Retained for signature compatibility; no longer used
-            (the session is created without a refresh token, and refresh tokens
-            are stored as keyed HMAC-SHA256 digests rather than password hashes).
         db: Database session
 
     Returns:

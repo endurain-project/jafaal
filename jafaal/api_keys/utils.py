@@ -73,22 +73,6 @@ def hash_api_key(raw_key: str) -> str:
     return token_hashing.hmac_sha256(raw_key, token_hashing.KeyPurpose.API_KEY)
 
 
-def api_key_lookup_digests(raw_key: str) -> tuple[str, str]:
-    """Return the digests an API-key lookup should match.
-
-    Keys issued before the move to keyed HMACs are stored as an unkeyed SHA-256
-    digest, so a lookup accepts either form; the row is rewritten with the keyed
-    digest on first use (see ``api_keys.crud.get_api_key_by_hash``).
-
-    Args:
-        raw_key: The plain-text API key presented by the caller.
-
-    Returns:
-        Tuple of ``(keyed_digest, legacy_unkeyed_digest)``.
-    """
-    return token_hashing.legacy_lookup_digests(raw_key, token_hashing.KeyPurpose.API_KEY)
-
-
 def validate_api_key_scopes(
     requested_scopes: list[str],
 ) -> None:

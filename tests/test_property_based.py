@@ -64,5 +64,7 @@ def test_coerce_user_id_int_roundtrip(user_id):
 def test_jwt_sub_and_sid_roundtrip(user_id, session_id):
     tm = get_token_manager()
     _, token = tm.create_token(session_id, SimpleNamespace(id=user_id, is_superuser=False), TokenType.ACCESS)
-    assert tm.get_token_claim(token, "sub") == user_id
+    # ``sub`` is emitted as a string (RFC 7519 §4.1.2) and coerced back to the
+    # host user table's PK type on the way in.
+    assert coerce_user_id(tm.get_token_claim(token, "sub")) == user_id
     assert tm.get_token_claim(token, "sid") == session_id

@@ -30,10 +30,10 @@ def _identity_service(db):
 def test_password_reset_claim_is_atomic_single_use(db, make_user):
     user = make_user()
     token, _ = prt_utils.create_password_reset_token(user.id, db)
-    digests = token_hashing.legacy_lookup_digests(token, token_hashing.KeyPurpose.PASSWORD_RESET)
-    assert prt_crud.claim_password_reset_token(digests, db) == user.id
+    token_hash = token_hashing.hmac_sha256(token, token_hashing.KeyPurpose.PASSWORD_RESET)
+    assert prt_crud.claim_password_reset_token(token_hash, db) == user.id
     # A second claim of the same token finds nothing (already used).
-    assert prt_crud.claim_password_reset_token(digests, db) is None
+    assert prt_crud.claim_password_reset_token(token_hash, db) is None
 
 
 def test_use_password_reset_token_updates_credential(db, make_user):
@@ -44,8 +44,8 @@ def test_use_password_reset_token_updates_credential(db, make_user):
     cred = credentials_crud.get_credential(user.id, db)
     assert password_hasher.verify_password("New1!Passw", cred.password_hash)
     # Token is consumed.
-    digests = token_hashing.legacy_lookup_digests(token, token_hashing.KeyPurpose.PASSWORD_RESET)
-    assert prt_crud.claim_password_reset_token(digests, db) is None
+    token_hash = token_hashing.hmac_sha256(token, token_hashing.KeyPurpose.PASSWORD_RESET)
+    assert prt_crud.claim_password_reset_token(token_hash, db) is None
 
 
 def test_use_password_reset_token_rejects_invalid(db):
@@ -92,9 +92,9 @@ def test_request_password_reset_swallows_delivery_failure(db, make_user):
 def test_sign_up_claim_is_atomic_single_use(db, make_user):
     user = make_user()
     token, _ = sut_utils.create_sign_up_token(user.id, db)
-    digests = token_hashing.legacy_lookup_digests(token, token_hashing.KeyPurpose.SIGN_UP)
-    assert sut_crud.claim_sign_up_token(digests, db) == user.id
-    assert sut_crud.claim_sign_up_token(digests, db) is None
+    token_hash = token_hashing.hmac_sha256(token, token_hashing.KeyPurpose.SIGN_UP)
+    assert sut_crud.claim_sign_up_token(token_hash, db) == user.id
+    assert sut_crud.claim_sign_up_token(token_hash, db) is None
 
 
 def test_use_sign_up_token_consumes_once(db, make_user):

@@ -52,15 +52,20 @@ def test_create_token_serializes_uuid_subject():
 
 
 def test_create_token_keeps_integer_subject_int():
-    """An integer ``user.id`` stays an int in ``sub`` (byte-identical to legacy)."""
+    """An integer ``user.id`` is serialised as a string ``sub`` (RFC 7519 §4.1.2).
+
+    ``sub`` is defined as StringOrURI, so the RFC 9068 profile always emits a
+    string; ``coerce_user_id`` converts it back to the host PK type on the way
+    in. The ``legacy`` profile keeps the historical int.
+    """
     tm = get_token_manager()
     user = SimpleNamespace(id=123, is_superuser=False)
 
     _, access = tm.create_token("session-1", user, TokenType.ACCESS)
     claims = tm.decode_token(access).claims
 
-    assert claims["sub"] == 123
-    assert isinstance(claims["sub"], int)
+    assert claims["sub"] == "123"
+    assert isinstance(claims["sub"], str)
 
 
 # --------------------------------------------------------------------------- #

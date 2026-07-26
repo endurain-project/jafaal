@@ -24,7 +24,6 @@ from fastapi import APIRouter, Depends, Request, Response, status
 from sqlalchemy.orm import Session
 
 import jafaal._internal.internal_dependencies as jafaal_internal_dependencies
-import jafaal._internal.password_hasher as jafaal_password_hasher
 import jafaal._internal.security_stores as jafaal_security_stores
 import jafaal._internal.token_manager as jafaal_token_manager
 import jafaal._internal.user_guards as jafaal_user_guards
@@ -188,10 +187,6 @@ def complete_second_factor(
         jafaal_security_stores.PendingMFAStore,
         Depends(jafaal_security_stores.get_pending_mfa_store),
     ],
-    password_hasher: Annotated[
-        jafaal_password_hasher.PasswordHasher,
-        Depends(jafaal_password_hasher.get_password_hasher),
-    ],
     token_manager: Annotated[
         jafaal_token_manager.TokenManager,
         Depends(jafaal_token_manager.get_token_manager),
@@ -250,7 +245,7 @@ def complete_second_factor(
     failed_attempts.reset_attempts(username)
     failed_attempts.reset_ip_attempts(network.get_ip_address(request))
 
-    return jafaal_utils.complete_login(response, request, user, client_type, password_hasher, token_manager, db)
+    return jafaal_utils.complete_login(response, request, user, client_type, token_manager, db)
 
 
 # ===========================================================================
@@ -284,10 +279,6 @@ def complete_authentication(
         jafaal_internal_dependencies.ClientType,
         Depends(jafaal_internal_dependencies.get_client_type),
     ],
-    password_hasher: Annotated[
-        jafaal_password_hasher.PasswordHasher,
-        Depends(jafaal_password_hasher.get_password_hasher),
-    ],
     token_manager: Annotated[
         jafaal_token_manager.TokenManager,
         Depends(jafaal_token_manager.get_token_manager),
@@ -297,4 +288,4 @@ def complete_authentication(
     """Verify a passwordless passkey assertion and issue JAFAAL tokens."""
     user = webauthn_service.complete_authentication(data.challenge_id, data.credential, db)
     jafaal_user_guards.check_user_is_active(user)
-    return jafaal_utils.complete_login(response, request, user, client_type, password_hasher, token_manager, db)
+    return jafaal_utils.complete_login(response, request, user, client_type, token_manager, db)

@@ -32,7 +32,7 @@ def test_token_signed_with_previous_key_still_validates():
     # After rotation the primary key is ``new``; ``old`` is kept as a fallback.
     tm_new = TokenManager(new, "HS256", issuer="iss", audience="aud", secret_key_fallbacks=(old,))
     tm_new.validate_token_expiration(token, TokenType.ACCESS)  # does not raise
-    assert tm_new.get_token_claim(token, "sub") == 7
+    assert tm_new.get_token_claim(token, "sub") == "7"
 
 
 def test_new_tokens_are_signed_with_primary_key_only():

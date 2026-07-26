@@ -1,5 +1,7 @@
 """Tests for API-key helpers and the host-configurable scope allow-list."""
 
+import hashlib
+
 import pytest
 
 import jafaal
@@ -20,7 +22,7 @@ def test_hash_api_key_is_a_keyed_hmac():
     # Keyed under the API-key subkey: neither a bare SHA-256 (which anyone with
     # database read access could recompute offline) nor a digest any other
     # purpose could produce.
-    assert api_keys_utils.hash_api_key(raw) != api_keys_utils.token_hashing.sha256_hex(raw)
+    assert api_keys_utils.hash_api_key(raw) != hashlib.sha256(raw.encode()).hexdigest()
     assert api_keys_utils.hash_api_key(raw) == api_keys_utils.token_hashing.hmac_sha256(
         raw, api_keys_utils.token_hashing.KeyPurpose.API_KEY
     )
@@ -100,28 +102,15 @@ def test_new_api_keys_are_stored_as_keyed_digests(db, make_user):
     user = make_user(username="keyowner")
     row, raw_key = _create_key(user.id, db)
     assert row.key_hash == api_keys_utils.hash_api_key(raw_key)
-    assert row.key_hash != api_keys_utils.token_hashing.sha256_hex(raw_key)
+    assert row.key_hash != hashlib.sha256(raw_key.encode()).hexdigest()
 
 
-def test_legacy_sha256_api_key_still_authenticates_and_is_upgraded(db, make_user):
-    user = make_user(username="legacyowner")
-    row, raw_key = _create_key(user.id, db)
-
-    # Rewind the row to the pre-migration unkeyed digest.
-    legacy_hash = api_keys_utils.token_hashing.sha256_hex(raw_key)
-    row.key_hash = legacy_hash
-    db.commit()
+def test_stored_api_key_authenticates(db, make_user):
+    user = make_user(username="keyuser")
+    _row, raw_key = _create_key(user.id, db)
 
     principal = _identity_service(db).resolve_from_api_key(raw_key, _fake_request())
     assert principal.user_id == user.id
-
-    # The row was transparently rewritten in the keyed form.
-    db.refresh(row)
-    assert row.key_hash == api_keys_utils.hash_api_key(raw_key)
-    assert row.key_hash != legacy_hash
-
-    # And it still authenticates after the upgrade.
-    assert _identity_service(db).resolve_from_api_key(raw_key, _fake_request()).user_id == user.id
 
 
 def test_unknown_api_key_is_rejected(db, make_user):

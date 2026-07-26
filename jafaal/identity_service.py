@@ -475,7 +475,7 @@ class IdentityService(Protocol):
     def setup_mfa(
         self,
         user_id: UserId,
-        mfa_secret_store: jafaal_mfa_setup_store.MFASecretStoreBackend,
+        mfa_secret_store: jafaal_mfa_setup_store.MFASecretStore,
     ) -> jafaal_mfa_schema.MFASetupResponse:
         """Create MFA setup material and store the pending setup secret.
 
@@ -493,7 +493,7 @@ class IdentityService(Protocol):
         request: jafaal_mfa_schema.MFASetupRequest,
         user_id: UserId,
         step_up_store: jafaal_security_stores.StepUpStore,
-        mfa_secret_store: jafaal_mfa_setup_store.MFASecretStoreBackend,
+        mfa_secret_store: jafaal_mfa_setup_store.MFASecretStore,
     ) -> dict:
         """Enable MFA using the pending secret and a verification code.
 
@@ -841,7 +841,12 @@ class DefaultIdentityService:
         """
         self._token_manager.validate_access_expiration_logged(access_token)
 
-        sub = self._token_manager.get_token_claim(access_token, "sub")
+        # Decode once and read every claim off the result. Calling
+        # ``get_token_claim`` per claim would re-verify the signature each time
+        # (four times per authenticated request).
+        claims = self._token_manager.decode_token(access_token).claims
+
+        sub = claims.get("sub")
         if not isinstance(sub, int | str) or sub == "":
             raise jafaal_exceptions.InvalidTokenError("Invalid token: 'sub' claim is missing or malformed")
         try:
@@ -849,11 +854,12 @@ class DefaultIdentityService:
         except (ValueError, TypeError) as err:
             raise jafaal_exceptions.InvalidTokenError("Invalid token: 'sub' claim is malformed") from err
 
-        scope = self._token_manager.get_token_claim(access_token, "scope")
-        if not isinstance(scope, list):
-            raise jafaal_exceptions.InvalidTokenError("Invalid token: 'scope' claim must be a list")
+        # ``scope`` is the RFC 6749 §3.3 space-delimited string.
+        scope = jafaal_token_manager.scopes_from_claims(claims)
+        if scope is None:
+            raise jafaal_exceptions.InvalidTokenError("Invalid token: 'scope' claim must be a space-delimited string")
 
-        sid = self._token_manager.get_token_claim(access_token, "sid")
+        sid = claims.get("sid")
         if not isinstance(sid, str):
             raise jafaal_exceptions.InvalidTokenError("Invalid token: 'sid' claim must be a string")
 
@@ -864,7 +870,7 @@ class DefaultIdentityService:
         # Reject a token whose jti was revoked (RFC 7009), when the opt-in
         # denylist is enabled. A state-store outage fails open (see token_denylist).
         if settings.access_token_denylist_enabled:
-            jti = self._token_manager.get_token_claim(access_token, "jti")
+            jti = claims.get("jti")
             if isinstance(jti, str) and jafaal_token_denylist.is_access_token_denied(jti):
                 raise jafaal_exceptions.InvalidTokenError("Access token has been revoked")
 
@@ -900,11 +906,10 @@ class DefaultIdentityService:
                 revoked, or expired.
         """
         computed_hash = jafaal_api_keys_utils.hash_api_key(raw_key)
-        db_key = jafaal_api_keys_crud.get_api_key_by_hash(raw_key, self._db)
+        db_key = jafaal_api_keys_crud.get_api_key_by_hash(computed_hash, self._db)
 
         # Constant-time comparison prevents timing attacks
-        # even when the key is not found. A legacy row was rewritten to the
-        # keyed digest by the lookup above, so both sides are the keyed form.
+        # even when the key is not found.
         stored_hash = db_key.key_hash if db_key else ("0" * 64)
         if not hmac.compare_digest(stored_hash, computed_hash):
             db_key = None
@@ -1247,7 +1252,7 @@ class DefaultIdentityService:
     def setup_mfa(
         self,
         user_id: UserId,
-        mfa_secret_store: jafaal_mfa_setup_store.MFASecretStoreBackend,
+        mfa_secret_store: jafaal_mfa_setup_store.MFASecretStore,
     ) -> jafaal_mfa_schema.MFASetupResponse:
         """Create MFA setup material and store the pending setup secret."""
         return jafaal_mfa_workflow.setup_mfa(user_id, self._db, mfa_secret_store)
@@ -1257,7 +1262,7 @@ class DefaultIdentityService:
         request: jafaal_mfa_schema.MFASetupRequest,
         user_id: UserId,
         step_up_store: jafaal_security_stores.StepUpStore,
-        mfa_secret_store: jafaal_mfa_setup_store.MFASecretStoreBackend,
+        mfa_secret_store: jafaal_mfa_setup_store.MFASecretStore,
     ) -> dict:
         """Enable MFA using the pending secret and a verification code."""
         return jafaal_mfa_workflow.enable_mfa(

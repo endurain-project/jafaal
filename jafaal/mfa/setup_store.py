@@ -258,10 +258,6 @@ class MFASecretStore:
             _raise_store_unavailable("clear MFA setup secrets", err)
 
 
-# Single provider-backed implementation; the alias is kept for existing call
-# sites that annotate against the store type.
-MFASecretStoreBackend = MFASecretStore
-
 mfa_secret_store = MFASecretStore()
 
 

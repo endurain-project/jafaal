@@ -1,0 +1,56 @@
+name: Audit dependencies
+
+# Renovate keeps dependencies *fresh*; it does not tell you when a version you
+# are already pinned to turns out to be vulnerable. This job scans the resolved
+# lockfile against the OSV / PyPI advisory databases, on every dependency change
+# and on a schedule so a newly-published advisory against an unchanged pin is
+# still surfaced.
+
+on:
+  push:
+    branches:
+      - master
+      - main
+    paths: &paths
+      - pyproject.toml
+      - uv.lock
+      - .forgejo/workflows/audit-jafaal.yml
+  pull_request:
+    paths: *paths
+  schedule:
+    # Daily, offset from the Renovate run so the two do not contend.
+    - cron: '30 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ forgejo.workflow }}-${{ forgejo.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  audit:
+    name: jafaal (pip-audit)
+    runs-on: local-runner
+    steps:
+      - name: Checkout code
+        uses: https://data.forgejo.org/actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 1
+
+      - name: Install uv
+        uses: https://data.forgejo.org/astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+
+      # Audit the full resolved set — runtime dependencies plus every optional
+      # extra — because a host enabling ``jafaal[sso]`` inherits those too.
+      # ``--no-emit-project`` drops the editable self-reference, which carries no
+      # hash and which pip-audit therefore rejects.
+      - name: Export the resolved dependency set
+        run: >-
+          uv export --frozen --all-extras --no-dev --no-emit-project
+          --format requirements-txt --output-file /tmp/requirements.txt
+
+      - name: Scan for known vulnerabilities
+        run: uvx pip-audit --strict --requirement /tmp/requirements.txt --disable-pip

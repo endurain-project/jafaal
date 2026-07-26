@@ -29,7 +29,7 @@ import jafaal.mfa.schema as mfa_schema
 import jafaal.mfa.service as mfa_service
 import jafaal.ports as jafaal_ports
 import jafaal.schema as jafaal_schema
-from jafaal.mfa.setup_store import MFASecretStoreBackend
+from jafaal.mfa.setup_store import MFASecretStore
 from jafaal.orm import UserId
 
 logger = logging.getLogger(__name__)
@@ -79,7 +79,7 @@ def get_backup_code_status(
 def setup_mfa(
     token_user_id: UserId,
     db: Session,
-    mfa_secret_store: MFASecretStoreBackend,
+    mfa_secret_store: MFASecretStore,
 ) -> mfa_schema.MFASetupResponse:
     """Create MFA setup material and store pending setup secret."""
     response = mfa_service.setup_user_mfa(token_user_id, db)
@@ -93,7 +93,7 @@ def enable_mfa(
     identity_service: IdentityService,
     step_up_store: jafaal_security_stores.StepUpStore,
     db: Session,
-    mfa_secret_store: MFASecretStoreBackend,
+    mfa_secret_store: MFASecretStore,
 ) -> dict:
     """Enable MFA using pending secret and verification code."""
     # MFA enrolment is the one step-up operation permitted for an SSO-only

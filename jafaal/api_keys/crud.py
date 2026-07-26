@@ -74,19 +74,17 @@ def get_api_key_by_id(
 
 @db_errors.handle_db_errors
 def get_api_key_by_hash(
-    raw_key: str,
+    key_hash: str,
     db: Session,
 ) -> api_keys_models.UsersApiKeys | None:
     """
     Retrieve an API key by its stored digest.
 
-    Used during request authentication. Matches either the current keyed
-    HMAC-SHA256 digest or the unkeyed SHA-256 digest written before keyed
-    hashing was adopted, and transparently upgrades a legacy row on first use so
-    the fallback drains.
+    Used during request authentication to look up the key record from the keyed
+    digest of the incoming value.
 
     Args:
-        raw_key: The plain-text API key presented by the caller.
+        key_hash: Keyed HMAC-SHA256 digest of the raw key.
         db: SQLAlchemy database session.
 
     Returns:
@@ -95,20 +93,8 @@ def get_api_key_by_hash(
     Raises:
         JafaalError: If a database error occurs.
     """
-    keyed_hash, legacy_hash = api_keys_utils.api_key_lookup_digests(raw_key)
-    stmt = select(api_keys_models.UsersApiKeys).where(
-        api_keys_models.UsersApiKeys.key_hash.in_((keyed_hash, legacy_hash))
-    )
-    db_api_key = db.execute(stmt).scalar_one_or_none()
-
-    if db_api_key is not None and db_api_key.key_hash == legacy_hash:
-        # Rewrite the legacy unkeyed digest in the keyed form. Best-effort: a
-        # failure here must not reject an otherwise-valid key.
-        db_api_key.key_hash = keyed_hash
-        db.commit()
-        logger.info("API key digest upgraded to keyed HMAC", extra={"api_key_id": db_api_key.id})
-
-    return db_api_key
+    stmt = select(api_keys_models.UsersApiKeys).where(api_keys_models.UsersApiKeys.key_hash == key_hash)
+    return db.execute(stmt).scalar_one_or_none()
 
 
 @db_errors.handle_db_errors

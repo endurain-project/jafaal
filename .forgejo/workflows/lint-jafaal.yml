@@ -5,13 +5,14 @@ on:
     branches:
       - master
       - main
-    paths:
+    paths: &paths
       - jafaal/**
+      - tests/**
+      - pyproject.toml
+      - uv.lock
       - .forgejo/workflows/lint-jafaal.yml
   pull_request:
-    paths:
-      - jafaal/**
-      - .forgejo/workflows/lint-jafaal.yml
+    paths: *paths
 
 permissions:
   contents: read
@@ -33,19 +34,14 @@ jobs:
 
       - name: Install uv
         uses: https://data.forgejo.org/astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          working-directory: jafaal
 
       - name: Sync dependencies
-        working-directory: jafaal
         run: uv sync --frozen --only-group lint
 
       - name: Lint check
-        working-directory: jafaal
         run: uv run --no-sync ruff check .
 
       - name: Format check
-        working-directory: jafaal
         run: uv run --no-sync ruff format --check .
 
   typecheck-jafaal:
@@ -59,15 +55,11 @@ jobs:
 
       - name: Install uv
         uses: https://data.forgejo.org/astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          working-directory: jafaal
 
       - name: Sync dependencies
-        working-directory: jafaal
         # mypy needs the runtime dependencies (fastapi, sqlalchemy, ...) importable
         # to resolve third-party types, plus the typecheck group (mypy + stubs).
         run: uv sync --frozen --no-dev --group typecheck --no-install-project
 
       - name: Type check
-        working-directory: jafaal
         run: uv run --no-sync mypy

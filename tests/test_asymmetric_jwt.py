@@ -57,7 +57,7 @@ def test_sign_validate_roundtrip_with_kid(alg):
         tm = get_token_manager()
         _exp, token = tm.create_token("sid-1", _user(), TokenType.ACCESS)
         tm.validate_token_expiration(token, TokenType.ACCESS)  # no raise
-        assert tm.get_token_claim(token, "sub") == 7
+        assert tm.get_token_claim(token, "sub") == "7"
         header = _header(token)
         assert header["alg"] == alg
         assert header["kid"] == key.thumbprint()  # RFC 7638 thumbprint
@@ -78,7 +78,7 @@ def test_resource_server_verifies_with_public_key_only(alg):
     # A resource server rebuilds the key set from JWKS and verifies statelessly.
     keyset = KeySet([_key_class(alg).import_key(k) for k in jwks["keys"]])
     claims = jwt.decode(token, keyset, algorithms=[alg]).claims
-    assert claims["sub"] == 7
+    assert claims["sub"] == "7"
 
 
 def test_hs256_jwks_is_empty():
