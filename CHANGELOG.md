@@ -23,7 +23,10 @@ First release.
   so a host can import existing hashes and have them upgraded transparently on
   first login).
 - Progressive lockout on failed logins, keyed per account **and** per source IP,
-  so one address cannot cheaply lock out many accounts.
+  so one address cannot cheaply lock out many accounts. The source IP is taken
+  from the forwarded chain resolved right-to-left (the first hop not listed in
+  `trusted_proxies`), so a client cannot evade the counter — or forge the IP in
+  audit records — by prepending its own `X-Forwarded-For` value.
 - Timing-equalised failure paths, so response time does not reveal whether an
   account exists or is SSO-only.
 - Breached-password screening (NIST SP 800-63B) via the *Have I Been Pwned*
@@ -43,7 +46,12 @@ First release.
   `/.well-known/oauth-authorization-server`, so a resource server discovers the
   issuer, JWKS, and endpoint URLs instead of hard-coding them.
 - Zero-downtime rotation of both the signing key and the at-rest encryption key,
-  via verify-/decrypt-only fallbacks.
+  via verify-/decrypt-only fallbacks. The overlap covers the stored token digests
+  too (sessions, API keys, CSRF, password-reset, sign-up, IdP-link, rotated
+  refresh tokens), which are MAC'd under HKDF subkeys of `secret_key`: they are
+  read under the primary *and* fallback subkeys and re-keyed as they are
+  rewritten, so rolling `secret_key` does not log everyone out or invalidate
+  every API key.
 - Refresh-token rotation with reuse detection: a replay past a short grace window
   invalidates the whole token family, while a racing retry *within* the window
   replays one idempotent result.
@@ -71,7 +79,9 @@ First release.
 
 **Authorization and integration**
 
-- API keys with a host-configured scope allow-list.
+- API keys with a host-configured scope allow-list. A key can additionally never
+  carry a scope the account minting it does not itself hold, so a credential
+  cannot delegate authority its creator lacks.
 - An extensible scope catalog, surfaced in the Swagger authorize dialog.
 - Ports the host implements — `UserRepository`, `SettingsProvider`,
   `AuthEventSink`, `PasswordBreachChecker`, `RateLimiter`, `StateStore` — so the
@@ -99,6 +109,10 @@ First release.
   `migrations`) that fail fast with an install hint rather than at import time.
 - Startup guards that refuse to run a deployed environment without a rate
   limiter, or on the process-local state store.
+- `AuthSettings.environment` is validated against a known set rather than being a
+  free-form string, so a typo cannot silently disable the deployed-environment
+  controls (cookie `Secure`, cookie name prefix, and the two startup guards).
+  `staging` joins `production` and `demo` as a deployed environment.
 
 See [Security](https://jafaal.endurain.com/security/) and
 [Threat model](https://jafaal.endurain.com/threat-model/) for the security design

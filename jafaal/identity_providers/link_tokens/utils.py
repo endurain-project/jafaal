@@ -35,6 +35,22 @@ def hash_idp_link_token(token: str) -> str:
     return token_hashing.hmac_sha256(token, token_hashing.KeyPurpose.IDP_LINK)
 
 
+def idp_link_token_digests(token: str) -> tuple[str, ...]:
+    """Return every digest an IdP link token could be stored as, primary first.
+
+    Lookups must try each one so a token minted just before a ``secret_key``
+    rotation is still redeemable (see
+    :func:`jafaal.token_hashing.digest_candidates`).
+
+    Args:
+        token: Plaintext link token.
+
+    Returns:
+        Candidate digests, primary key first.
+    """
+    return token_hashing.digest_candidates(token, token_hashing.KeyPurpose.IDP_LINK)
+
+
 def generate_idp_link_token(
     user_id: UserId, idp_id: int, ip_address: str | None, db: Session
 ) -> idp_link_token_schema.IdpLinkTokenResponse:

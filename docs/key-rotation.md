@@ -134,6 +134,43 @@ eagerly or let values roll forward naturally as they are rewritten.
         it makes that value **permanently undecryptable**. When in doubt, keep the
         fallback or re-encrypt first.
 
+## What else `secret_key` protects
+
+`secret_key` does two jobs. Besides signing HS256 JWTs, it is stretched (HKDF-SHA256,
+one subkey per purpose) into the key that MACs every **stored token digest**:
+
+| Digest | Written when |
+|---|---|
+| Session refresh token | login, and every `/auth/refresh` |
+| Rotated refresh token | every `/auth/refresh` (reuse/theft detection) |
+| Session CSRF token | login bootstrap and every rotation |
+| API key | key creation |
+| Password-reset token | reset requested |
+| Sign-up / email-verification token | sign-up |
+| IdP account-link token | link initiated |
+
+Those digests are covered by the same `secret_key_fallbacks` overlap: the read
+side computes the digest under the primary subkey **and** each fallback subkey,
+so nothing minted before the rotation stops working. New digests are always
+written with the primary subkey, so records re-key themselves as they are
+rewritten — a session on its next refresh, a reset token when the next one is
+issued.
+
+!!! warning "API keys need the overlap most"
+    An API-key row is long-lived and is never rewritten on its own, so it cannot
+    "roll forward" the way a session does. JAFAAL therefore **re-keys the row in
+    place** the first time a key is authenticated via a fallback subkey. That
+    means every API key must be *used at least once* during the overlap window to
+    survive the old key being dropped. If you cannot guarantee that, keep the
+    fallback in place longer, or plan to re-issue keys.
+
+!!! note "Passkeys"
+    The WebAuthn *user handle* is also derived from `secret_key`. Authentication
+    resolves the user from the presented credential ID, never from the handle, so
+    rotation does not break sign-in — but passkeys registered before and after a
+    rotation carry different account handles, which some authenticators display
+    as two entries. Cosmetic only.
+
 ## Emergency rotation (suspected key compromise)
 
 A leaked key is different from a routine roll — you cannot wait out an overlap.
@@ -141,8 +178,11 @@ A leaked key is different from a routine roll — you cannot wait out an overlap
 - **`secret_key` compromised:** rotate as above but **do not** keep the leaked key
   as a fallback (an attacker could forge tokens the fallback would accept).
   Dropping it immediately invalidates every live access/refresh token, forcing a
-  global re-login — the correct trade-off under compromise. Rotate the value in
-  your secret manager too.
+  global re-login — the correct trade-off under compromise. It also invalidates
+  every **API key** (their stored digests were keyed by the leaked secret), so
+  plan to re-issue them; that is likewise correct under compromise, since an
+  attacker with the old key could otherwise verify captured keys offline. Rotate
+  the value in your secret manager too.
 - **`fernet_key` compromised:** set the new key primary, keep the old key as a
   fallback **only long enough to re-encrypt** every stored secret, then drop it.
   Treat the previously-encrypted IdP/MFA secrets as exposed: rotate IdP client
@@ -155,5 +195,7 @@ A leaked key is different from a routine roll — you cannot wait out an overlap
 - [ ] New key set **primary**, old key added as **fallback**, and deployed.
 - [ ] Overlap observed (JWT: ≥ `refresh_token_expire_days`; Fernet: until
       re-encrypted).
+- [ ] For `secret_key`: every API key used at least once during the overlap (so
+      its stored digest is re-keyed), or re-issue plan agreed.
 - [ ] Old key removed from fallbacks and redeployed.
 - [ ] Secret-manager entry rotated; rotation recorded in your change log.

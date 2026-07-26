@@ -85,6 +85,12 @@ protections and the deployment steps you are responsible for.
   authorization code cannot be redeemed by an attacker.
 - **Progressive per-account lockout** (escalating windows) on failed login, MFA,
   and step-up attempts, keyed on a normalised, hashed identifier.
+- **Unspoofable client IP.** The lockout and rate-limit keys, and the source IP
+  in audit records, come from the forwarded chain resolved **right to left** —
+  the first hop that is not listed in `trusted_proxies`. A client cannot pick its
+  own apparent address by prepending an `X-Forwarded-For` value (the leftmost
+  element is attacker-controlled, because proxies *append*). List every hop your
+  infrastructure adds; see [Configuration](configuration.md).
 - **Rate limiting** hooks for sensitive/write endpoints (you inject the limiter).
 
 ### Error handling
@@ -191,6 +197,10 @@ Also make sure to:
   reverse proxy, so client IPs (which key the lockout counters) cannot be
   spoofed.
 - Keep `allow_api_key_query_param` disabled unless you specifically need it.
+- Keep the API-key scope allow-list (`configure_api_key_scopes`) as small as the
+  integrations genuinely require. A key can additionally never carry a scope the
+  account minting it does not itself hold, so allow-listing an admin scope does
+  not hand it to regular users — but a tight allow-list is still the first line.
 
 ### Optional hardening knobs
 

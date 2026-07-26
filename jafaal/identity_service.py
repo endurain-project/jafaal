@@ -58,7 +58,7 @@ import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.utils as jafaal_sessions_utils
 import jafaal.settings as jafaal_settings
 import jafaal.utils as jafaal_utils
-from jafaal._core import timeutils
+from jafaal._core import network, timeutils
 from jafaal.orm import UserId
 from jafaal.principal import (
     AccessTokenCred,
@@ -905,21 +905,28 @@ class DefaultIdentityService:
             JafaalError: 401 if the key is not found,
                 revoked, or expired.
         """
-        computed_hash = jafaal_api_keys_utils.hash_api_key(raw_key)
-        db_key = jafaal_api_keys_crud.get_api_key_by_hash(computed_hash, self._db)
-
-        # Constant-time comparison prevents timing attacks
-        # even when the key is not found.
-        stored_hash = db_key.key_hash if db_key else ("0" * 64)
-        if not hmac.compare_digest(stored_hash, computed_hash):
-            db_key = None
+        # Try each candidate digest: primary subkey first, then one per
+        # ``secret_key_fallbacks`` entry. A stored digest is keyed by whichever
+        # secret_key was primary when the key was minted, so a single lookup
+        # would make every existing API key stop working the moment that key is
+        # rotated — silently and unrecoverably, since an API key (unlike a
+        # session) is never rewritten on its own.
+        candidates = jafaal_api_keys_utils.api_key_digests(raw_key)
+        primary_hash = candidates[0]
+        db_key = None
+        matched_hash = primary_hash
+        for candidate in candidates:
+            db_key = jafaal_api_keys_crud.get_api_key_by_hash(candidate, self._db)
+            if db_key is not None:
+                matched_hash = candidate
+                break
 
         if db_key is None:
             jafaal_audit.record(
                 jafaal_audit.Event.API_KEY_AUTH_FAILURE,
                 outcome=jafaal_audit.Outcome.FAILURE,
                 level=logging.WARNING,
-                ip=request.client.host if request.client else None,
+                ip=network.get_ip_address(request),
                 endpoint=request.url.path,
                 reason="unknown_or_invalid_key",
             )
@@ -933,6 +940,14 @@ class DefaultIdentityService:
 
         if db_key.expires_at is not None and datetime.now(UTC) > timeutils.ensure_aware_utc(db_key.expires_at):
             raise jafaal_exceptions.InvalidApiKeyError("API key has expired")
+
+        # Located via a rotation fallback: rewrite the digest under the primary
+        # subkey so the key keeps working once the old secret is dropped.
+        if not hmac.compare_digest(matched_hash, primary_hash):
+            try:
+                jafaal_api_keys_crud.rekey_api_key_digest(db_key.id, primary_hash, self._db)
+            except SQLAlchemyError as err:
+                logger.warning(f"Failed to re-key API key {db_key.id} digest: {err}", exc_info=err)
 
         # Best-effort last_used_at update; never fails the request.
         try:

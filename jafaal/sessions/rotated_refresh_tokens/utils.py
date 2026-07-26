@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 import jafaal.audit as jafaal_audit
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.rotated_refresh_tokens.crud as rotated_token_crud
+import jafaal.sessions.rotated_refresh_tokens.models as rotated_token_models
 import jafaal.sessions.rotated_refresh_tokens.schema as rotated_token_schema
 import jafaal.token_hashing as token_hashing
 from jafaal._core import crypto, timeutils
@@ -48,6 +49,31 @@ def hmac_hash_token(token: str) -> str:
         RuntimeError: If JAFAAL has not been configured.
     """
     return token_hashing.hmac_sha256(token, token_hashing.KeyPurpose.REFRESH_ROTATED)
+
+
+def _find_rotated_token(
+    raw_token: str,
+    db: Session,
+) -> rotated_token_models.RotatedRefreshToken | None:
+    """Locate a rotated-token record, accepting digests from rotated-out keys.
+
+    The digest is keyed by whichever ``secret_key`` was primary when the record
+    was written, so a single equality lookup would stop finding rows the moment
+    that key is rotated — silently blinding reuse/theft detection for the whole
+    overlap window. Each candidate digest is tried, primary first.
+
+    Args:
+        raw_token: The raw refresh token being looked up.
+        db: SQLAlchemy database session.
+
+    Returns:
+        The matching rotated-token record, or ``None``.
+    """
+    for digest in token_hashing.digest_candidates(raw_token, token_hashing.KeyPurpose.REFRESH_ROTATED):
+        rotated_token = rotated_token_crud.get_rotated_token_by_hash(digest, db)
+        if rotated_token is not None:
+            return rotated_token
+    return None
 
 
 def store_rotated_token(
@@ -120,8 +146,7 @@ def check_token_reuse(raw_token: str, db: Session) -> tuple[bool, bool]:
         JafaalError: If lookup fails.
     """
     # Use HMAC-SHA256 for deterministic lookup
-    hashed_token = hmac_hash_token(raw_token)
-    rotated_token = rotated_token_crud.get_rotated_token_by_hash(hashed_token, db)
+    rotated_token = _find_rotated_token(raw_token, db)
 
     if not rotated_token:
         return (False, False)
@@ -187,8 +212,7 @@ def get_grace_replay_token(raw_token: str, db: Session) -> tuple[str, datetime] 
     Raises:
         JafaalError: If lookup or decryption fails.
     """
-    hashed_token = hmac_hash_token(raw_token)
-    rotated_token = rotated_token_crud.get_rotated_token_by_hash(hashed_token, db)
+    rotated_token = _find_rotated_token(raw_token, db)
 
     if rotated_token is None:
         return None

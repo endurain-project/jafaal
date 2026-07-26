@@ -1,6 +1,5 @@
 """Session utility functions and classes."""
 
-import hmac
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -81,8 +80,10 @@ def _hash_csrf_token(token: str) -> str:
 def verify_csrf_token(candidate: str, stored_hmac: str) -> bool:
     """Verify a CSRF token candidate against its stored HMAC in constant time.
 
-    Recomputes the HMAC of ``candidate`` and uses ``hmac.compare_digest``
-    to prevent timing attacks.
+    Delegates to :func:`jafaal.token_hashing.verify_hmac`, which compares in
+    constant time against the primary subkey and any ``secret_key_fallbacks``
+    subkeys — so a binding minted before a signing-key rotation keeps verifying
+    during the overlap window.
 
     Args:
         candidate: The CSRF token value from the request header.
@@ -91,8 +92,7 @@ def verify_csrf_token(candidate: str, stored_hmac: str) -> bool:
     Returns:
         True if the candidate matches the stored HMAC, False otherwise.
     """
-    expected = _hash_csrf_token(candidate)
-    return hmac.compare_digest(expected, stored_hmac)
+    return token_hashing.verify_hmac(candidate, token_hashing.KeyPurpose.CSRF, stored_hmac)
 
 
 # --------------------------------------------------------------------------- #
@@ -124,6 +124,11 @@ def hash_refresh_token(refresh_token: str) -> str:
 def verify_refresh_token(candidate: str, stored_hash: str) -> bool:
     """Verify a presented refresh token against a session's stored digest.
 
+    Accepts a digest written under a rotated-out ``secret_key`` (see
+    :func:`jafaal.token_hashing.verify_hmac`), so rolling the signing key does
+    not invalidate every live session. The next ``/refresh`` rewrites the row
+    with a primary-key digest, so sessions re-key themselves as they rotate.
+
     Args:
         candidate: The raw refresh token presented by the caller.
         stored_hash: The digest persisted on the session row.
@@ -131,7 +136,7 @@ def verify_refresh_token(candidate: str, stored_hash: str) -> bool:
     Returns:
         True if the candidate matches the stored digest, False otherwise.
     """
-    return hmac.compare_digest(hash_refresh_token(candidate), stored_hash)
+    return token_hashing.verify_hmac(candidate, token_hashing.KeyPurpose.REFRESH_SESSION, stored_hash)
 
 
 def validate_session_timeout(

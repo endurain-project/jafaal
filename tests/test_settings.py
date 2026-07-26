@@ -184,7 +184,33 @@ def test_issuer_audience_fall_back_to_base_url():
 def test_is_deployed():
     assert _valid(environment="production").is_deployed is True
     assert _valid(environment="demo").is_deployed is True
+    assert _valid(environment="staging").is_deployed is True
     assert _valid(environment="test").is_deployed is False
+    assert _valid(environment="development").is_deployed is False
+
+
+def test_every_known_environment_is_accepted():
+    for name in settings_mod.KNOWN_ENVIRONMENTS:
+        assert _valid(environment=name).environment == name
+
+
+def test_unknown_environment_is_rejected():
+    # ``is_deployed`` gates the cookie Secure flag, the cookie name prefix, and
+    # the two fail-closed startup guards, so a typo must never silently fall
+    # through to "not deployed".
+    for typo in ("prod", "Production", "PRODUCTION", "live", "prd", ""):
+        with pytest.raises(ValueError, match="not a recognised environment"):
+            _valid(environment=typo)
+
+
+def test_deployed_and_local_environment_sets_are_disjoint():
+    assert not (settings_mod.DEPLOYED_ENVIRONMENTS & settings_mod.LOCAL_ENVIRONMENTS)
+    assert settings_mod.KNOWN_ENVIRONMENTS == (settings_mod.DEPLOYED_ENVIRONMENTS | settings_mod.LOCAL_ENVIRONMENTS)
+
+
+def test_default_environment_is_the_safe_one():
+    # Forgetting to set it must not weaken a deployment.
+    assert _valid().is_deployed is True
 
 
 def test_settings_are_frozen():

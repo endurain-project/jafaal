@@ -64,6 +64,10 @@ def hash_api_key(raw_key: str) -> str:
     not let an attacker verify a stolen key offline, and an API-key digest can
     never collide with a digest computed for another purpose.
 
+    This is the **write** side (always the primary subkey). Authentication looks
+    a key up through :func:`api_key_digests` so keys minted before a
+    ``secret_key`` rotation keep working.
+
     Args:
         raw_key: The plain-text API key to hash.
 
@@ -73,28 +77,71 @@ def hash_api_key(raw_key: str) -> str:
     return token_hashing.hmac_sha256(raw_key, token_hashing.KeyPurpose.API_KEY)
 
 
-def validate_api_key_scopes(
-    requested_scopes: list[str],
-) -> None:
-    """
-    Validate requested scopes against the host-configured API-key allow-list.
+def api_key_digests(raw_key: str) -> tuple[str, ...]:
+    """Return every digest an API key could be stored as, primary first.
 
-    The set of scopes an API key may carry is installed by the host via
-    :func:`configure_api_key_scopes` (empty by default). A request for any
-    scope outside that allow-list — or an empty request — is rejected.
+    An API key is long-lived and its row is never rewritten on its own, so a
+    ``secret_key`` rotation would otherwise invalidate every existing key —
+    permanently, and with no signal to the owner. Authentication therefore tries
+    each candidate and re-keys the row to the primary digest on a fallback match.
 
     Args:
-        requested_scopes: List of scopes the caller wants
-            to assign to the new API key.
+        raw_key: The plain-text API key presented by the caller.
+
+    Returns:
+        Candidate digests, primary subkey first.
+    """
+    return token_hashing.digest_candidates(raw_key, token_hashing.KeyPurpose.API_KEY)
+
+
+def validate_api_key_scopes(
+    requested_scopes: list[str],
+    *,
+    granted_scopes: Iterable[str],
+) -> None:
+    """
+    Validate requested scopes against the allow-list **and** the caller's own.
+
+    Two independent bounds, because either alone is insufficient:
+
+    * the host-configured allow-list (:func:`configure_api_key_scopes`, empty by
+      default) caps what an API key may *ever* carry, so keys do not silently
+      gain access when new endpoints and scopes are added later; and
+    * ``granted_scopes`` — the scopes the requesting principal actually holds —
+      caps what *this* caller may delegate. Without it any authenticated user
+      could mint a key carrying an allow-listed admin scope they do not hold and
+      then authenticate with it, turning API-key creation into a privilege
+      escalation. A credential can never delegate authority its creator lacks.
+
+    Args:
+        requested_scopes: List of scopes the caller wants to assign to the new
+            API key.
+        granted_scopes: Scopes held by the principal creating the key.
 
     Raises:
-        ValueError: If any requested scope is not supported, or none is given.
+        ValueError: If no scope is requested, or any requested scope is outside
+            the allow-list or not held by the caller.
     """
+    if not requested_scopes:
+        raise ValueError(f"No API key scopes requested. Valid scopes: {sorted(get_api_key_scopes())}")
+
+    requested = set(requested_scopes)
     supported = get_api_key_scopes()
-    unsupported = set(requested_scopes) - supported
-    if unsupported or not requested_scopes:
-        offending = unsupported or set(requested_scopes)
-        raise ValueError(f"Unsupported API key scopes: {sorted(offending)}. Valid scopes: {sorted(supported)}")
+
+    unsupported = requested - supported
+    if unsupported:
+        raise ValueError(f"Unsupported API key scopes: {sorted(unsupported)}. Valid scopes: {sorted(supported)}")
+
+    # Reported separately from ``unsupported``: "the deployment does not offer
+    # this scope" and "you do not hold this scope" are different problems, and
+    # conflating them would tell a caller that an admin scope exists but hide why
+    # it was refused.
+    not_granted = requested - set(granted_scopes)
+    if not_granted:
+        raise ValueError(
+            f"Cannot grant API key scopes you do not hold: {sorted(not_granted)}. "
+            "An API key may only carry scopes the requesting account has."
+        )
 
 
 def scopes_to_json(scopes: list[str]) -> str:

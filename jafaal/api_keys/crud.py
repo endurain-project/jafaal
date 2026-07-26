@@ -4,7 +4,7 @@ import logging
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 import jafaal.api_keys.models as api_keys_models
@@ -193,6 +193,37 @@ def update_last_used(
         raise jafaal_exceptions.NotFoundError(f"API key {api_key_id} not found")
 
     db_api_key.last_used_at = datetime.now(UTC)
+    db.commit()
+
+
+@db_errors.handle_db_errors
+def rekey_api_key_digest(
+    api_key_id: str,
+    new_key_hash: str,
+    db: Session,
+) -> None:
+    """
+    Rewrite an API key's stored digest under the current primary signing key.
+
+    Called when a key was located via a ``secret_key_fallbacks`` digest: unlike
+    sessions (which re-key themselves on the next refresh) an API key is
+    long-lived and never rewritten, so without this it would stop authenticating
+    the moment the old key is dropped from the fallback list.
+
+    Args:
+        api_key_id: The UUID of the API key.
+        new_key_hash: Digest computed under the primary subkey.
+        db: SQLAlchemy database session.
+
+    Raises:
+        InternalError: If a database error occurs.
+    """
+    stmt = (
+        update(api_keys_models.UsersApiKeys)
+        .where(api_keys_models.UsersApiKeys.id == api_key_id)
+        .values(key_hash=new_key_hash)
+    )
+    db.execute(stmt)
     db.commit()
 
 

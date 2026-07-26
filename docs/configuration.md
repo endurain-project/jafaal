@@ -48,7 +48,7 @@ the settings and invalidates settings-derived caches (e.g. the token manager).
 | `session_absolute_timeout_hours` | `24` | Absolute session lifetime. |
 | `base_url` | `""` | Public base URL; default JWT issuer/audience and SSO redirect base. |
 | `csrf_trusted_origins` | `()` | Origins allowed to drive the web refresh flow; defaults to the `base_url` origin. **Set this when the frontend is served from a different origin than the API.** |
-| `environment` | `"production"` | `production`/`demo` are treated as deployed (cookie `Secure`). |
+| `environment` | `"production"` | One of `production`, `demo`, `staging`, `development`, `local`, `test`, `testing`. The first three are treated as **deployed**; anything else is rejected at construction. |
 | `refresh_cookie_prefix` | `""` | Optional `__Secure-`/`__Host-` refresh-cookie name prefix, applied only when deployed (`__Host-` requires `refresh_cookie_path="/"`). |
 | `allow_api_key_query_param` | `False` | Whether API keys may be sent via `?api_key=` (header only by default). |
 | `allow_in_memory_state_store_when_deployed` | `False` | Permit the in-memory state store in a deployed environment (single-worker only; otherwise `create_auth_router()` raises at startup). |
@@ -68,7 +68,7 @@ the settings and invalidates settings-derived caches (e.g. the token manager).
 | `webauthn_challenge_ttl_seconds` | `300` | Lifetime of a WebAuthn challenge held in the state store. |
 | `rate_limit_sensitive` | `"10/minute"` | Budget hint for sensitive endpoints. |
 | `rate_limit_write` | `"30/minute"` | Budget hint for write endpoints. |
-| `trusted_proxies` | `()` | Peers whose `X-Forwarded-For`/`X-Real-IP` are honoured (empty = trust only the direct peer). |
+| `trusted_proxies` | `()` | Peers **and forwarding hops** whose `X-Forwarded-For`/`X-Real-IP` are honoured (empty = trust only the direct peer). |
 | `ssrf_allowed_hosts` | `()` | Hosts/CIDRs exempted from the SSRF private-address guard. |
 | `idp_require_https` | `True` | Require `https` for identity-provider endpoints (authorization, token, userinfo, JWKS, discovery, revocation); set `False` to allow `http://` for local or self-hosted development. |
 | `audit_include_pii` | `True` | Include direct identifiers (username/IP/email) in `jafaal.audit` records; set `False` for PII-minimal retention. |
@@ -80,6 +80,25 @@ the settings and invalidates settings-derived caches (e.g. the token manager).
     behind a reverse proxy, set it to your proxy addresses/CIDRs so the real
     client IP is used; `("*",)` trusts every peer (only safe when a trusted proxy
     always overwrites the header).
+
+    **List every hop, not just the direct peer.** The forwarded chain is resolved
+    **right to left**, returning the first address that is not listed in
+    `trusted_proxies`. That is deliberate: a proxy configured the usual way
+    (nginx's `proxy_add_x_forwarded_for`) *appends* the address it observed to
+    whatever the client sent, so a request carrying
+    `X-Forwarded-For: 1.2.3.4` arrives as `1.2.3.4, <real client>` — the leftmost
+    element is entirely attacker-controlled. With a CDN in front of a reverse
+    proxy, list both the CDN egress ranges and the proxy, or resolution stops one
+    hop short at the CDN edge address.
+
+!!! warning "`environment` is validated"
+    `environment` must be one of the values in the table above. It is not a free
+    -form label: `is_deployed` gates the refresh cookie's `Secure` flag, the
+    `__Secure-`/`__Host-` cookie prefix, and the two fail-closed startup guards,
+    so a typo such as `"prod"` would silently switch all four off. An
+    unrecognised value raises at `AuthSettings(...)` construction instead. The
+    default is the safe one (`"production"`), so forgetting to set it cannot
+    weaken a deployment.
 
 !!! warning "Split-origin frontends"
     `/auth/refresh` rejects any request a browser marks as off-site, using the

@@ -234,9 +234,18 @@ def validate_and_claim_browser_link_token(
         JafaalError: 400 if token was already used (race/replay).
         JafaalError: 409 if the IdP is already linked to the user.
     """
-    link_token_hash = idp_link_token_utils.hash_idp_link_token(link_token)
-    db_token = idp_link_token_crud.get_idp_link_token_by_hash(link_token_hash, db)
-    if not db_token:
+    # Try each candidate digest (primary key first, then any
+    # secret_key_fallbacks) so a token minted just before a signing-key rotation
+    # is still redeemable. The matched digest is reused for mark_token_as_used so
+    # the claim targets the same row that was found.
+    link_token_hash: str | None = None
+    db_token = None
+    for candidate in idp_link_token_utils.idp_link_token_digests(link_token):
+        db_token = idp_link_token_crud.get_idp_link_token_by_hash(candidate, db)
+        if db_token is not None:
+            link_token_hash = candidate
+            break
+    if not db_token or link_token_hash is None:
         raise jafaal_exceptions.InvalidTokenError("Invalid or expired link token")
 
     if db_token.idp_id != idp_id:

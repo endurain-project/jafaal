@@ -123,3 +123,86 @@ def test_get_ip_address_falls_back_to_peer():
 def test_get_ip_address_unknown_when_no_client():
     scope = {"type": "http", "method": "GET", "path": "/", "query_string": b"", "headers": [], "scheme": "http"}
     assert network.get_ip_address(Request(scope)) == "unknown"
+
+
+# --------------------------------------------------------------------------- #
+# X-Forwarded-For spoofing
+#
+# A proxy configured the usual way (nginx's proxy_add_x_forwarded_for) APPENDS
+# the peer it saw to whatever the client sent, so the leftmost element is
+# attacker-controlled. The chain must be resolved right-to-left, skipping known
+# infrastructure, or a caller could pick its own apparent source IP and evade the
+# per-IP login lockout and the rate limiter.
+# --------------------------------------------------------------------------- #
+
+
+def test_spoofed_leftmost_xff_entry_is_ignored():
+    # Client sent "X-Forwarded-For: 1.2.3.4"; the proxy (203.0.113.1) appended
+    # the address it actually observed (198.51.100.7).
+    with _settings(trusted_proxies=("203.0.113.1",)):
+        req = _request("203.0.113.1", {"X-Forwarded-For": "1.2.3.4, 198.51.100.7"})
+        assert network.get_ip_address(req) == "198.51.100.7"
+
+
+def test_spoofed_xff_cannot_vary_the_resolved_ip():
+    # Whatever the client prepends, the resolved IP is stable — otherwise the
+    # per-IP lockout key could be rotated at will.
+    with _settings(trusted_proxies=("203.0.113.1",)):
+        for forged in ("9.9.9.9", "8.8.8.8, 7.7.7.7", "unknown", ""):
+            header = f"{forged}, 198.51.100.7" if forged else "198.51.100.7"
+            req = _request("203.0.113.1", {"X-Forwarded-For": header})
+            assert network.get_ip_address(req) == "198.51.100.7"
+
+
+def test_multi_hop_chain_skips_every_listed_proxy():
+    # CDN edge (198.51.100.0/24) → reverse proxy (203.0.113.1) → app. Both hops
+    # are infrastructure, so the client is the rightmost address that is not.
+    with _settings(trusted_proxies=("203.0.113.1", "198.51.100.0/24")):
+        req = _request("203.0.113.1", {"X-Forwarded-For": "1.2.3.4, 192.0.2.55, 198.51.100.7"})
+        assert network.get_ip_address(req) == "192.0.2.55"
+
+
+def test_unlisted_intermediate_hop_stops_the_walk():
+    # Only the direct proxy is listed, so the walk stops at the hop it appended.
+    with _settings(trusted_proxies=("203.0.113.1",)):
+        req = _request("203.0.113.1", {"X-Forwarded-For": "1.2.3.4, 192.0.2.55, 198.51.100.7"})
+        assert network.get_ip_address(req) == "198.51.100.7"
+
+
+def test_xff_hop_with_port_is_normalized():
+    with _settings(trusted_proxies=("203.0.113.1",)):
+        req = _request("203.0.113.1", {"X-Forwarded-For": "198.51.100.7:41234"})
+        assert network.get_ip_address(req) == "198.51.100.7"
+
+
+def test_bracketed_ipv6_hop_is_normalized():
+    with _settings(trusted_proxies=("203.0.113.1",)):
+        req = _request("203.0.113.1", {"X-Forwarded-For": "[2001:db8::1]:8080"})
+        assert network.get_ip_address(req) == "2001:db8::1"
+
+
+def test_non_ip_xff_hops_are_skipped():
+    # RFC 7239 obfuscated identifiers and junk must never reach a lockout key.
+    with _settings(trusted_proxies=("203.0.113.1",)):
+        req = _request("203.0.113.1", {"X-Forwarded-For": "_hidden, 198.51.100.7, unknown"})
+        assert network.get_ip_address(req) == "198.51.100.7"
+
+
+def test_wholly_unusable_xff_falls_back_to_peer():
+    with _settings(trusted_proxies=("203.0.113.1",)):
+        req = _request("203.0.113.1", {"X-Forwarded-For": "unknown, not-an-ip"})
+        assert network.get_ip_address(req) == "203.0.113.1"
+
+
+def test_all_hops_trusted_returns_leftmost():
+    # trusted_proxies=("*",) asserts a trusted proxy always overwrites the
+    # header, so there is no untrusted hop and the leftmost is the client.
+    with _settings(trusted_proxies=("*",)):
+        req = _request("203.0.113.1", {"X-Forwarded-For": "1.2.3.4, 5.6.7.8"})
+        assert network.get_ip_address(req) == "1.2.3.4"
+
+
+def test_malformed_real_ip_falls_back_to_peer():
+    with _settings(trusted_proxies=("203.0.113.1",)):
+        req = _request("203.0.113.1", {"X-Real-IP": "not-an-ip"})
+        assert network.get_ip_address(req) == "203.0.113.1"

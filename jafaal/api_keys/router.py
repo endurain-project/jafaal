@@ -15,6 +15,7 @@ import jafaal.dependencies as jafaal_dependencies
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_service as jafaal_identity_service
 import jafaal.orm as jafaal_orm
+from jafaal.principal import Principal
 
 # Define the API router
 router = APIRouter()
@@ -53,9 +54,9 @@ def get_user_api_keys(
 )
 def create_user_api_key(
     data: api_keys_schema.UsersApiKeyCreate,
-    token_user_id: Annotated[
-        int,
-        Depends(jafaal_internal_dependencies.get_sub_from_access_token),
+    principal: Annotated[
+        Principal,
+        Depends(jafaal_dependencies.get_current_principal),
     ],
     identity_service: Annotated[
         jafaal_identity_service.IdentityService,
@@ -72,7 +73,9 @@ def create_user_api_key(
 
     The raw key is returned once in this response and
     cannot be retrieved again. Requested scopes must be
-    supported by API-key authentication.
+    supported by API-key authentication **and** held by
+    the requesting account — a key can never carry more
+    authority than the caller minting it.
 
     Step-up verification is required (current password,
     plus MFA code when MFA is enabled). API keys grant
@@ -82,8 +85,9 @@ def create_user_api_key(
     Args:
         data: Key creation data (name, scopes, expiry,
             step-up credentials).
-        token_user_id: User ID from access token.
+        principal: The authenticated caller, including the scopes it holds.
         identity_service: Identity service dependency.
+        step_up_store: Step-up lockout store dependency.
         db: Database session dependency.
 
     Returns:
@@ -91,9 +95,11 @@ def create_user_api_key(
 
     Raises:
         AuthenticationError: 401 if step-up verification fails.
-        InvalidRequestError: 400 if scopes are not supported for API keys.
+        InvalidRequestError: 400 if scopes are not supported for API keys or are
+            not held by the caller.
         NotFoundError: 404 if the user is not found.
     """
+    token_user_id = principal.user_id
     jafaal_user_guards.get_user_by_id_or_404(token_user_id, db)
 
     step_up_service.verify_step_up_credentials(
@@ -106,7 +112,9 @@ def create_user_api_key(
     )
 
     try:
-        api_keys_utils.validate_api_key_scopes(data.scopes)
+        # Bounded by the caller's own scopes as well as the host allow-list, so
+        # minting a key cannot escalate privilege.
+        api_keys_utils.validate_api_key_scopes(data.scopes, granted_scopes=principal.scopes)
     except ValueError as exc:
         raise jafaal_exceptions.InvalidRequestError(str(exc)) from exc
 

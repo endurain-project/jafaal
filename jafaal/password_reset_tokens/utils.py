@@ -127,10 +127,14 @@ def use_password_reset_token(
         JafaalError: 422 if the new password fails the account's password policy.
         JafaalError: 500 if password update or token marking fails.
     """
-    # Hash the provided token to find the database record.
-    token_hash = token_hashing.hmac_sha256(token, token_hashing.KeyPurpose.PASSWORD_RESET)
-
-    token_user_id = password_reset_tokens_crud.claim_password_reset_token(token_hash, db)
+    # Hash the provided token to find the database record. Every candidate
+    # digest is tried (primary key first, then any secret_key_fallbacks), so a
+    # token minted before a signing-key rotation is still redeemable.
+    token_user_id: UserId | None = None
+    for token_hash in token_hashing.digest_candidates(token, token_hashing.KeyPurpose.PASSWORD_RESET):
+        token_user_id = password_reset_tokens_crud.claim_password_reset_token(token_hash, db)
+        if token_user_id is not None:
+            break
     if token_user_id is None:
         jafaal_audit.record(
             jafaal_audit.Event.PASSWORD_RESET_COMPLETED,

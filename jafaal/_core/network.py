@@ -4,7 +4,8 @@ Provides:
 
 * :func:`get_ip_address` — extract the real client IP, honouring
   ``X-Forwarded-For`` / ``X-Real-IP`` only when the direct peer is a trusted
-  proxy (``AuthSettings.trusted_proxies``).
+  proxy (``AuthSettings.trusted_proxies``), and resolving the forwarded chain
+  right-to-left so a client cannot spoof its own source address.
 * :func:`reject_private_url` — refuse to dial URLs that resolve to
   private/internal addresses (SSRF guard), with an
   ``AuthSettings.ssrf_allowed_hosts`` escape hatch.
@@ -190,6 +191,74 @@ def _is_trusted_peer(peer_ip: str) -> bool:
     return peer_ip in _resolved_trusted_proxy_ips
 
 
+def _normalize_forwarded_hop(hop: str) -> str | None:
+    """Return the bare IP literal in an ``X-Forwarded-For`` hop, or ``None``.
+
+    Hops are written in several shapes in the wild: a bare address, an address
+    with a port (``1.2.3.4:5678``), a bracketed IPv6 address with or without a
+    port (``[2001:db8::1]:8080``), or the RFC 7239 placeholder ``unknown``.
+    Anything that does not reduce to a valid IP literal returns ``None`` so the
+    caller skips it rather than propagating a client-controlled string into a
+    lockout key or an audit record.
+
+    Args:
+        hop: One comma-separated ``X-Forwarded-For`` element.
+
+    Returns:
+        The normalised IP literal, or ``None`` when the hop is unusable.
+    """
+    candidate = hop.strip()
+    if not candidate:
+        return None
+    if candidate.startswith("["):
+        # [2001:db8::1] or [2001:db8::1]:8080
+        closing = candidate.find("]")
+        if closing == -1:
+            return None
+        candidate = candidate[1:closing]
+    elif candidate.count(":") == 1:
+        # Exactly one colon means IPv4 + port; a bare IPv6 address has several.
+        candidate = candidate.split(":", 1)[0]
+    return candidate if _looks_like_ip(candidate) else None
+
+
+def _client_ip_from_forwarded_for(forwarded_for: str) -> str | None:
+    """Return the client IP from an ``X-Forwarded-For`` chain, or ``None``.
+
+    Walks the chain **right to left**, discarding hops that are themselves
+    trusted infrastructure (``trusted_proxies``), and returns the first hop that
+    is not. That hop is the closest address the infrastructure actually
+    observed, and therefore the last one an attacker could not have written.
+
+    Taking the *leftmost* hop instead — the intuitive "original client" — is
+    unsafe: a proxy configured the usual way (nginx's
+    ``proxy_add_x_forwarded_for``) **appends** the peer it saw to whatever the
+    client sent, so a request carrying ``X-Forwarded-For: 1.2.3.4`` arrives as
+    ``1.2.3.4, <real client>``. The leftmost element is then entirely
+    attacker-controlled, which would let a caller evade the per-IP login lockout
+    and the rate limiter, and forge the source IP recorded in audit records, just
+    by varying a header.
+
+    When every hop is trusted infrastructure (or ``trusted_proxies`` is
+    ``("*",)``, which trusts all of them) there is no untrusted hop to find, so
+    the leftmost is returned: that configuration asserts that a trusted proxy
+    always overwrites the header.
+
+    Args:
+        forwarded_for: The raw ``X-Forwarded-For`` header value.
+
+    Returns:
+        The resolved client IP, or ``None`` when no hop is usable.
+    """
+    hops = [normalized for raw in forwarded_for.split(",") if (normalized := _normalize_forwarded_hop(raw))]
+    if not hops:
+        return None
+    for hop in reversed(hops):
+        if not _is_trusted_peer(hop):
+            return hop
+    return hops[0]
+
+
 def get_ip_address(request: Request) -> str:
     """Extract client IP address from request, respecting ``trusted_proxies``.
 
@@ -198,6 +267,14 @@ def get_ip_address(request: Request) -> str:
     attackers from spoofing their IP by injecting those headers on direct
     connections. ``trusted_proxies`` defaults to empty — only the direct peer is
     trusted; set it to ``("*",)`` to trust every peer.
+
+    ``X-Forwarded-For`` is resolved by walking the chain right to left and
+    returning the first hop that is *not* trusted infrastructure (see
+    :func:`_client_ip_from_forwarded_for`), so a client cannot choose its own
+    apparent source IP by prepending one. Every hop your infrastructure adds —
+    not just the direct peer — must therefore appear in ``trusted_proxies`` (for
+    example both the CDN egress ranges and the reverse proxy) for the true client
+    address to be recovered.
 
     Args:
         request: Request object with headers and client info.
@@ -210,12 +287,17 @@ def get_ip_address(request: Request) -> str:
     if peer_ip and _is_trusted_peer(peer_ip):
         forwarded_for = request.headers.get("X-Forwarded-For")
         if forwarded_for:
-            # Take the leftmost IP: the original client
-            return forwarded_for.split(",")[0].strip()
+            client_ip = _client_ip_from_forwarded_for(forwarded_for)
+            if client_ip:
+                return client_ip
 
+        # Single-value header written by the proxy itself; still validated so a
+        # malformed value cannot reach a lockout key.
         real_ip = request.headers.get("X-Real-IP")
         if real_ip:
-            return real_ip
+            normalized_real_ip = _normalize_forwarded_hop(real_ip)
+            if normalized_real_ip:
+                return normalized_real_ip
 
     return peer_ip or "unknown"
 

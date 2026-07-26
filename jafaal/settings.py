@@ -35,6 +35,9 @@ from jafaal._core.registry import ConfigSlot
 
 __all__ = [
     "ALLOWED_ALGORITHMS",
+    "DEPLOYED_ENVIRONMENTS",
+    "KNOWN_ENVIRONMENTS",
+    "LOCAL_ENVIRONMENTS",
     "MIN_SECRET_KEY_LENGTH",
     "AuthSettings",
     "configure",
@@ -56,6 +59,23 @@ ALLOWED_ALGORITHMS: frozenset[str] = frozenset({"HS256"}) | jwk_keys.ASYMMETRIC_
 # is brute-forceable, so it is rejected at construction rather than silently
 # accepted.
 MIN_SECRET_KEY_LENGTH: int = 32
+
+# Environment names treated as *deployed*. This single predicate gates four
+# security controls at once — the refresh cookie's ``Secure`` flag and
+# ``__Secure-``/``__Host-`` prefix, the in-memory-state-store startup refusal,
+# and the missing-rate-limiter startup refusal — so the value must never be a
+# free-form string: a typo (``"prod"``, ``"Production"``, ``"live"``) would
+# silently turn all four off. ``AuthSettings.__post_init__`` therefore rejects
+# anything outside :data:`KNOWN_ENVIRONMENTS`.
+DEPLOYED_ENVIRONMENTS: frozenset[str] = frozenset({"production", "demo", "staging"})
+
+# Environment names treated as local/non-deployed: served over plain http, so
+# ``Secure`` cookies would never be stored and the single-process defaults are
+# appropriate.
+LOCAL_ENVIRONMENTS: frozenset[str] = frozenset({"development", "local", "test", "testing"})
+
+#: Every accepted :attr:`AuthSettings.environment` value.
+KNOWN_ENVIRONMENTS: frozenset[str] = DEPLOYED_ENVIRONMENTS | LOCAL_ENVIRONMENTS
 
 
 @dataclass(frozen=True)
@@ -101,9 +121,12 @@ class AuthSettings:
             login error, joined onto :attr:`base_url`.
         sso_link_result_path: Host frontend path the SSO callback redirects to
             after an account-link attempt, joined onto :attr:`base_url`.
-        environment: Deployment environment string. ``production``/``demo`` are
-            treated as deployed (drives the cookie ``Secure`` flag and demo-mode
-            guards).
+        environment: Deployment environment string. Must be one of
+            :data:`KNOWN_ENVIRONMENTS`; the :data:`DEPLOYED_ENVIRONMENTS`
+            members (``production``/``demo``/``staging``) are treated as
+            deployed (drives the cookie ``Secure`` flag, the cookie name
+            prefix, and the fail-closed startup guards). An unrecognised value
+            is rejected at construction rather than silently treated as local.
         allow_api_key_query_param: Whether API keys may be supplied via the
             ``?api_key=`` query string (a security risk; defaults to False so
             only the ``X-API-Key`` header is accepted).
@@ -146,13 +169,16 @@ class AuthSettings:
             :class:`~jafaal.rate_limit.RateLimiter`.
         rate_limit_write: Budget for write endpoints (e.g. logout, session
             revocation), consumed by the host's ``RateLimiter``.
-        trusted_proxies: Peers whose ``X-Forwarded-For`` / ``X-Real-IP`` headers
-            are honoured. Empty by default, which trusts only the direct TCP
-            peer (the safe default: proxy headers from arbitrary clients are
-            ignored, so a client cannot spoof its source IP). Set explicit proxy
-            IPs/CIDRs when running behind a reverse proxy, or ``("*",)`` to trust
-            every peer (only safe when a trusted proxy always overwrites the
-            header).
+        trusted_proxies: Peers and forwarding hops whose ``X-Forwarded-For`` /
+            ``X-Real-IP`` headers are honoured. Empty by default, which trusts
+            only the direct TCP peer (the safe default: proxy headers from
+            arbitrary clients are ignored, so a client cannot spoof its source
+            IP). Set explicit proxy IPs/CIDRs when running behind a reverse
+            proxy — list **every** hop your infrastructure adds (e.g. both the
+            CDN egress ranges and the reverse proxy), because the forwarded
+            chain is resolved right-to-left and stops at the first hop that is
+            not listed here. ``("*",)`` trusts every hop (only safe when a
+            trusted proxy always overwrites the header).
         ssrf_allowed_hosts: Hosts/CIDRs exempted from the SSRF private-address
             guard on outbound OIDC calls.
         idp_require_https: When ``True`` (default), identity-provider endpoints
@@ -278,6 +304,9 @@ class AuthSettings:
     csrf_trusted_origins: tuple[str, ...] = ()
 
     # --- environment ---
+    # Must be one of KNOWN_ENVIRONMENTS (validated in __post_init__). Defaults to
+    # the safest value: "production" turns on every deployed-environment control,
+    # so forgetting to set it cannot weaken the deployment.
     environment: str = "production"
 
     # --- security toggles ---
@@ -369,8 +398,9 @@ class AuthSettings:
 
     # --- network / SSRF ---
     # Empty by default: trust only the direct peer (proxy headers are ignored),
-    # so a client cannot spoof X-Forwarded-For / X-Real-IP. Set explicit proxy
-    # IPs/CIDRs behind a reverse proxy, or ("*",) to trust all peers.
+    # so a client cannot spoof X-Forwarded-For / X-Real-IP. Behind a reverse
+    # proxy list every forwarding hop (the chain is walked right-to-left and
+    # stops at the first unlisted hop), or ("*",) to trust all of them.
     trusted_proxies: tuple[str, ...] = ()
     ssrf_allowed_hosts: tuple[str, ...] = ()
 
@@ -495,6 +525,17 @@ class AuthSettings:
             raise ValueError("AuthSettings.webauthn_challenge_ttl_seconds must be positive")
         if self.jwt_leeway_seconds < 0:
             raise ValueError("AuthSettings.jwt_leeway_seconds must be non-negative")
+        if self.environment not in KNOWN_ENVIRONMENTS:
+            # Rejected rather than defaulted: ``is_deployed`` gates the cookie
+            # ``Secure`` flag, the cookie name prefix, and the two fail-closed
+            # startup guards, so an unrecognised value (a typo such as "prod")
+            # would silently disable all four in production.
+            raise ValueError(
+                f"AuthSettings.environment={self.environment!r} is not a recognised environment. "
+                f"Use one of {sorted(KNOWN_ENVIRONMENTS)} — {sorted(DEPLOYED_ENVIRONMENTS)} are treated "
+                "as deployed (refresh cookies get Secure, and startup fails closed without a distributed "
+                "state store and an enforcing rate limiter)."
+            )
         if self.password_max_length < 64:
             raise ValueError(
                 "AuthSettings.password_max_length must be at least 64 so long passphrases are "
@@ -566,8 +607,14 @@ class AuthSettings:
 
     @property
     def is_deployed(self) -> bool:
-        """Whether the environment is a deployed one (``production``/``demo``)."""
-        return self.environment in ("production", "demo")
+        """Whether the environment is a deployed one.
+
+        True for every name in :data:`DEPLOYED_ENVIRONMENTS`
+        (``production``/``demo``/``staging``). The value is validated at
+        construction, so an unrecognised environment can never silently fall
+        through to ``False``.
+        """
+        return self.environment in DEPLOYED_ENVIRONMENTS
 
     @property
     def _base_url_origin(self) -> tuple[str, ...]:
