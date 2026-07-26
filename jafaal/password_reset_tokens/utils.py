@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 import jafaal._internal.security_stores as jafaal_security_stores
 import jafaal._internal.user_guards as jafaal_user_guards
+import jafaal.audit as jafaal_audit
 import jafaal.credentials.crud as jafaal_credentials_crud
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.password_policy as jafaal_password_policy
@@ -81,6 +82,12 @@ async def request_password_reset(email: str, db: Session) -> None:
         return
 
     token, expires_at = create_password_reset_token(user.id, db)
+    jafaal_audit.record(
+        jafaal_audit.Event.PASSWORD_RESET_REQUESTED,
+        user_id=user.id,
+        email=user.email,
+        expires_at=expires_at.isoformat(),
+    )
     event = jafaal_ports.PasswordResetRequested(
         user_id=user.id,
         email=user.email,
@@ -125,6 +132,12 @@ def use_password_reset_token(
 
     token_user_id = password_reset_tokens_crud.claim_password_reset_token(token_hash, db)
     if token_user_id is None:
+        jafaal_audit.record(
+            jafaal_audit.Event.PASSWORD_RESET_COMPLETED,
+            outcome=jafaal_audit.Outcome.FAILURE,
+            level=logging.WARNING,
+            reason="invalid_or_expired_token",
+        )
         raise jafaal_exceptions.InvalidRequestError("Invalid or expired password reset token")
 
     db_user = jafaal_user_guards.get_user_by_id_or_404(token_user_id, db)
@@ -154,6 +167,13 @@ def use_password_reset_token(
     # Drop any in-flight pending-MFA login that was started with the
     # now-rotated password.
     jafaal_security_stores.clear_pending_mfa_for_user(token_user_id)
+    jafaal_audit.record(jafaal_audit.Event.PASSWORD_RESET_COMPLETED, user_id=token_user_id)
+    jafaal_audit.record(
+        jafaal_audit.Event.SESSION_REVOKED,
+        user_id=token_user_id,
+        scope="all",
+        reason="password_reset",
+    )
 
 
 def delete_invalid_tokens_from_db() -> None:

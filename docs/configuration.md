@@ -180,6 +180,48 @@ assert claims["typ"] == "access"
 conventional root path `/.well-known/jwks.json` from your own app instead of the
 API-root path above.
 
+### Discovery (RFC 8414)
+
+So a resource server does not have to hard-code any of the above, JAFAAL also
+publishes an [RFC 8414](https://www.rfc-editor.org/rfc/rfc8414) authorization
+server metadata document beside the JWKS:
+
+```text
+GET  <your-api-root>/.well-known/oauth-authorization-server
+```
+
+```json
+{
+  "issuer": "https://app.example.com",
+  "jwks_uri": "https://app.example.com/api/v1/.well-known/jwks.json",
+  "token_endpoint": "https://app.example.com/api/v1/auth/login",
+  "introspection_endpoint": "https://app.example.com/api/v1/auth/introspect",
+  "revocation_endpoint": "https://app.example.com/api/v1/auth/revoke",
+  "grant_types_supported": ["password", "refresh_token"],
+  "token_endpoint_auth_methods_supported": ["none"],
+  "scopes_supported": ["identity_providers:read", "profile", "users:read"],
+  "code_challenge_methods_supported": ["S256"]
+}
+```
+
+The endpoint URLs follow your [`RouterPrefixes`][jafaal.RouterPrefixes] automatically,
+and `scopes_supported` reflects the installed scope catalog. The origin is taken
+from `base_url` when it is set, so a forged `Host` header cannot make JAFAAL
+advertise an attacker-controlled `token_endpoint`.
+
+There is no `authorization_endpoint`: JAFAAL is a first-party issuer with no
+client registry or consent screen, so `token_endpoint_auth_methods_supported` is
+`["none"]` — stating that explicitly matters, because RFC 8414 otherwise implies
+`client_secret_basic`.
+
+!!! note "Document location"
+    RFC 8414 §3 derives the metadata URL from the issuer identifier. JAFAAL
+    cannot know where you mount the aggregate router, so — like the JWKS route —
+    it serves the document at the API root.
+    [`get_authorization_server_metadata()`][jafaal.get_authorization_server_metadata]
+    is exported if you need to serve the identical payload from the strict
+    issuer-derived path instead.
+
 !!! note "`secret_key` is always required"
     Even with asymmetric JWTs, `secret_key` still keys the HMAC hashing of
     refresh tokens (reuse detection) and CSRF tokens, so it stays mandatory.

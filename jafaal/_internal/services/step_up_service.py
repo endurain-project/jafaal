@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NoReturn
 
 from sqlalchemy.orm import Session
 
 import jafaal._internal.security_stores as jafaal_security_stores
 import jafaal._internal.user_guards as jafaal_user_guards
+import jafaal.audit as jafaal_audit
 import jafaal.credentials.crud as jafaal_credentials_crud
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_providers.crud as idp_crud
@@ -61,6 +62,40 @@ def _eligible_reauth_idp_ids(user_id: UserId, db: Session) -> list[int]:
         return []
     enabled_ids = {idp.id for idp in idp_crud.get_enabled_identity_providers(db)}
     return [link.idp_id for link in links if link.idp_id in enabled_ids]
+
+
+def _fail_step_up(
+    key: str,
+    step_up_store: jafaal_security_stores.StepUpStore,
+    user_id: UserId,
+    reason: str,
+    error: jafaal_exceptions.JafaalError,
+) -> NoReturn:
+    """Record a failed step-up attempt, audit it, and raise ``error``.
+
+    Single place the "count the attempt, emit the audit record, reject" policy
+    lives, so every rejection path stays in lockstep.
+
+    Args:
+        key: The lockout key for this user.
+        step_up_store: Step-up lockout store.
+        user_id: The user attempting step-up.
+        reason: Short machine-readable cause, recorded on the audit event.
+        error: The exception to raise.
+
+    Raises:
+        JafaalError: Always — ``error``.
+    """
+    failed_attempts = step_up_store.record_failed_attempt(key)
+    jafaal_audit.record(
+        jafaal_audit.Event.STEP_UP_FAILURE,
+        outcome=jafaal_audit.Outcome.FAILURE,
+        level=logging.WARNING,
+        user_id=user_id,
+        reason=reason,
+        failed_attempts=failed_attempts,
+    )
+    raise error
 
 
 def verify_step_up_credentials(
@@ -171,6 +206,7 @@ def verify_step_up_credentials(
     # freshly asserted by, the identity provider.
     if jafaal_security_stores.consume_step_up_reauth_grant(user_id):
         logger.info(f"Step-up satisfied for user {user_id} via a fresh IdP re-authentication grant")
+        jafaal_audit.record(jafaal_audit.Event.STEP_UP_SUCCESS, user_id=user_id, factor="idp_reauth")
         step_up_store.reset_attempts(key)
         return
 
@@ -197,22 +233,47 @@ def verify_step_up_credentials(
 
     if credential is not None:
         if not current_password:
-            step_up_store.record_failed_attempt(key)
-            raise jafaal_exceptions.InvalidCredentialsError("Step-up verification failed")
+            _fail_step_up(
+                key,
+                step_up_store,
+                user_id,
+                "password_missing",
+                jafaal_exceptions.InvalidCredentialsError("Step-up verification failed"),
+            )
         if not identity_service.verify_password(
             current_password,
             credential.password_hash,
         ):
-            step_up_store.record_failed_attempt(key)
-            raise jafaal_exceptions.InvalidCredentialsError("Step-up verification failed")
+            _fail_step_up(
+                key,
+                step_up_store,
+                user_id,
+                "password_invalid",
+                jafaal_exceptions.InvalidCredentialsError("Step-up verification failed"),
+            )
 
     if mfa_enabled:
         if not mfa_code:
-            step_up_store.record_failed_attempt(key)
-            raise jafaal_exceptions.AuthenticationError("MFA code required for this operation")
+            _fail_step_up(
+                key,
+                step_up_store,
+                user_id,
+                "mfa_code_missing",
+                jafaal_exceptions.AuthenticationError("MFA code required for this operation"),
+            )
         if not mfa_service.verify_user_mfa(user_id, mfa_code, identity_service, db):
-            step_up_store.record_failed_attempt(key)
-            raise jafaal_exceptions.InvalidCredentialsError("Step-up verification failed")
+            _fail_step_up(
+                key,
+                step_up_store,
+                user_id,
+                "mfa_code_invalid",
+                jafaal_exceptions.InvalidCredentialsError("Step-up verification failed"),
+            )
 
     # All available factors passed — reset the failure counter.
+    jafaal_audit.record(
+        jafaal_audit.Event.STEP_UP_SUCCESS,
+        user_id=user_id,
+        factor="password+mfa" if (credential is not None and mfa_enabled) else ("mfa" if mfa_enabled else "password"),
+    )
     step_up_store.reset_attempts(key)

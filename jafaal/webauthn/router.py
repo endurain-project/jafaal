@@ -136,6 +136,12 @@ def delete_credential(
     if credential is None:
         raise jafaal_exceptions.NotFoundError("Passkey not found.")
     webauthn_crud.delete_credential(credential, db)
+    jafaal_audit.record(
+        jafaal_audit.Event.WEBAUTHN_CREDENTIAL_DELETED,
+        level=logging.WARNING,
+        user_id=token_user_id,
+        credential_pk=credential_pk,
+    )
 
 
 # ===========================================================================
@@ -220,13 +226,14 @@ def complete_second_factor(
         failed_count = pending_mfa_store.record_failed_attempt(username)
         logger.warning("Invalid WebAuthn second factor for %s. Failed attempts: %s", username_log_id, failed_count)
         jafaal_audit.record(
-            jafaal_audit.Event.MFA_FAILURE,
+            jafaal_audit.Event.WEBAUTHN_AUTH_FAILURE,
             outcome=jafaal_audit.Outcome.FAILURE,
             level=logging.WARNING,
             user_id=user_id,
             username=username,
             ip=request.client.host if request.client else None,
             failed_attempts=failed_count,
+            ceremony="second_factor",
         )
         raise jafaal_exceptions.InvalidCredentialsError("WebAuthn authentication failed.")
 
@@ -245,6 +252,13 @@ def complete_second_factor(
     failed_attempts.reset_attempts(username)
     failed_attempts.reset_ip_attempts(network.get_ip_address(request))
 
+    jafaal_audit.record(
+        jafaal_audit.Event.WEBAUTHN_AUTH_SUCCESS,
+        user_id=user_id,
+        username=username,
+        ip=request.client.host if request.client else None,
+        ceremony="second_factor",
+    )
     return jafaal_utils.complete_login(response, request, user, client_type, token_manager, db)
 
 
@@ -288,4 +302,11 @@ def complete_authentication(
     """Verify a passwordless passkey assertion and issue JAFAAL tokens."""
     user = webauthn_service.complete_authentication(data.challenge_id, data.credential, db)
     jafaal_user_guards.check_user_is_active(user)
+    jafaal_audit.record(
+        jafaal_audit.Event.WEBAUTHN_AUTH_SUCCESS,
+        user_id=user.id,
+        username=user.username,
+        ip=request.client.host if request.client else None,
+        ceremony="passwordless",
+    )
     return jafaal_utils.complete_login(response, request, user, client_type, token_manager, db)

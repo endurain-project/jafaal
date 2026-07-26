@@ -44,10 +44,11 @@ class Users(jafaal.IntPKUserMixin, Base):
 
 # ``create_auth_router`` imports and includes every sub-router: auth, sessions,
 # api-keys, identity providers (private + public), password reset, sign-up,
-# WebAuthn (private + public), and JWKS. Recent FastAPI records each as a
-# lazily-flattened ``_IncludedRouter``, so this count is the number of
-# sub-routers that imported cleanly — exactly what this smoke test checks.
-EXPECTED_SUB_ROUTERS = 10
+# WebAuthn (private + public), JWKS, and RFC 8414 metadata. Recent FastAPI
+# records each as a lazily-flattened ``_IncludedRouter``, so this count is the
+# number of sub-routers that imported cleanly — exactly what this smoke test
+# checks.
+EXPECTED_SUB_ROUTERS = 11
 
 
 def main() -> int:

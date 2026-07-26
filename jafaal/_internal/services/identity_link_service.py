@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 import jafaal._internal.security_stores as jafaal_security_stores
 import jafaal._internal.services.step_up_service as step_up_service
+import jafaal.audit as jafaal_audit
 import jafaal.credentials.crud as jafaal_credentials_crud
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_providers.crud as idp_crud
@@ -123,6 +124,14 @@ def delete_identity_provider_link(
         raise jafaal_exceptions.InternalError("Failed to unlink identity provider")
 
     logger.info(f"User {token_user_id} unlinked IdP: idp_id={idp_id} ({idp.name})")
+    jafaal_audit.record(
+        jafaal_audit.Event.IDP_LINK_REMOVED,
+        level=logging.WARNING,
+        user_id=token_user_id,
+        idp_id=idp_id,
+        idp=idp.name,
+        actor="self",
+    )
 
 
 def admin_delete_identity_provider_link(
@@ -180,6 +189,14 @@ def admin_delete_identity_provider_link(
         raise jafaal_exceptions.InternalError("Failed to unlink identity provider")
 
     logger.info(f"Admin unlinked IdP for user {user_id}: idp_id={idp_id} ({idp.name})")
+    jafaal_audit.record(
+        jafaal_audit.Event.IDP_LINK_REMOVED,
+        level=logging.WARNING,
+        user_id=user_id,
+        idp_id=idp_id,
+        idp=idp.name,
+        actor="admin",
+    )
 
 
 def get_user_identity_provider_links(

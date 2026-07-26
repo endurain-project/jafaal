@@ -8,6 +8,7 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 import jafaal._internal.user_guards as jafaal_user_guards
+import jafaal.audit as jafaal_audit
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.password_policy as jafaal_password_policy
 import jafaal.ports as jafaal_ports
@@ -198,8 +199,15 @@ def use_sign_up_token(token: str, db: Session) -> UserId:
     # the token was missing, expired, or already consumed.
     user_id = sign_up_tokens_crud.claim_sign_up_token(token_hash, db)
     if user_id is None:
+        jafaal_audit.record(
+            jafaal_audit.Event.SIGNUP_CONFIRMED,
+            outcome=jafaal_audit.Outcome.FAILURE,
+            level=logging.WARNING,
+            reason="invalid_or_expired_token",
+        )
         raise jafaal_exceptions.InvalidRequestError("Invalid or expired sign up token")
 
+    jafaal_audit.record(jafaal_audit.Event.SIGNUP_CONFIRMED, user_id=user_id)
     return user_id
 
 

@@ -277,6 +277,7 @@ def create_auth_router(
     from jafaal.identity_providers.public_router import router as idp_public_router
     from jafaal.identity_providers.router import router as idp_router
     from jafaal.jwks import router as jwks_router
+    from jafaal.metadata import create_metadata_router
     from jafaal.password_reset_tokens.router import router as password_reset_router
     from jafaal.router import router as auth_router
     from jafaal.sessions.router import router as sessions_router
@@ -300,6 +301,8 @@ def create_auth_router(
     aggregate.include_router(webauthn_public_router, prefix=prefixes.webauthn_public, tags=["webauthn"])
     # JWKS is mounted at the aggregate root (no sub-prefix) so it lands at
     # ``<api-root>/.well-known/jwks.json`` — the URL to advertise as the
-    # ``jwks_uri`` for resource servers verifying asymmetric tokens.
+    # ``jwks_uri`` for resource servers verifying asymmetric tokens. The RFC 8414
+    # discovery document sits beside it and points at both.
     aggregate.include_router(jwks_router)
+    aggregate.include_router(create_metadata_router(prefixes.auth))
     return aggregate

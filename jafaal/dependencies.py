@@ -16,12 +16,14 @@ plus the unified ``check_auth_scopes``, are defined here.
 
 from __future__ import annotations
 
+import logging
 from typing import Annotated
 
 from fastapi import Depends, Request
 from fastapi.security import SecurityScopes
 
 import jafaal._internal.security_stores as jafaal_security_stores
+import jafaal.audit as jafaal_audit
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_service as jafaal_identity_service
 from jafaal._internal.internal_dependencies import (
@@ -135,6 +137,15 @@ def check_auth_scopes(
     """
     missing = set(security_scopes.scopes) - set(auth.scopes)
     if missing:
+        jafaal_audit.record(
+            jafaal_audit.Event.SCOPE_DENIED,
+            outcome=jafaal_audit.Outcome.BLOCKED,
+            level=logging.WARNING,
+            user_id=auth.user_id,
+            auth_type=auth.auth_type,
+            missing=sorted(missing),
+            required=sorted(security_scopes.scopes),
+        )
         raise jafaal_exceptions.MissingScopeError(
             f"Unauthorized Access - Missing permissions: {missing}",
             missing=missing,

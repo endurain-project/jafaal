@@ -533,6 +533,12 @@ def verify_mfa_and_login(
     jafaal_user_guards.check_user_is_active(user)
 
     # MFA verification successful - reset both MFA and login failed attempts counters
+    jafaal_audit.record(
+        jafaal_audit.Event.MFA_SUCCESS,
+        user_id=user_id,
+        username=username,
+        ip=request.client.host if request.client else None,
+    )
     with _translate_store_outage():
         pending_mfa_store.reset_attempts(username)
         failed_attempts.reset_attempts(username)
@@ -777,6 +783,14 @@ async def refresh_token(
     # Opportunistically refresh IdP tokens for all linked identity providers
     await idp_utils.refresh_idp_tokens_if_needed(user.id, db)
 
+    jafaal_audit.record(
+        jafaal_audit.Event.TOKEN_REFRESHED,
+        user_id=user.id,
+        session_id=session_id,
+        client_type=client_type,
+        rotation_count=session.rotation_count,
+    )
+
     # Token delivery based on client type (web cookie vs mobile body) is
     # centralised in jafaal_utils.build_token_response so login, /refresh, and
     # SSO token exchange share one delivery contract.
@@ -862,6 +876,14 @@ async def logout(
 
         # Clear all IdP refresh tokens for security
         await idp_utils.clear_all_idp_tokens(token_user_id, db)
+
+        jafaal_audit.record(
+            jafaal_audit.Event.LOGOUT,
+            user_id=token_user_id,
+            session_id=session.id,
+            client_type=client_type,
+            ip=request.client.host if request.client else None,
+        )
 
     if client_type == "web":
         jafaal_utils.clear_refresh_token_cookies(response)

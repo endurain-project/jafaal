@@ -23,10 +23,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from collections.abc import Mapping
+import threading
+from collections.abc import Coroutine, Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
 
 from jafaal._core.registry import ConfigSlot
 
@@ -451,24 +452,115 @@ def _log_event_failure(method_name: str, err: BaseException) -> None:
     logger.warning("AuthEventSink %s failed: %s", method_name, type(err).__name__, exc_info=err)
 
 
-def _consume_task_result(task: asyncio.Task[Any]) -> None:
-    """Retrieve a background event task's result so a failure is logged, not lost."""
-    if task.cancelled():
-        return
-    err = task.exception()
-    if err is not None:
-        _log_event_failure("task", err)
+EVENT_DISPATCH_TIMEOUT_SECONDS: Final = 10.0
+"""Hard cap on a single :class:`AuthEventSink` delivery before it is abandoned.
+
+A sink is host code doing I/O (SMTP, webhooks, a SIEM push). Without a deadline a
+hung remote turns every login into a leaked worker.
+"""
+
+MAX_INFLIGHT_EVENTS: Final = 256
+"""Backpressure bound on concurrently in-flight event deliveries.
+
+Events are fired on the auth hot path, so an unbounded queue would let a slow
+sink convert a login flood into unbounded memory growth. Past this many pending
+deliveries new events are dropped and logged rather than accumulated.
+"""
+
+_dispatch_state = threading.Condition()
+_inflight_events = 0
+_dispatch_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _acquire_dispatch_slot() -> bool:
+    """Reserve one in-flight slot, or return ``False`` when the bound is reached."""
+    global _inflight_events
+    with _dispatch_state:
+        if _inflight_events >= MAX_INFLIGHT_EVENTS:
+            return False
+        _inflight_events += 1
+        return True
+
+
+def _release_dispatch_slot(_result: object = None) -> None:
+    """Return an in-flight slot and wake anyone draining the queue."""
+    global _inflight_events
+    with _dispatch_state:
+        _inflight_events -= 1
+        if _inflight_events == 0:
+            _dispatch_state.notify_all()
+
+
+def _get_dispatch_loop() -> asyncio.AbstractEventLoop:
+    """Return the shared dispatch loop, starting its daemon thread on first use."""
+    global _dispatch_loop
+    with _dispatch_state:
+        loop = _dispatch_loop
+        if loop is not None and not loop.is_closed():
+            return loop
+        loop = asyncio.new_event_loop()
+        threading.Thread(
+            target=_run_dispatch_loop,
+            args=(loop,),
+            name="jafaal-event-dispatch",
+            daemon=True,
+        ).start()
+        _dispatch_loop = loop
+        return loop
+
+
+def _run_dispatch_loop(loop: asyncio.AbstractEventLoop) -> None:
+    """Body of the dispatch thread: own ``loop`` and serve it until process exit."""
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
+
+
+async def _deliver_event(method_name: str, coro: Coroutine[Any, Any, Any]) -> None:
+    """Await one sink delivery under a deadline, never propagating a failure."""
+    try:
+        await asyncio.wait_for(coro, EVENT_DISPATCH_TIMEOUT_SECONDS)
+    except TimeoutError:
+        logger.warning(
+            "AuthEventSink %s exceeded %ss and was dropped",
+            method_name,
+            EVENT_DISPATCH_TIMEOUT_SECONDS,
+        )
+    except Exception as err:
+        _log_event_failure(method_name, err)
+
+
+def wait_for_pending_events(timeout: float = 5.0) -> bool:
+    """Block until every in-flight event delivery has finished.
+
+    Dispatch is fire-and-forget, so a host that wants notifications flushed on
+    shutdown — or a test that wants to assert on its sink — needs an explicit
+    join point.
+
+    Args:
+        timeout: Maximum seconds to wait.
+
+    Returns:
+        ``True`` if the queue drained, ``False`` if ``timeout`` elapsed first.
+    """
+    with _dispatch_state:
+        return _dispatch_state.wait_for(lambda: _inflight_events == 0, timeout)
 
 
 def dispatch_event(method_name: str, event: object) -> None:
-    """Best-effort emit of an :class:`AuthEventSink` notification from sync code.
+    """Best-effort, non-blocking emit of an :class:`AuthEventSink` notification.
 
     Security/notification events are fired from synchronous auth paths (login,
-    lockout) through this helper. Delivery must never break the auth flow, so
-    every failure is swallowed and logged, and a sink that does not implement
-    ``method_name`` is skipped — so a host sink written before an event existed
-    keeps working unchanged. In a running event loop the coroutine is scheduled
-    as a background task; from a sync worker thread it is run to completion.
+    lockout) through this helper. Delivery must never break — or slow down — the
+    auth flow, so every failure is swallowed and logged, and a sink that does not
+    implement ``method_name`` is skipped, letting a host sink written before an
+    event existed keep working unchanged.
+
+    The call always returns immediately: inside a running event loop the
+    coroutine is scheduled as a background task, and from a sync worker thread it
+    is handed to a shared dispatch loop instead of being run inline (which would
+    pin a Starlette threadpool worker for the duration of the host's I/O). Each
+    delivery is capped by :data:`EVENT_DISPATCH_TIMEOUT_SECONDS`, and events past
+    :data:`MAX_INFLIGHT_EVENTS` are dropped rather than queued without bound.
 
     Args:
         method_name: The :class:`AuthEventSink` method to invoke.
@@ -482,20 +574,32 @@ def dispatch_event(method_name: str, event: object) -> None:
     except Exception as err:
         _log_event_failure(method_name, err)
         return
+    if not _acquire_dispatch_slot():
+        logger.warning(
+            "AuthEventSink %s dropped: %s deliveries already in flight",
+            method_name,
+            MAX_INFLIGHT_EVENTS,
+        )
+        with contextlib.suppress(Exception):
+            coro.close()
+        return
+    delivery = _deliver_event(method_name, coro)
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         loop = None
-    if loop is not None:
-        task = loop.create_task(coro)
-        task.add_done_callback(_consume_task_result)
-        return
     try:
-        asyncio.run(coro)
+        if loop is not None:
+            task = loop.create_task(delivery)
+            task.add_done_callback(_release_dispatch_slot)
+        else:
+            future = asyncio.run_coroutine_threadsafe(delivery, _get_dispatch_loop())
+            future.add_done_callback(_release_dispatch_slot)
     except Exception as err:
+        _release_dispatch_slot()
         _log_event_failure(method_name, err)
         with contextlib.suppress(Exception):
-            coro.close()
+            delivery.close()
 
 
 async def adispatch_event(method_name: str, event: object) -> None:
@@ -503,6 +607,7 @@ async def adispatch_event(method_name: str, event: object) -> None:
 
     Same forward-compatible, never-raises contract as :func:`dispatch_event`, but
     awaited inline so a caller in an async endpoint delivers before returning.
+    Still deadline-bounded, so a hung sink cannot hang the request.
 
     Args:
         method_name: The :class:`AuthEventSink` method to invoke.
@@ -512,9 +617,11 @@ async def adispatch_event(method_name: str, event: object) -> None:
     if handler is None:
         return
     try:
-        await handler(event)
+        coro = handler(event)
     except Exception as err:
         _log_event_failure(method_name, err)
+        return
+    await _deliver_event(method_name, coro)
 
 
 def reset_ports() -> None:
@@ -526,6 +633,8 @@ def reset_ports() -> None:
 
 
 __all__ = [
+    "EVENT_DISPATCH_TIMEOUT_SECONDS",
+    "MAX_INFLIGHT_EVENTS",
     "AccountLocked",
     "AuthEventSink",
     "EmailVerificationRequested",
@@ -556,4 +665,5 @@ __all__ = [
     "is_settings_provider_configured",
     "is_user_repository_configured",
     "reset_ports",
+    "wait_for_pending_events",
 ]

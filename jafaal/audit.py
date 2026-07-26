@@ -73,20 +73,67 @@ class Event:
     """Stable ``event`` slugs — the machine-readable audit contract.
 
     New events may be added over time; existing slugs are not renamed.
+
+    The catalog deliberately covers **successes as well as failures**, and every
+    credential-lifecycle change. OWASP ASVS V7 requires both: a stream that only
+    records failures cannot answer "what did this attacker actually accomplish?"
+    after a compromise, and cannot distinguish a legitimate credential rotation
+    from an attacker establishing persistence.
     """
 
+    # --- authentication ---
     LOGIN_SUCCESS: Final = "login.success"
     LOGIN_FAILURE: Final = "login.failure"
+    LOGOUT: Final = "logout"
     LOCKOUT_APPLIED: Final = "lockout.applied"
+
+    # --- multi-factor ---
+    MFA_SUCCESS: Final = "mfa.success"
     MFA_FAILURE: Final = "mfa.failure"
+    MFA_ENABLED: Final = "mfa.enabled"
+    MFA_DISABLED: Final = "mfa.disabled"
+    MFA_BACKUP_CODES_GENERATED: Final = "mfa.backup_codes_generated"
     MFA_REPLAY_CHECK_UNAVAILABLE: Final = "mfa.replay_check_unavailable"
+
+    # --- step-up re-authentication ---
+    STEP_UP_SUCCESS: Final = "step_up.success"
+    STEP_UP_FAILURE: Final = "step_up.failure"
+
+    # --- WebAuthn / passkeys ---
     WEBAUTHN_REGISTERED: Final = "webauthn.registered"
+    WEBAUTHN_CREDENTIAL_DELETED: Final = "webauthn.credential_deleted"
+    WEBAUTHN_AUTH_SUCCESS: Final = "webauthn.auth_success"
+    WEBAUTHN_AUTH_FAILURE: Final = "webauthn.auth_failure"
+
+    # --- credentials ---
+    PASSWORD_CHANGED: Final = "password.changed"
+    PASSWORD_RESET_REQUESTED: Final = "password.reset_requested"
+    PASSWORD_RESET_COMPLETED: Final = "password.reset_completed"
+
+    # --- account lifecycle ---
+    SIGNUP_CONFIRMED: Final = "signup.confirmed"
+
+    # --- tokens & sessions ---
     TOKEN_REUSE_GRACE: Final = "token.reuse_grace"
     TOKEN_THEFT_DETECTED: Final = "token.theft_detected"
+    TOKEN_REFRESHED: Final = "token.refreshed"
     TOKEN_REVOKED: Final = "token.revoked"
+    SESSION_REVOKED: Final = "session.revoked"
+
+    # --- API keys ---
     API_KEY_AUTH_SUCCESS: Final = "api_key.auth_success"
     API_KEY_AUTH_FAILURE: Final = "api_key.auth_failure"
+    API_KEY_CREATED: Final = "api_key.created"
+    API_KEY_REVOKED: Final = "api_key.revoked"
+    API_KEY_DELETED: Final = "api_key.deleted"
+
+    # --- identity providers ---
+    IDP_LINK_ADDED: Final = "idp.link_added"
+    IDP_LINK_REMOVED: Final = "idp.link_removed"
     OAUTH_STATE_REPLAY_REJECTED: Final = "oauth_state.replay_rejected"
+
+    # --- authorization ---
+    SCOPE_DENIED: Final = "scope.denied"
 
 
 # Attributes already present on a ``LogRecord``; ``extra=`` must not shadow them

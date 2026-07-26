@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 import jafaal._internal.security_stores as jafaal_security_stores
 import jafaal._internal.services.step_up_service as step_up_service
 import jafaal._internal.user_guards as jafaal_user_guards
+import jafaal.audit as jafaal_audit
 import jafaal.password_policy as jafaal_password_policy
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.schema as jafaal_sessions_schema
@@ -44,6 +45,12 @@ def delete_user_session(
 ) -> None:
     """Delete one authenticated user's session."""
     jafaal_sessions_crud.delete_session(session_id, token_user_id, db)
+    jafaal_audit.record(
+        jafaal_audit.Event.SESSION_REVOKED,
+        user_id=token_user_id,
+        session_id=session_id,
+        scope="single",
+    )
 
 
 def delete_other_user_sessions(
@@ -72,6 +79,13 @@ def delete_other_user_sessions(
         exclude_session_id=current_session_id,
     )
     logger.info(f"User {token_user_id} revoked {revoked} other session(s)")
+    jafaal_audit.record(
+        jafaal_audit.Event.SESSION_REVOKED,
+        user_id=token_user_id,
+        session_id=current_session_id,
+        scope="others",
+        revoked=revoked,
+    )
     return revoked
 
 
@@ -135,8 +149,17 @@ def change_own_password(
             exclude_session_id=current_session_id,
         )
         logger.info(f"User {user_id} revoked {revoked} other session(s) after password change")
+        jafaal_audit.record(
+            jafaal_audit.Event.SESSION_REVOKED,
+            user_id=user_id,
+            session_id=current_session_id,
+            scope="others",
+            revoked=revoked,
+            reason="password_change",
+        )
 
     logger.info(f"User {user_id} changed password (step-up verified)")
+    jafaal_audit.record(jafaal_audit.Event.PASSWORD_CHANGED, user_id=user_id, actor="self")
 
 
 def change_managed_user_password(
@@ -169,3 +192,15 @@ def change_managed_user_password(
     identity_service.set_local_password_hash(user_id, hashed_password)
     jafaal_sessions_crud.delete_sessions_by_user(user_id, db)
     jafaal_security_stores.clear_pending_mfa_for_user(user_id)
+    jafaal_audit.record(
+        jafaal_audit.Event.PASSWORD_CHANGED,
+        level=logging.WARNING,
+        user_id=user_id,
+        actor="admin",
+    )
+    jafaal_audit.record(
+        jafaal_audit.Event.SESSION_REVOKED,
+        user_id=user_id,
+        scope="all",
+        reason="password_change",
+    )

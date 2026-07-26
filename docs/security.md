@@ -95,12 +95,10 @@ error carries a stable machine-readable `code` alongside its HTTP `status_code`.
 
 ### Audit logging
 
-Every security-relevant event — login success/failure, progressive lockouts, MFA
-failures, refresh-token reuse/theft, API-key authentication, and OAuth state
-replay — is emitted as a **structured record** on the dedicated `jafaal.audit`
-logger, separate from the human-readable `jafaal.*` application logs. Wire a SIEM
-or audit sink by attaching a handler and reading the fields off each record — no
-message-string parsing:
+Every security-relevant event is emitted as a **structured record** on the
+dedicated `jafaal.audit` logger, separate from the human-readable `jafaal.*`
+application logs. Wire a SIEM or audit sink by attaching a handler and reading
+the fields off each record — no message-string parsing:
 
 ```python
 import logging
@@ -116,14 +114,45 @@ Each record carries `event` (a stable slug such as `login.failure`), `outcome`
 `username`, `ip`, `session_id`, `key_prefix`, `token_family_id`, …). The log
 message is the event slug, so even a plain-text handler stays readable.
 
+#### Event catalog
+
+The stream records **successes as well as failures**: a trail of nothing but
+rejections can tell you an account was attacked, but not whether the attacker
+got in and what they changed once there. The slugs are declared on
+`jafaal.audit.Event`:
+
+| Area | Events |
+| --- | --- |
+| Authentication | `login.success`, `login.failure`, `logout`, `lockout.applied` |
+| MFA | `mfa.success`, `mfa.failure`, `mfa.enabled`, `mfa.disabled`, `mfa.backup_codes_generated`, `mfa.replay_check_unavailable` |
+| Step-up | `step_up.success`, `step_up.failure` |
+| WebAuthn | `webauthn.registered`, `webauthn.credential_deleted`, `webauthn.auth_success`, `webauthn.auth_failure` |
+| Credentials | `password.changed`, `password.reset_requested`, `password.reset_completed`, `signup.confirmed` |
+| Tokens & sessions | `token.refreshed`, `token.revoked`, `token.reuse_grace`, `token.theft_detected`, `session.revoked` |
+| API keys | `api_key.created`, `api_key.revoked`, `api_key.deleted`, `api_key.auth_success`, `api_key.auth_failure` |
+| Identity providers | `idp.link_added`, `idp.link_removed`, `oauth_state.replay_rejected` |
+| Authorization | `scope.denied` |
+
+State-changing events an account owner would want to know about
+(`mfa.disabled`, `password.changed` by an admin, `api_key.deleted`,
+`idp.link_removed`, `scope.denied`) are emitted at `WARNING` so a coarse level
+filter still surfaces them.
+
 !!! tip "Actionable security events"
     Beyond the SIEM-facing audit stream, the host
     [`AuthEventSink`][jafaal.AuthEventSink] also receives best-effort
     **security notifications** it can turn into user-facing alerts:
     `on_new_device_login`, `on_account_locked`, and
-    `on_refresh_token_theft_detected`. They are fire-and-forget (never block or
-    fail the auth flow) and forward-compatible — a sink that does not implement a
-    method simply skips it.
+    `on_refresh_token_theft_detected`. They are fire-and-forget and
+    forward-compatible — a sink that does not implement a method simply skips it.
+
+    Delivery never runs inline on the auth path: from synchronous code the
+    coroutine is handed to a background dispatch loop, so a slow SMTP server or
+    webhook cannot pin a request worker. Each delivery is abandoned after
+    `jafaal.ports.EVENT_DISPATCH_TIMEOUT_SECONDS` (10s), and events beyond
+    `jafaal.ports.MAX_INFLIGHT_EVENTS` (256) concurrent deliveries are **dropped
+    and logged** rather than queued without bound. Call
+    `jafaal.ports.wait_for_pending_events()` to flush the queue on shutdown.
 
 !!! warning "Audit records are sensitive"
     To be useful for a SIEM, audit records contain identifiers the application

@@ -39,6 +39,9 @@ First release.
   library.
 - HS256 by default, or asymmetric signing (RS/PS/ES 256/384/512) with the public
   key published at a JWKS endpoint for stateless verification.
+- RFC 8414 authorization-server metadata at
+  `/.well-known/oauth-authorization-server`, so a resource server discovers the
+  issuer, JWKS, and endpoint URLs instead of hard-coding them.
 - Zero-downtime rotation of both the signing key and the at-rest encryption key,
   via verify-/decrypt-only fallbacks.
 - Refresh-token rotation with reuse detection: a replay past a short grace window
@@ -78,7 +81,12 @@ First release.
   `HibpBreachChecker` / `BlocklistBreachChecker`, `StateStoreRateLimiter`, and
   `RedisStateStore`.
 - Structured security-audit records on a dedicated `jafaal.audit` logger, ready
-  for a SIEM without message-string parsing.
+  for a SIEM without message-string parsing — covering successful state changes
+  (MFA enabled/disabled, password change, credential and IdP-link lifecycle,
+  session revocation, scope denial) as well as failures.
+- Non-blocking `AuthEventSink` delivery: notifications are dispatched off the
+  auth path with a per-delivery deadline and a bounded backlog, so a slow SMTP
+  server or webhook cannot degrade login.
 - Framework-agnostic error types mapped to HTTP once at the edge, each carrying
   a stable machine-readable `code`.
 - Alembic migrations for JAFAAL's companion tables.

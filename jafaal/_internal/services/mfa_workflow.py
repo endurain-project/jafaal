@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 import jafaal._internal.security_stores as jafaal_security_stores
 import jafaal._internal.services.step_up_service as step_up_service
+import jafaal.audit as jafaal_audit
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.mfa.backup_codes.crud as mfa_backup_codes_crud
 import jafaal.mfa.backup_codes.schema as mfa_backup_codes_schema
@@ -125,6 +126,7 @@ def enable_mfa(
         )
         mfa_secret_store.delete_secret(token_user_id)
         logger.info(f"User {token_user_id} enabled MFA (step-up verified)")
+        jafaal_audit.record(jafaal_audit.Event.MFA_ENABLED, user_id=token_user_id, method="totp")
         return {
             "message": "MFA enabled successfully",
             "backup_codes": backup_codes,
@@ -156,6 +158,11 @@ def disable_mfa(
     )
     mfa_service.disable_user_mfa(token_user_id, db)
     logger.info(f"User {token_user_id} disabled MFA (step-up verified)")
+    jafaal_audit.record(
+        jafaal_audit.Event.MFA_DISABLED,
+        level=logging.WARNING,
+        user_id=token_user_id,
+    )
     return {"message": "MFA disabled successfully"}
 
 
@@ -173,8 +180,15 @@ def verify_mfa(
         db,
     )
     if not is_valid:
+        jafaal_audit.record(
+            jafaal_audit.Event.MFA_FAILURE,
+            outcome=jafaal_audit.Outcome.FAILURE,
+            level=logging.WARNING,
+            user_id=token_user_id,
+        )
         raise jafaal_exceptions.InvalidMFACodeError()
 
+    jafaal_audit.record(jafaal_audit.Event.MFA_SUCCESS, user_id=token_user_id)
     return {"message": "MFA code verified successfully"}
 
 
@@ -210,6 +224,11 @@ def generate_backup_codes(
     )
 
     logger.info(f"User {user.id} generated MFA backup codes (step-up verified)")
+    jafaal_audit.record(
+        jafaal_audit.Event.MFA_BACKUP_CODES_GENERATED,
+        user_id=token_user_id,
+        count=len(codes),
+    )
 
     return mfa_backup_codes_schema.MFABackupCodesResponse(
         codes=codes,

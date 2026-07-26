@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 import jafaal.api_keys.models as api_keys_models
 import jafaal.api_keys.schema as api_keys_schema
 import jafaal.api_keys.utils as api_keys_utils
+import jafaal.audit as jafaal_audit
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.settings as jafaal_settings
 from jafaal._core import db_errors
@@ -157,6 +158,14 @@ def create_api_key(
             "name": data.name,
         },
     )
+    jafaal_audit.record(
+        jafaal_audit.Event.API_KEY_CREATED,
+        user_id=user_id,
+        api_key_id=db_api_key.id,
+        key_prefix=key_prefix,
+        scopes=list(data.scopes),
+        expires_at=data.expires_at.isoformat() if data.expires_at else None,
+    )
 
     return db_api_key, raw_key
 
@@ -223,6 +232,13 @@ def revoke_api_key(
             "user_id": user_id,
         },
     )
+    jafaal_audit.record(
+        jafaal_audit.Event.API_KEY_REVOKED,
+        level=logging.WARNING,
+        user_id=user_id,
+        api_key_id=api_key_id,
+        key_prefix=db_api_key.key_prefix,
+    )
 
 
 @db_errors.handle_db_errors
@@ -251,6 +267,9 @@ def delete_api_key(
     if db_api_key is None:
         raise jafaal_exceptions.NotFoundError(f"API key {api_key_id} not found for user {user_id}")
 
+    # Read the prefix before the row is gone; it is the only handle the audit
+    # trail keeps on a hard-deleted key.
+    key_prefix = db_api_key.key_prefix
     db.delete(db_api_key)
     db.commit()
 
@@ -260,4 +279,11 @@ def delete_api_key(
             "api_key_id": api_key_id,
             "user_id": user_id,
         },
+    )
+    jafaal_audit.record(
+        jafaal_audit.Event.API_KEY_DELETED,
+        level=logging.WARNING,
+        user_id=user_id,
+        api_key_id=api_key_id,
+        key_prefix=key_prefix,
     )

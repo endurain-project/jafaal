@@ -1054,6 +1054,14 @@ class DefaultIdentityService:
         """
         missing = required_scopes - principal.scopes
         if missing:
+            jafaal_audit.record(
+                jafaal_audit.Event.SCOPE_DENIED,
+                outcome=jafaal_audit.Outcome.BLOCKED,
+                level=logging.WARNING,
+                user_id=principal.user_id,
+                missing=sorted(missing),
+                required=sorted(required_scopes),
+            )
             raise jafaal_exceptions.MissingScopeError(
                 f"Unauthorized Access - Missing permissions: {missing}",
                 missing=missing,

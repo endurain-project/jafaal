@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
+import jafaal.audit as jafaal_audit
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_providers.links.models as jafaal_identity_links_models
 from jafaal._core import db_errors
@@ -153,6 +154,15 @@ def create_user_identity_provider(
         db.rollback()
         raise jafaal_exceptions.ConflictError("Identity provider already linked") from err
     db.refresh(db_link)
+    # Emitted here rather than at each caller: a new link is a new way into the
+    # account, and every provisioning path (JIT, link-existing, admin) funnels
+    # through this function.
+    jafaal_audit.record(
+        jafaal_audit.Event.IDP_LINK_ADDED,
+        user_id=user_id,
+        idp_id=idp_id,
+        idp_subject=idp_subject,
+    )
     return db_link
 
 
