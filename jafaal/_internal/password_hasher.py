@@ -202,7 +202,7 @@ class PasswordHasher:
             str: A randomly generated password meeting the specified criteria.
 
         Raises:
-            ValueError: If the requested length is less than 8.
+            PasswordPolicyError: If the requested length is less than 8.
         """
         if length < 8:
             raise PasswordPolicyError(f"Requested length {length!r} is too short; must be ≥ 8.")

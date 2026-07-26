@@ -182,7 +182,8 @@ def get_token(
     Raises:
         JafaalError: If the required token is missing, or if the client type is invalid.
     """
-    # OAuth 2.1: Access tokens always come from Authorization header (all clients)
+    # Access tokens always come from the Authorization header (all clients), per
+    # RFC 6750 §2.1 — never a cookie, so they are not sent ambiently.
     if token_type == jafaal_token_manager.TokenType.ACCESS:
         if non_cookie_token is None:
             raise jafaal_exceptions.AuthenticationError("Access token missing from Authorization header")
@@ -373,25 +374,20 @@ def get_refresh_token(
     )
 
 
-def validate_refresh_token(
-    refresh_token: Annotated[str, Depends(get_refresh_token)],
-    token_manager: Annotated[
-        jafaal_token_manager.TokenManager,
-        Depends(jafaal_token_manager.get_token_manager),
-    ],
+def _validate_refresh_token_impl(
+    refresh_token: str,
+    token_manager: jafaal_token_manager.TokenManager,
 ) -> None:
-    """
-    Validates the expiration of a refresh token using the provided token manager.
+    """Validate a refresh token's signature, claims, expiry, and token use.
 
     Args:
-        refresh_token (str): The refresh token to be validated, extracted via dependency injection.
-        token_manager (jafaal_token_manager.TokenManager): The token manager instance used to validate the token, injected via dependency.
+        refresh_token: The raw refresh-token JWT.
+        token_manager: The configured token manager.
 
     Raises:
-        JafaalError: If the refresh token is expired or invalid, or if an unexpected error occurs during validation.
-
-    Logs:
-        Errors and unexpected exceptions are logged with context, including a redacted refresh token.
+        JafaalError: 401 if the token is invalid, expired, or not a refresh
+            token; :class:`~jafaal.exceptions.StaleRefreshTokenError` when it is
+            missing a required claim (so the edge handler clears the cookie).
     """
     try:
         # Validate the token expiration and type
@@ -426,78 +422,143 @@ def validate_refresh_token(
         raise jafaal_exceptions.InternalError("Internal server error during token validation") from err
 
 
-def get_sub_from_refresh_token(
+def validate_refresh_token(
     refresh_token: Annotated[str, Depends(get_refresh_token)],
     token_manager: Annotated[
         jafaal_token_manager.TokenManager,
         Depends(jafaal_token_manager.get_token_manager),
     ],
-) -> jafaal_orm.UserId:
+) -> None:
     """
-    Retrieves the user ID ('sub' claim) from a given refresh token.
+    Validates the expiration of a refresh token using the provided token manager.
+
+    Prefer :func:`get_validated_refresh_token`, which performs the same checks
+    and hands back the validated claims, so an endpoint cannot read ``sub`` /
+    ``sid`` without having validated the token first.
 
     Args:
-        refresh_token (str): The refresh token from which to extract the user ID.
-        token_manager (jafaal_token_manager.TokenManager): The token manager instance used to validate and parse the token.
-
-    Returns:
-        int: The user ID associated with the provided refresh token.
+        refresh_token (str): The refresh token to be validated, extracted via dependency injection.
+        token_manager (jafaal_token_manager.TokenManager): The token manager instance used to validate the token, injected via dependency.
 
     Raises:
-        Exception: If the token is invalid or the 'sub' claim is not found.
+        JafaalError: If the refresh token is expired or invalid, or if an unexpected error occurs during validation.
+
+    Logs:
+        Errors and unexpected exceptions are logged with context, including a redacted refresh token.
     """
-    # Return the user ID associated with the token, coerced to the host user
-    # table's primary-key type (int or UUID).
-    sub = token_manager.get_token_claim(refresh_token, "sub")
+    _validate_refresh_token_impl(refresh_token, token_manager)
+
+
+@dataclass(frozen=True)
+class ValidatedRefreshToken:
+    """A refresh token that has passed full validation, with its claims.
+
+    Existing only via :func:`get_validated_refresh_token`, so possessing an
+    instance *is* the proof that the signature, ``iss``/``aud``, expiry, and
+    ``token_use`` were all checked. The claim readers take this type rather than
+    a raw ``str`` so an endpoint cannot read ``sub`` / ``sid`` off a token nobody
+    validated — previously that safety depended on the endpoint also remembering
+    to declare the separate validation dependency, and an endpoint that forgot
+    would silently accept an expired (or access-type) token.
+
+    Attributes:
+        token: The raw refresh-token JWT as presented.
+        user_id: The ``sub`` claim, coerced to the host's primary-key type.
+        session_id: The ``sid`` claim.
+    """
+
+    token: str
+    user_id: jafaal_orm.UserId
+    session_id: str
+
+
+def get_validated_refresh_token(
+    refresh_token: Annotated[str, Depends(get_refresh_token)],
+    token_manager: Annotated[
+        jafaal_token_manager.TokenManager,
+        Depends(jafaal_token_manager.get_token_manager),
+    ],
+) -> ValidatedRefreshToken:
+    """Validate the refresh token once and return it with its claims.
+
+    The single entry point for refresh-token-authenticated endpoints. Validating
+    and decoding in one place also means the JWT signature is verified once per
+    request instead of once per claim the endpoint reads.
+
+    Args:
+        refresh_token: The raw refresh token from the cookie or Authorization header.
+        token_manager: The configured token manager.
+
+    Returns:
+        The validated token and its ``sub`` / ``sid`` claims.
+
+    Raises:
+        JafaalError: 401 if the token is invalid, expired, not a refresh token,
+            or carries a malformed ``sub`` / ``sid``.
+    """
+    _validate_refresh_token_impl(refresh_token, token_manager)
+
+    claims = token_manager.decode_token(refresh_token).claims
+
+    sub = claims.get("sub")
     if not isinstance(sub, int | str) or sub == "":
         raise jafaal_exceptions.InvalidTokenError("Invalid token: 'sub' claim is missing or malformed")
     try:
-        return jafaal_orm.coerce_user_id(sub)
+        # Coerced to the host user table's primary-key type (int or UUID).
+        user_id = jafaal_orm.coerce_user_id(sub)
     except (ValueError, TypeError) as err:
         raise jafaal_exceptions.InvalidTokenError("Invalid token: 'sub' claim is malformed") from err
 
-
-def get_sid_from_refresh_token(
-    refresh_token: Annotated[str, Depends(get_refresh_token)],
-    token_manager: Annotated[
-        jafaal_token_manager.TokenManager,
-        Depends(jafaal_token_manager.get_token_manager),
-    ],
-) -> str:
-    """
-    Retrieves the session ID ('sid') from a given refresh token.
-
-    Args:
-        refresh_token (str): The refresh token from which to extract the session ID.
-        token_manager (jafaal_token_manager.TokenManager): The token manager used to validate and extract claims from the token.
-
-    Returns:
-        str: The session ID associated with the provided refresh token.
-
-    Raises:
-        Exception: If the token is invalid or the 'sid' claim is not present.
-    """
-    # Return the session ID associated with the token
-    sid = token_manager.get_token_claim(refresh_token, "sid")
+    sid = claims.get("sid")
     if not isinstance(sid, str):
         raise jafaal_exceptions.InvalidTokenError("Invalid token: 'sid' claim must be a string")
-    return sid
+
+    return ValidatedRefreshToken(token=refresh_token, user_id=user_id, session_id=sid)
+
+
+def get_sub_from_refresh_token(
+    validated: Annotated[ValidatedRefreshToken, Depends(get_validated_refresh_token)],
+) -> jafaal_orm.UserId:
+    """
+    Retrieves the user ID ('sub' claim) from a validated refresh token.
+
+    Args:
+        validated: The validated refresh token and its claims.
+
+    Returns:
+        The user ID associated with the provided refresh token.
+    """
+    return validated.user_id
+
+
+def get_sid_from_refresh_token(
+    validated: Annotated[ValidatedRefreshToken, Depends(get_validated_refresh_token)],
+) -> str:
+    """
+    Retrieves the session ID ('sid') from a validated refresh token.
+
+    Args:
+        validated: The validated refresh token and its claims.
+
+    Returns:
+        The session ID associated with the provided refresh token.
+    """
+    return validated.session_id
 
 
 def get_and_return_refresh_token(
-    refresh_token: Annotated[str, Depends(get_refresh_token)],
+    validated: Annotated[ValidatedRefreshToken, Depends(get_validated_refresh_token)],
 ) -> str:
     """
-    Retrieves and returns the refresh token from the request dependencies.
+    Returns the raw refresh token, once validated.
 
     Args:
-        refresh_token (str): The refresh token extracted via dependency injection.
+        validated: The validated refresh token and its claims.
 
     Returns:
         str: The provided refresh token.
     """
-    # Return token
-    return refresh_token
+    return validated.token
 
 
 ## API KEY + UNIFIED AUTH

@@ -28,6 +28,7 @@ import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.utils as jafaal_sessions_utils
 import jafaal.settings as jafaal_settings
 import jafaal.utils as jafaal_utils
+from jafaal._core import network
 
 logger = logging.getLogger(__name__)
 
@@ -107,13 +108,13 @@ async def initiate_login(
     code_challenge: Annotated[
         str,
         Query(
-            description="PKCE code challenge (base64url-encoded SHA256, 43-128 chars). REQUIRED for OAuth 2.1 compliance.",
+            description="PKCE code challenge (base64url-encoded SHA256, 43-128 chars). REQUIRED (RFC 7636).",
         ),
     ],
     code_challenge_method: Annotated[
         str,
         Query(
-            description="PKCE method (must be S256). REQUIRED for OAuth 2.1 compliance.",
+            description="PKCE method (must be S256). REQUIRED (RFC 7636).",
         ),
     ],
     redirect: Annotated[
@@ -127,7 +128,7 @@ async def initiate_login(
     """
     Initiates the login process for a given identity provider using OAuth.
 
-    PKCE (Proof Key for Code Exchange) is REQUIRED for all clients (OAuth 2.1 compliance).
+    PKCE (Proof Key for Code Exchange, RFC 7636) is REQUIRED for all clients.
     Both code_challenge and code_challenge_method=S256 must be provided.
 
     Rate Limit: 10 requests per minute per IP
@@ -151,7 +152,7 @@ async def initiate_login(
         if not idp or not idp.enabled:
             raise jafaal_exceptions.NotFoundError("Identity provider not found or disabled")
 
-        # PKCE is REQUIRED for all clients (OAuth 2.1 compliance)
+        # PKCE is REQUIRED for all clients (RFC 7636 / RFC 9700 §2.1.1)
         if not code_challenge:
             raise jafaal_exceptions.InvalidRequestError("code_challenge is required (PKCE mandatory for all clients)")
         if not code_challenge_method or code_challenge_method != "S256":
@@ -178,7 +179,7 @@ async def initiate_login(
         state_id, nonce = oauth_state_utils.create_state_id_and_nonce()
 
         # Get client IP address
-        client_ip = request.client.host if request.client else None
+        client_ip = network.get_ip_address(request)
 
         # Create and store OAuth state in database (replaces cookie-based state)
         oauth_state_crud.create_oauth_state(
@@ -299,7 +300,7 @@ async def handle_callback(
                 outcome=jafaal_audit.Outcome.BLOCKED,
                 level=logging.WARNING,
                 idp=idp.slug,
-                ip=request.client.host if request.client else None,
+                ip=network.get_ip_address(request),
             )
             raise jafaal_exceptions.InvalidRequestError("Invalid or expired OAuth state")
 

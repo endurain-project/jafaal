@@ -205,7 +205,15 @@ class StaleRefreshTokenError(AuthenticationError):
 
 
 class MissingScopeError(AuthorizationError):
-    """The principal lacks one or more required scopes."""
+    """The principal lacks one or more required scopes.
+
+    Carries an RFC 6750 §3 ``WWW-Authenticate`` challenge built from the scopes
+    the endpoint requires:
+    ``Bearer error="insufficient_scope", scope="users:read users:write"``. The
+    ``scope`` attribute is a **space-delimited** list per RFC 6749 §3.3 — a
+    client parsing the challenge to decide what to re-request needs that exact
+    shape, so it is built here rather than at each raise site.
+    """
 
     code = "missing_scope"
     default_detail = "You do not have the required permissions."
@@ -215,10 +223,19 @@ class MissingScopeError(AuthorizationError):
         detail: str | None = None,
         *,
         missing: frozenset[str] | set[str] | None = None,
+        required: frozenset[str] | set[str] | None = None,
         headers: dict[str, str] | None = None,
     ) -> None:
         self.missing: frozenset[str] = frozenset(missing or ())
-        super().__init__(detail, headers=headers)
+        self.required: frozenset[str] = frozenset(required or ()) or self.missing
+        super().__init__(detail, headers=headers or self._challenge())
+
+    def _challenge(self) -> dict[str, str]:
+        """Build the RFC 6750 ``insufficient_scope`` challenge header."""
+        challenge = 'Bearer error="insufficient_scope"'
+        if self.required:
+            challenge += f', scope="{" ".join(sorted(self.required))}"'
+        return {"WWW-Authenticate": challenge}
 
 
 class StepUpReauthRequiredError(AuthenticationError):

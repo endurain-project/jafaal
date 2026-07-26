@@ -490,12 +490,15 @@ class TokenManager:
         catalog = jafaal_scopes.get_scope_catalog()
         scope = catalog.regular if not user.is_superuser else catalog.admin
 
-        exp = datetime.now(UTC) + timedelta(minutes=self.access_token_expire_minutes)
-        if token_type == TokenType.REFRESH:
-            exp = datetime.now(UTC) + timedelta(days=self.refresh_token_expire_days)
-
         # Set now
-        now = int(datetime.now(UTC).timestamp())
+        issued_at = datetime.now(UTC)
+        lifetime = (
+            timedelta(days=self.refresh_token_expire_days)
+            if token_type == TokenType.REFRESH
+            else timedelta(minutes=self.access_token_expire_minutes)
+        )
+        exp = issued_at + lifetime
+        now = int(issued_at.timestamp())
 
         claims: dict[str, Any] = {
             "sid": session_id,

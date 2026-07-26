@@ -22,7 +22,7 @@ Exports:
 
       Scope enforcement (``check_scopes``) is provided by
       :mod:`jafaal.dependencies`, which resolves the full principal.
-    - Schemas: ``LoginRequest``, ``MFALoginRequest``,
+    - Schemas: ``MFALoginRequest``,
       ``MFARequiredResponse``, ``MobileSessionResponse``,
       ``TokenResponseWeb``, ``TokenResponseMobile``,
       ``LogoutResponse``
@@ -140,7 +140,6 @@ from .rate_limit import (
     reset_rate_limiter,
 )
 from .schema import (
-    LoginRequest,
     LogoutResponse,
     MFALoginRequest,
     MFARequiredResponse,
@@ -327,7 +326,6 @@ __all__ = [
     "ClientType",
     "FailedLoginAttempts",
     # Schemas
-    "LoginRequest",
     "LogoutResponse",
     "MFALoginRequest",
     "MFARequiredResponse",

@@ -12,7 +12,6 @@ import jafaal.api_keys.crud as jafaal_api_keys_crud
 import jafaal.api_keys.schema as api_keys_schema
 import jafaal.api_keys.utils as api_keys_utils
 import jafaal.dependencies as jafaal_dependencies
-import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_service as jafaal_identity_service
 import jafaal.orm as jafaal_orm
 from jafaal.principal import Principal
@@ -111,12 +110,9 @@ def create_user_api_key(
         db,
     )
 
-    try:
-        # Bounded by the caller's own scopes as well as the host allow-list, so
-        # minting a key cannot escalate privilege.
-        api_keys_utils.validate_api_key_scopes(data.scopes, granted_scopes=principal.scopes)
-    except ValueError as exc:
-        raise jafaal_exceptions.InvalidRequestError(str(exc)) from exc
+    # Bounded by the caller's own scopes as well as the host allow-list, so
+    # minting a key cannot escalate privilege.
+    api_keys_utils.validate_api_key_scopes(data.scopes, granted_scopes=principal.scopes)
 
     db_api_key, raw_key = jafaal_api_keys_crud.create_api_key(token_user_id, data, db)
 

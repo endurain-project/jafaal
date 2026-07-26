@@ -218,6 +218,11 @@ class AuthSettings:
             kills an access token immediately (one state-store lookup per
             request). Off by default (access tokens lapse at expiry; revoke the
             refresh token / session for immediate effect).
+        reauthorize_scopes_per_request: When ``True``, an access token's scopes
+            are intersected with the tier its account currently holds, so a
+            demotion applies immediately rather than at token expiry. Strictly
+            narrowing — a token never gains a scope it was not issued with. Off
+            by default.
         refresh_cookie_prefix: Optional refresh-cookie name-prefix hardening
             (``""``, ``"__Secure-"``, or ``"__Host-"``), applied only in a
             deployed environment. ``"__Host-"`` requires ``refresh_cookie_path``
@@ -341,6 +346,14 @@ class AuthSettings:
     # short-lived and lapse at expiry, and revoking the refresh token (which
     # deletes the session) is the always-effective revocation path.
     access_token_denylist_enabled: bool = False
+
+    # When True, the scopes carried by an access token are intersected with the
+    # tier the account holds on *this* request, so demoting an administrator
+    # takes effect immediately instead of when their current token expires. It is
+    # strictly an intersection: a token can only lose authority, never gain it.
+    # Off by default — access tokens are short-lived, and the user row is already
+    # loaded every request, so this adds no query, only the narrowing.
+    reauthorize_scopes_per_request: bool = False
 
     # Bound how many accounts a single source IP can lock out by spraying failed
     # logins across usernames (the per-account lockout is otherwise a cheap

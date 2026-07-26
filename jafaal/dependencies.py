@@ -147,9 +147,9 @@ def check_auth_scopes(
             required=sorted(security_scopes.scopes),
         )
         raise jafaal_exceptions.MissingScopeError(
-            f"Unauthorized Access - Missing permissions: {missing}",
+            f"Unauthorized Access - Missing permissions: {' '.join(sorted(missing))}",
             missing=missing,
-            headers={"WWW-Authenticate": f'Bearer scope="{security_scopes.scopes}"'},
+            required=set(security_scopes.scopes),
         )
 
 

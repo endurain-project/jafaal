@@ -467,16 +467,53 @@ sink convert a login flood into unbounded memory growth. Past this many pending
 deliveries new events are dropped and logged rather than accumulated.
 """
 
+CRITICAL_EVENT_METHODS: frozenset[str] = frozenset(
+    {
+        "on_account_locked",
+        "on_refresh_token_theft_detected",
+    }
+)
+"""Events whose loss is itself a security incident.
+
+An undelivered "your account was locked" or "refresh-token theft detected"
+notification is not a missed convenience email — it is the signal a user or
+operator needs to react to an attack in progress. A flood of ordinary
+notifications must therefore never be able to starve them out, so these are
+admitted against :data:`MAX_INFLIGHT_CRITICAL_EVENTS` (strictly larger than the
+general bound), which reserves headroom that routine traffic cannot consume.
+"""
+
+MAX_INFLIGHT_CRITICAL_EVENTS: Final = 1024
+"""Backpressure bound applied to :data:`CRITICAL_EVENT_METHODS` deliveries.
+
+Still bounded — an unbounded queue is a memory-exhaustion lever whatever the
+event — but four times the general limit, so routine notifications saturating
+:data:`MAX_INFLIGHT_EVENTS` still leave room for a security signal. Dropping one
+is logged at ``ERROR`` (not ``WARNING``) so it surfaces as an operational fault.
+"""
+
 _dispatch_state = threading.Condition()
 _inflight_events = 0
 _dispatch_loop: asyncio.AbstractEventLoop | None = None
 
 
-def _acquire_dispatch_slot() -> bool:
-    """Reserve one in-flight slot, or return ``False`` when the bound is reached."""
+def _acquire_dispatch_slot(method_name: str) -> bool:
+    """Reserve one in-flight slot, or return ``False`` when the bound is reached.
+
+    Security-critical events (:data:`CRITICAL_EVENT_METHODS`) are admitted
+    against the larger :data:`MAX_INFLIGHT_CRITICAL_EVENTS` ceiling, so a burst
+    of routine notifications cannot starve out a lockout or token-theft alert.
+
+    Args:
+        method_name: The sink method about to be invoked.
+
+    Returns:
+        ``True`` when a slot was reserved.
+    """
     global _inflight_events
+    limit = MAX_INFLIGHT_CRITICAL_EVENTS if method_name in CRITICAL_EVENT_METHODS else MAX_INFLIGHT_EVENTS
     with _dispatch_state:
-        if _inflight_events >= MAX_INFLIGHT_EVENTS:
+        if _inflight_events >= limit:
             return False
         _inflight_events += 1
         return True
@@ -574,11 +611,14 @@ def dispatch_event(method_name: str, event: object) -> None:
     except Exception as err:
         _log_event_failure(method_name, err)
         return
-    if not _acquire_dispatch_slot():
-        logger.warning(
-            "AuthEventSink %s dropped: %s deliveries already in flight",
+    if not _acquire_dispatch_slot(method_name):
+        is_critical = method_name in CRITICAL_EVENT_METHODS
+        logger.log(
+            logging.ERROR if is_critical else logging.WARNING,
+            "AuthEventSink %s dropped: %s deliveries already in flight%s",
             method_name,
-            MAX_INFLIGHT_EVENTS,
+            MAX_INFLIGHT_CRITICAL_EVENTS if is_critical else MAX_INFLIGHT_EVENTS,
+            " (SECURITY-CRITICAL notification lost)" if is_critical else "",
         )
         with contextlib.suppress(Exception):
             coro.close()
@@ -633,7 +673,9 @@ def reset_ports() -> None:
 
 
 __all__ = [
+    "CRITICAL_EVENT_METHODS",
     "EVENT_DISPATCH_TIMEOUT_SECONDS",
+    "MAX_INFLIGHT_CRITICAL_EVENTS",
     "MAX_INFLIGHT_EVENTS",
     "AccountLocked",
     "AuthEventSink",

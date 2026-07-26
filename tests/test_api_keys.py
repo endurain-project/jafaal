@@ -8,6 +8,7 @@ import jafaal
 import jafaal.api_keys.utils as api_keys_utils
 import jafaal.scopes as scopes
 import jafaal.settings as settings_mod
+from jafaal.exceptions import InvalidRequestError
 
 
 def test_generate_api_key_format():
@@ -32,7 +33,7 @@ def test_hash_api_key_is_a_keyed_hmac():
 def test_scope_allow_list_is_empty_by_default():
     assert api_keys_utils.get_api_key_scopes() == frozenset()
     # With no configured scopes, everything is rejected.
-    with pytest.raises(ValueError):
+    with pytest.raises(InvalidRequestError):
         api_keys_utils.validate_api_key_scopes(["anything"], granted_scopes=["anything"])
 
 
@@ -42,11 +43,19 @@ def test_configure_and_validate_scopes():
     # Supported scopes the caller holds pass.
     api_keys_utils.validate_api_key_scopes(["reports:read"], granted_scopes=["reports:read"])
     # Unsupported scope rejected.
-    with pytest.raises(ValueError, match="Unsupported API key scopes"):
+    with pytest.raises(InvalidRequestError, match="Unsupported API key scopes"):
         api_keys_utils.validate_api_key_scopes(["reports:delete"], granted_scopes=["reports:delete"])
     # Empty request rejected.
-    with pytest.raises(ValueError):
+    with pytest.raises(InvalidRequestError):
         api_keys_utils.validate_api_key_scopes([], granted_scopes=["reports:read"])
+
+
+def test_scopes_outside_allow_list_is_the_shared_rule():
+    # The request schema and the authoritative check share one predicate, so the
+    # two layers cannot drift.
+    jafaal.configure_api_key_scopes(["reports:read"])
+    assert api_keys_utils.scopes_outside_allow_list(["reports:read"]) == set()
+    assert api_keys_utils.scopes_outside_allow_list(["reports:read", "nope"]) == {"nope"}
 
 
 # --------------------------------------------------------------------------- #
@@ -60,13 +69,13 @@ def test_configure_and_validate_scopes():
 
 def test_caller_cannot_grant_a_scope_it_does_not_hold():
     jafaal.configure_api_key_scopes(["reports:read", "users:write"])
-    with pytest.raises(ValueError, match="do not hold"):
+    with pytest.raises(InvalidRequestError, match="do not hold"):
         api_keys_utils.validate_api_key_scopes(["users:write"], granted_scopes=["reports:read"])
 
 
 def test_partial_escalation_is_refused_entirely():
     jafaal.configure_api_key_scopes(["reports:read", "users:write"])
-    with pytest.raises(ValueError, match="users:write"):
+    with pytest.raises(InvalidRequestError, match="users:write"):
         api_keys_utils.validate_api_key_scopes(
             ["reports:read", "users:write"],
             granted_scopes=["reports:read"],
@@ -84,7 +93,7 @@ def test_caller_may_grant_a_subset_of_its_own_scopes():
 def test_allow_list_still_caps_a_superuser():
     # Holding a scope is not enough: it must also be allow-listed for API keys.
     jafaal.configure_api_key_scopes(["reports:read"])
-    with pytest.raises(ValueError, match="Unsupported API key scopes"):
+    with pytest.raises(InvalidRequestError, match="Unsupported API key scopes"):
         api_keys_utils.validate_api_key_scopes(["users:write"], granted_scopes=["reports:read", "users:write"])
 
 

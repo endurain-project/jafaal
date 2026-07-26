@@ -26,6 +26,7 @@ import jafaal.ports as jafaal_ports
 import jafaal.schema as jafaal_schema
 import jafaal.sessions.utils as jafaal_sessions_utils
 import jafaal.settings as jafaal_settings
+from jafaal._core import network
 
 
 def authenticate_user(
@@ -47,10 +48,19 @@ def authenticate_user(
         jafaal_ports.UserProtocol: The authenticated user object if authentication is successful.
 
     Raises:
-        JafaalError: If the username does not exist or the password is invalid.
+        JafaalError: If the username does not exist, the password is invalid, or
+            the password exceeds ``AuthSettings.password_max_length``.
     """
     # Get the user from the database
     user = jafaal_ports.get_user_repository().get_by_username(username, db)
+
+    # Bound the input before any (deliberately slow) hashing work. Argon2 is
+    # tuned to hundreds of milliseconds and hashes the whole input, so an
+    # unauthenticated caller could otherwise post a multi-megabyte "password" on
+    # every request. Checked before the user lookup result is used so the
+    # rejection costs the same whether or not the account exists.
+    if len(password) > jafaal_settings.get_settings().password_max_length:
+        raise jafaal_exceptions.InvalidCredentialsError("Unable to authenticate with provided credentials")
 
     # Check if the user exists and if the password is correct
     if not user:
@@ -230,7 +240,7 @@ def build_token_response(
     refresh_token_exp: datetime,
     csrf_token: str | None,
 ) -> dict:
-    """Build the OAuth 2.1 token-response body for login and refresh.
+    """Build the token-response body for login and refresh.
 
     Single source of truth for token delivery, shared by the password
     login, SSO login, and ``/refresh`` flows so they cannot drift:
@@ -295,9 +305,12 @@ def complete_login(
     Handles the completion of the login process by generating session and authentication tokens,
     storing the session in the database, and returning tokens in response body.
 
-    OAuth 2.1 compliant: Returns tokens in response body for all clients.
-    - Access token and CSRF token: Returned in body (for in-memory storage)
-    - Refresh token: Set as httpOnly cookie with SameSite=Strict
+    Token delivery follows the OAuth 2.0 Security BCP (RFC 9700) advice for
+    browser clients rather than RFC 6749 §5.1 literally: the access token is
+    returned in the body for in-memory storage, while the refresh token is set as
+    an ``HttpOnly``, ``SameSite=Strict`` cookie instead of being handed to page
+    script. The body is therefore a superset of the RFC 6749 token response
+    (extra ``session_id`` / ``csrf_token``, and no ``refresh_token`` for web).
 
     This unified model works for both username/password and SSO login flows.
 
@@ -366,7 +379,7 @@ def complete_login(
         username=user.username,
         session_id=session_id,
         client_type=client_type,
-        ip=request.client.host if request.client else None,
+        ip=network.get_ip_address(request),
     )
 
     # Best-effort security notification: a login from a device fingerprint not
@@ -378,7 +391,7 @@ def complete_login(
             jafaal_ports.NewDeviceLogin(
                 user_id=user.id,
                 username=user.username,
-                ip=request.client.host if request.client else None,
+                ip=network.get_ip_address(request),
                 device_description=device_description,
                 session_id=session_id,
             ),
@@ -445,7 +458,7 @@ def create_mobile_pkce_session_response(
 
     # Create OAuth state record for PKCE (reuse SSO infrastructure)
     state_id, nonce = oauth_state_utils.create_state_id_and_nonce()
-    client_ip = request.client.host if request.client else None
+    client_ip = network.get_ip_address(request)
 
     oauth_state_crud.create_oauth_state(
         db=db,

@@ -24,6 +24,21 @@ grants are therefore ``password`` and ``refresh_token`` only, and the token
 endpoint performs no client authentication (``token_endpoint_auth_methods_supported``
 is ``["none"]``) — stating that explicitly matters, because RFC 8414 §2 makes
 ``client_secret_basic`` the default when the field is absent.
+
+!!! warning "The ``password`` grant"
+    The resource-owner password-credentials grant is removed in OAuth 2.1 and
+    discouraged by the OAuth 2.0 Security BCP (RFC 9700 §2.4). It is advertised
+    here because JAFAAL genuinely implements it: JAFAAL is a **first-party
+    session issuer** whose login endpoint authenticates the *user* directly, not
+    a general-purpose authorization server delegating to third-party clients.
+    Do not expose it to clients you do not control.
+
+**Non-standard requirement.** JAFAAL's token endpoint additionally requires an
+``X-Client-Type`` header (``web`` or ``mobile``), because refresh-token delivery
+differs between the two (``HttpOnly`` cookie vs response body). A stock OAuth
+client has no way to guess that, so it is advertised as the
+``jafaal_required_request_headers`` extension member rather than left to fail at
+runtime.
 """
 
 from __future__ import annotations
@@ -93,6 +108,13 @@ def get_authorization_server_metadata(*, api_root: str, auth_prefix: str = "/aut
         # Mobile clients may bind a login to a PKCE challenge (RFC 7636) and
         # redeem the resulting session for tokens with the verifier.
         "code_challenge_methods_supported": ["S256"],
+        # Extension member (RFC 8414 §2 permits additional metadata). Headers a
+        # client MUST send that no standard field can express — without this, a
+        # client built purely from this document would 401/403 on every call and
+        # have no way to discover why.
+        "jafaal_required_request_headers": {
+            "X-Client-Type": ["web", "mobile"],
+        },
     }
 
 

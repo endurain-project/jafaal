@@ -234,3 +234,26 @@ def test_every_catalogued_event_has_a_call_site():
     names = [name for name in vars(audit.Event) if name.isupper()]
     unused = [name for name in names if f"Event.{name}" not in sources]
     assert not unused, f"audit events declared but never emitted: {unused}"
+
+
+def test_client_ip_is_never_read_raw():
+    """``request.client.host`` must not be read outside the network helper.
+
+    The direct TCP peer is the *proxy* address in any deployment behind one, so a
+    raw read poisons audit records and IP bindings while the lockout and
+    rate-limit keys use the real client. ``network.get_ip_address`` is the single
+    resolver (it walks the forwarded chain right-to-left); this guard stops a new
+    call site from quietly reintroducing the split.
+    """
+    from pathlib import Path
+
+    package = Path(jafaal.__file__).parent
+    offenders = [
+        str(path.relative_to(package))
+        for path in package.rglob("*.py")
+        # network.py is the implementation: it is where the peer is read.
+        if path.name != "network.py" and "request.client.host" in path.read_text(encoding="utf-8")
+    ]
+    assert not offenders, (
+        f"read the client IP via jafaal._core.network.get_ip_address instead of request.client.host in: {offenders}"
+    )

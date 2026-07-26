@@ -21,6 +21,7 @@ import jafaal.identity_providers.links.crud as jafaal_identity_links_crud
 import jafaal.identity_providers.links.schema as jafaal_identity_links_schema
 import jafaal.identity_providers.links.utils as jafaal_identity_links_utils
 import jafaal.schema as jafaal_schema
+from jafaal._core import network
 from jafaal.orm import UserId
 
 logger = logging.getLogger(__name__)
@@ -60,7 +61,7 @@ def generate_link_token(
     if existing_link:
         raise jafaal_exceptions.ConflictError(f"Identity provider {idp.name} is already linked to your account")
 
-    ip_address = request.client.host if request.client else None
+    ip_address = network.get_ip_address(request)
     link_token = idp_link_token_utils.generate_idp_link_token(
         user_id=token_user_id,
         idp_id=idp_id,

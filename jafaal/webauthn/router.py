@@ -231,7 +231,7 @@ def complete_second_factor(
             level=logging.WARNING,
             user_id=user_id,
             username=username,
-            ip=request.client.host if request.client else None,
+            ip=network.get_ip_address(request),
             failed_attempts=failed_count,
             ceremony="second_factor",
         )
@@ -256,7 +256,7 @@ def complete_second_factor(
         jafaal_audit.Event.WEBAUTHN_AUTH_SUCCESS,
         user_id=user_id,
         username=username,
-        ip=request.client.host if request.client else None,
+        ip=network.get_ip_address(request),
         ceremony="second_factor",
     )
     return jafaal_utils.complete_login(response, request, user, client_type, token_manager, db)
@@ -306,7 +306,7 @@ def complete_authentication(
         jafaal_audit.Event.WEBAUTHN_AUTH_SUCCESS,
         user_id=user.id,
         username=user.username,
-        ip=request.client.host if request.client else None,
+        ip=network.get_ip_address(request),
         ceremony="passwordless",
     )
     return jafaal_utils.complete_login(response, request, user, client_type, token_manager, db)

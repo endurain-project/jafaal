@@ -54,6 +54,7 @@ import jafaal.mfa.crud as jafaal_mfa_crud
 import jafaal.orm as jafaal_orm
 import jafaal.ports as jafaal_ports
 import jafaal.schema as jafaal_schema
+import jafaal.scopes as jafaal_scopes
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.utils as jafaal_sessions_utils
 import jafaal.settings as jafaal_settings
@@ -877,11 +878,51 @@ class DefaultIdentityService:
         if settings.strict_session_binding:
             self._enforce_session_binding(sid, user_id)
 
+        if settings.reauthorize_scopes_per_request:
+            scope = self._narrow_to_current_entitlement(scope, user)
+
         return self._build_principal(
             user,
             scope,
             AccessTokenCred(session_id=sid),
         )
+
+    @staticmethod
+    def _narrow_to_current_entitlement(
+        token_scopes: list[str],
+        user: jafaal_ports.UserProtocol,
+    ) -> list[str]:
+        """Intersect a token's scopes with what the account is entitled to *now*.
+
+        Scopes are stamped into the access token when it is minted, so demoting
+        an administrator (or otherwise narrowing their rights) normally has no
+        effect until the token expires. With
+        :attr:`~jafaal.settings.AuthSettings.reauthorize_scopes_per_request` the
+        token's grant is re-checked against the catalog tier the account holds on
+        this request, so a demotion applies immediately.
+
+        The result is an **intersection**, never a union: a token can only ever
+        lose authority here. Re-deriving the tier outright would *grant* scopes a
+        promoted user's older token never carried, which is a privilege change no
+        issued credential should silently pick up.
+
+        Args:
+            token_scopes: Scopes carried by the presented access token.
+            user: The freshly loaded account.
+
+        Returns:
+            The scopes still backed by the account's current tier.
+        """
+        catalog = jafaal_scopes.get_scope_catalog()
+        entitled = set(catalog.admin if user.is_superuser else catalog.regular)
+        narrowed = [scope for scope in token_scopes if scope in entitled]
+        if len(narrowed) != len(token_scopes):
+            dropped = sorted(set(token_scopes) - entitled)
+            logger.info(
+                f"Access token scopes narrowed to the account's current entitlement: dropped {dropped}",
+                extra={"user_id": user.id, "dropped_scopes": dropped},
+            )
+        return narrowed
 
     def resolve_from_api_key(
         self,
@@ -961,7 +1002,7 @@ class DefaultIdentityService:
                 "key_prefix": db_key.key_prefix,
                 "user_id": db_key.user_id,
                 "endpoint": request.url.path,
-                "ip": (request.client.host if request.client else "unknown"),
+                "ip": network.get_ip_address(request),
             },
         )
         jafaal_audit.record(
@@ -969,7 +1010,7 @@ class DefaultIdentityService:
             user_id=db_key.user_id,
             key_prefix=db_key.key_prefix,
             endpoint=request.url.path,
-            ip=request.client.host if request.client else None,
+            ip=network.get_ip_address(request),
         )
 
         scopes = jafaal_api_keys_utils.json_to_scopes(db_key.scopes)
@@ -1078,8 +1119,9 @@ class DefaultIdentityService:
                 required=sorted(required_scopes),
             )
             raise jafaal_exceptions.MissingScopeError(
-                f"Unauthorized Access - Missing permissions: {missing}",
+                f"Unauthorized Access - Missing permissions: {' '.join(sorted(missing))}",
                 missing=missing,
+                required=required_scopes,
             )
 
     def validate_and_hash_password(

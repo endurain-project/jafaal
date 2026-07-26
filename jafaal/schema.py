@@ -12,21 +12,6 @@ from pydantic import (
 )
 
 
-class LoginRequest(BaseModel):
-    """
-    Schema for login requests containing username and password.
-
-    Attributes:
-        username: Username of the user.
-        password: User password.
-    """
-
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    username: StrictStr = Field(..., min_length=1, max_length=250)
-    password: StrictStr = Field(..., min_length=8)
-
-
 class SignUpRequest(BaseModel):
     """Minimal local sign-up request.
 

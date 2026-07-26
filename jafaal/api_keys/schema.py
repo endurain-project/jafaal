@@ -77,6 +77,11 @@ class UsersApiKeyCreate(BaseModel):
         """
         Validate requested scopes against the host-configured API-key allow-list.
 
+        The first of two layers: this one rejects a scope the deployment does not
+        offer at all. The router additionally refuses any scope the *caller* does
+        not hold (see :func:`jafaal.api_keys.utils.validate_api_key_scopes`),
+        which cannot be checked here because the schema has no principal.
+
         Args:
             v: List of scope strings to validate.
 
@@ -84,12 +89,16 @@ class UsersApiKeyCreate(BaseModel):
             Validated list of scope strings.
 
         Raises:
-            ValueError: If any scope is not supported.
+            ValueError: If any scope is not supported. Raised as a plain
+                ``ValueError`` because Pydantic requires it to render a 422
+                field error.
         """
-        supported = api_keys_utils.get_api_key_scopes()
-        unsupported = set(v) - supported
+        unsupported = api_keys_utils.scopes_outside_allow_list(v)
         if unsupported:
-            raise ValueError(f"Unsupported API key scopes: {sorted(unsupported)}. Valid scopes: {sorted(supported)}")
+            raise ValueError(
+                f"Unsupported API key scopes: {sorted(unsupported)}. "
+                f"Valid scopes: {sorted(api_keys_utils.get_api_key_scopes())}"
+            )
         return v
 
     model_config = ConfigDict(from_attributes=True)

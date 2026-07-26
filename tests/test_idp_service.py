@@ -264,11 +264,26 @@ def test_verify_id_token_nonce_mismatch():
         asyncio.run(svc._verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE, expected_nonce="different"))
 
 
-def test_verify_id_token_unknown_kid():
+def test_verify_id_token_unknown_kid_falls_back_to_every_published_key():
+    # ``kid`` is a hint, not a requirement: a stale cached JWKS (or an IdP that
+    # rotated keys without changing the set) would otherwise fail every login.
+    # The signature still has to verify against a key the IdP published.
     svc = IdentityProviderService()
     key, jwks = _rsa_jwks(kid="real-kid")
     svc._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
     token = jwt.encode({"alg": "RS256", "kid": "unknown-kid"}, _id_token_claims(), key)
+    claims = asyncio.run(svc._verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
+    assert claims["sub"] == "idp-subject"
+
+
+def test_verify_id_token_unknown_kid_still_rejects_foreign_signature():
+    # The fallback must not become "accept anything": a token signed by a key the
+    # IdP never published is still rejected.
+    svc = IdentityProviderService()
+    _published, jwks = _rsa_jwks(kid="real-kid")
+    foreign, _ = _rsa_jwks(kid="attacker-kid")
+    svc._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
+    token = jwt.encode({"alg": "RS256", "kid": "unknown-kid"}, _id_token_claims(), foreign)
     with pytest.raises(exc.InvalidTokenError):
         asyncio.run(svc._verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
 
@@ -392,11 +407,57 @@ def test_get_userinfo_oidc_refuses_userinfo_without_verified_id_token(monkeypatc
         )
 
 
-def test_verify_id_token_missing_kid():
+def test_verify_id_token_without_kid_is_accepted():
+    # OIDC Core does not require ``kid`` on an ID token, and single-key providers
+    # routinely omit it — demanding one would refuse those IdPs outright.
     svc = IdentityProviderService()
-    key, _jwks = _rsa_jwks()
+    key, jwks = _rsa_jwks()
+    svc._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
+    token = jwt.encode({"alg": "RS256"}, _id_token_claims(), key)
+    claims = asyncio.run(svc._verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
+    assert claims["sub"] == "idp-subject"
+
+
+def test_verify_id_token_without_kid_still_rejects_foreign_signature():
+    svc = IdentityProviderService()
+    _published, jwks = _rsa_jwks()
+    foreign, _ = _rsa_jwks(kid="other")
+    svc._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
+    token = jwt.encode({"alg": "RS256"}, _id_token_claims(), foreign)
+    with pytest.raises(exc.InvalidTokenError):
+        asyncio.run(svc._verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
+
+
+def test_verify_id_token_skips_encryption_only_jwks_entries():
+    # An entry marked use="enc" can never have produced a signature, so it must
+    # not be offered as a verification candidate.
+    svc = IdentityProviderService()
+    key, jwks = _rsa_jwks()
+    enc_entry = dict(jwks["keys"][0])
+    enc_entry["use"] = "enc"
+    svc._jwks_cache[JWKS_URI] = {"jwks": {"keys": [enc_entry]}, "cached_at": datetime.now(UTC)}
     token = jwt.encode({"alg": "RS256"}, _id_token_claims(), key)
     with pytest.raises(exc.InvalidTokenError):
+        asyncio.run(svc._verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
+
+
+def test_verify_id_token_ignores_unusable_jwks_entries():
+    # A malformed or unsupported entry alongside a good one must be skipped, not
+    # abort the whole verification.
+    svc = IdentityProviderService()
+    key, jwks = _rsa_jwks()
+    noisy = {"keys": [{"kty": "OKP", "crv": "X25519"}, {"kty": "RSA", "n": "!!"}, *jwks["keys"]]}
+    svc._jwks_cache[JWKS_URI] = {"jwks": noisy, "cached_at": datetime.now(UTC)}
+    token = jwt.encode({"alg": "RS256"}, _id_token_claims(), key)
+    assert asyncio.run(svc._verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))["sub"] == "idp-subject"
+
+
+def test_verify_id_token_empty_jwks_is_rejected():
+    svc = IdentityProviderService()
+    key, _jwks = _rsa_jwks()
+    svc._jwks_cache[JWKS_URI] = {"jwks": {"keys": []}, "cached_at": datetime.now(UTC)}
+    token = jwt.encode({"alg": "RS256"}, _id_token_claims(), key)
+    with pytest.raises(exc.InvalidTokenError, match="unknown key"):
         asyncio.run(svc._verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
 
 
@@ -525,7 +586,7 @@ def test_handle_callback_login_creates_user(db, monkeypatch):
         db, token_endpoint=f"{ISSUER}/token", userinfo_endpoint=f"{ISSUER}/userinfo", provider_type="oauth2"
     )
     userinfo = {
-        "sub": "idp-sub-1",
+        "sub": "idp-subject",
         "email": "sso@test.dev",
         "preferred_username": "ssouser",
         "name": "SSO User",
@@ -544,7 +605,74 @@ def test_handle_callback_login_creates_user(db, monkeypatch):
     assert result["user"].username == "ssouser"
     assert result["token_data"] == token
     # Link recorded for the IdP subject.
-    assert links_crud.get_user_identity_provider_by_subject_and_idp_id(idp.id, "idp-sub-1", db) is not None
+    assert links_crud.get_user_identity_provider_by_subject_and_idp_id(idp.id, "idp-subject", db) is not None
+
+
+# --------------------------------------------------------------------------- #
+# Discovery must fail closed
+#
+# When the IdP declares an issuer the flow is OIDC and the ID token is meant to
+# be verified against the discovered JWKS. Continuing after a discovery failure
+# would silently skip signature, issuer and nonce validation and fall back to
+# trusting the userinfo response alone — exactly the downgrade an attacker able
+# to disrupt discovery would want.
+# --------------------------------------------------------------------------- #
+
+
+def _oidc_callback_state(db, idp, state_id):
+    oauth_state_crud.create_oauth_state(
+        db=db, state_id=state_id, nonce="n", client_type="web", ip_address=None, idp_id=idp.id
+    )
+    return oauth_state_crud.get_oauth_state_by_id(state_id, db)
+
+
+def test_handle_callback_fails_closed_when_discovery_errors(db, monkeypatch):
+    svc = IdentityProviderService()
+    idp = _create_idp(db, issuer_url=ISSUER, token_endpoint=f"{ISSUER}/token")
+    _prepare_callback_idp(db, monkeypatch, svc, userinfo={"sub": "idp-subject"})
+
+    async def _boom(_idp):
+        raise RuntimeError("discovery down")
+
+    monkeypatch.setattr(svc, "get_oidc_configuration", _boom)
+    state_obj = _oidc_callback_state(db, idp, "s-disc-err")
+
+    with pytest.raises(exc.IdentityProviderError, match="discovery endpoint"):
+        asyncio.run(svc.handle_callback(idp, "code", "s-disc-err", _request(), password_hasher, db, state_obj))
+
+
+def test_handle_callback_fails_closed_when_discovery_publishes_no_jwks(db, monkeypatch):
+    svc = IdentityProviderService()
+    idp = _create_idp(db, issuer_url=ISSUER, token_endpoint=f"{ISSUER}/token")
+    _prepare_callback_idp(db, monkeypatch, svc, userinfo={"sub": "idp-subject"})
+
+    async def _no_jwks(_idp):
+        return {"issuer": ISSUER, "userinfo_endpoint": f"{ISSUER}/userinfo"}
+
+    monkeypatch.setattr(svc, "get_oidc_configuration", _no_jwks)
+    state_obj = _oidc_callback_state(db, idp, "s-disc-nojwks")
+
+    with pytest.raises(exc.IdentityProviderError, match="no JWKS"):
+        asyncio.run(svc.handle_callback(idp, "code", "s-disc-nojwks", _request(), password_hasher, db, state_obj))
+
+
+def test_handle_callback_without_issuer_url_skips_discovery(db, monkeypatch):
+    # A plain OAuth2 provider declares no issuer, so there is no ID token to
+    # verify and no discovery to fail: that path must keep working.
+    svc = IdentityProviderService()
+    idp = _create_idp(
+        db, token_endpoint=f"{ISSUER}/token", userinfo_endpoint=f"{ISSUER}/userinfo", provider_type="oauth2"
+    )
+    _prepare_callback_idp(
+        db,
+        monkeypatch,
+        svc,
+        userinfo={"sub": "plain-oauth", "email": "p@test.dev", "preferred_username": "plainuser"},
+    )
+    state_obj = _oidc_callback_state(db, idp, "s-no-issuer")
+
+    result = asyncio.run(svc.handle_callback(idp, "code", "s-no-issuer", _request(), password_hasher, db, state_obj))
+    assert result["user"].username == "plainuser"
 
 
 def test_handle_callback_replays_pkce_verifier(db, monkeypatch):

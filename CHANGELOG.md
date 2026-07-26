@@ -28,7 +28,8 @@ First release.
   `trusted_proxies`), so a client cannot evade the counter — or forge the IP in
   audit records — by prepending its own `X-Forwarded-For` value.
 - Timing-equalised failure paths, so response time does not reveal whether an
-  account exists or is SSO-only.
+  account exists or is SSO-only. Password length is bounded before any hashing
+  work, so an unauthenticated caller cannot force unbounded Argon2 input.
 - Breached-password screening (NIST SP 800-63B) via the *Have I Been Pwned*
   range API — free, unauthenticated, and k-anonymous, so only a five-character
   hash prefix ever leaves the process — or an offline host-supplied blocklist.
@@ -72,7 +73,11 @@ First release.
 
 - OpenID Connect login and account linking with discovery, PKCE, and full
   ID-token verification (signature against the provider JWKS, plus `iss`,
-  `aud`, `exp`, `iat`, `nonce`, `azp`, and `at_hash`).
+  `aud`, `exp`, `iat`, `nonce`, `azp`, and `at_hash`). The token's `kid` is
+  treated as a hint rather than a requirement — providers that omit it, and
+  stale cached key sets, still verify against the published keys — and when the
+  provider declares an issuer, a discovery failure is a **failed** login rather
+  than an unverified one.
 - SSRF-guarded outbound calls: scheme allow-list, public-address enforcement on
   every resolved record, and connections pinned to the validated IP so a DNS
   rebind cannot swap in an internal target.
@@ -82,6 +87,13 @@ First release.
 - API keys with a host-configured scope allow-list. A key can additionally never
   carry a scope the account minting it does not itself hold, so a credential
   cannot delegate authority its creator lacks.
+- Optional `reauthorize_scopes_per_request`: an access token's scopes are
+  intersected with the tier its account currently holds, so demoting an
+  administrator applies immediately rather than at token expiry. Strictly
+  narrowing — a token never gains a scope it was not issued with.
+- Scope denials carry an RFC 6750 `WWW-Authenticate: Bearer
+  error="insufficient_scope", scope="..."` challenge with a space-delimited
+  scope list, so a client can parse what to re-request.
 - An extensible scope catalog, surfaced in the Swagger authorize dialog.
 - Ports the host implements — `UserRepository`, `SettingsProvider`,
   `AuthEventSink`, `PasswordBreachChecker`, `RateLimiter`, `StateStore` — so the
@@ -96,7 +108,9 @@ First release.
   session revocation, scope denial) as well as failures.
 - Non-blocking `AuthEventSink` delivery: notifications are dispatched off the
   auth path with a per-delivery deadline and a bounded backlog, so a slow SMTP
-  server or webhook cannot degrade login.
+  server or webhook cannot degrade login. Security-critical notifications
+  (account lockout, refresh-token theft) are admitted against a larger reserve,
+  so a flood of routine notifications cannot starve out a security signal.
 - Framework-agnostic error types mapped to HTTP once at the edge, each carrying
   a stable machine-readable `code`.
 - Alembic migrations for JAFAAL's companion tables.
@@ -108,7 +122,10 @@ First release.
 - Optional features behind extras (`mfa`, `sso`, `webauthn`, `redis`,
   `migrations`) that fail fast with an install hint rather than at import time.
 - Startup guards that refuse to run a deployed environment without a rate
-  limiter, or on the process-local state store.
+  limiter, or on the process-local state store. `create_auth_router()` runs the
+  full configuration check by default (`verify=False` opts out), so a missing
+  host adapter fails at startup with one clear message instead of on the first
+  request that needs it.
 - `AuthSettings.environment` is validated against a known set rather than being a
   free-form string, so a typo cannot silently disable the deployed-environment
   controls (cookie `Secure`, cookie name prefix, and the two startup guards).

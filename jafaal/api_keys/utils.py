@@ -4,6 +4,7 @@ import json
 import secrets
 from collections.abc import Iterable
 
+import jafaal.exceptions as jafaal_exceptions
 import jafaal.settings as jafaal_settings
 import jafaal.token_hashing as token_hashing
 from jafaal._core.registry import ConfigSlot
@@ -94,6 +95,23 @@ def api_key_digests(raw_key: str) -> tuple[str, ...]:
     return token_hashing.digest_candidates(raw_key, token_hashing.KeyPurpose.API_KEY)
 
 
+def scopes_outside_allow_list(requested_scopes: Iterable[str]) -> set[str]:
+    """Return the requested scopes that are not in the API-key allow-list.
+
+    The shared half of the two-layer check: the request schema uses it to reject
+    an unsupported scope at parse time (as a Pydantic ``ValueError``, so it
+    surfaces as a 422 field error) and :func:`validate_api_key_scopes` uses it
+    for the authoritative check, so the rule lives in one place.
+
+    Args:
+        requested_scopes: Scopes the caller wants the key to carry.
+
+    Returns:
+        The offending scopes; empty when all are allow-listed.
+    """
+    return set(requested_scopes) - get_api_key_scopes()
+
+
 def validate_api_key_scopes(
     requested_scopes: list[str],
     *,
@@ -119,26 +137,27 @@ def validate_api_key_scopes(
         granted_scopes: Scopes held by the principal creating the key.
 
     Raises:
-        ValueError: If no scope is requested, or any requested scope is outside
-            the allow-list or not held by the caller.
+        InvalidRequestError: If no scope is requested, or any requested scope is
+            outside the allow-list or not held by the caller.
     """
     if not requested_scopes:
-        raise ValueError(f"No API key scopes requested. Valid scopes: {sorted(get_api_key_scopes())}")
+        raise jafaal_exceptions.InvalidRequestError(
+            f"No API key scopes requested. Valid scopes: {sorted(get_api_key_scopes())}"
+        )
 
-    requested = set(requested_scopes)
-    supported = get_api_key_scopes()
-
-    unsupported = requested - supported
+    unsupported = scopes_outside_allow_list(requested_scopes)
     if unsupported:
-        raise ValueError(f"Unsupported API key scopes: {sorted(unsupported)}. Valid scopes: {sorted(supported)}")
+        raise jafaal_exceptions.InvalidRequestError(
+            f"Unsupported API key scopes: {sorted(unsupported)}. Valid scopes: {sorted(get_api_key_scopes())}"
+        )
 
     # Reported separately from ``unsupported``: "the deployment does not offer
     # this scope" and "you do not hold this scope" are different problems, and
     # conflating them would tell a caller that an admin scope exists but hide why
     # it was refused.
-    not_granted = requested - set(granted_scopes)
+    not_granted = set(requested_scopes) - set(granted_scopes)
     if not_granted:
-        raise ValueError(
+        raise jafaal_exceptions.InvalidRequestError(
             f"Cannot grant API key scopes you do not hold: {sorted(not_granted)}. "
             "An API key may only carry scopes the requesting account has."
         )

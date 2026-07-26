@@ -130,6 +130,7 @@ class Event:
     # --- identity providers ---
     IDP_LINK_ADDED: Final = "idp.link_added"
     IDP_LINK_REMOVED: Final = "idp.link_removed"
+    IDP_DISCOVERY_FAILED: Final = "idp.discovery_failed"
     OAUTH_STATE_REPLAY_REJECTED: Final = "oauth_state.replay_rejected"
 
     # --- authorization ---

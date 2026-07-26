@@ -25,7 +25,11 @@ protections and the deployment steps you are responsible for.
   (see [Asymmetric signing & JWKS](configuration.md#asymmetric-signing-jwks)).
   OIDC ID tokens are verified against a separate asymmetric allow-list (blocking
   RS256→HS256 confusion), and their `iss`/`aud`/`exp`/`iat`, `nonce`, `azp`, and
-  (when present) `at_hash` claims are checked.
+  (when present) `at_hash` claims are checked. When an identity provider declares
+  an issuer, **discovery failing is a failed login, not an unverified one**: the
+  callback refuses to fall back to trusting the userinfo response alone, so an
+  attacker who can disrupt discovery cannot downgrade the flow past ID-token
+  verification.
 - **Refresh-token rotation with reuse detection.** Every refresh rotates the
   token; presenting an already-rotated token past a short grace window is treated
   as **theft** and invalidates the entire token family. A racing/duplicate
@@ -33,8 +37,9 @@ protections and the deployment steps you are responsible for.
   store the refresh token as a keyed HMAC-SHA256 digest — unforgeable without
   `secret_key`, and microseconds to verify, since a refresh token is a
   high-entropy server-minted JWT rather than a user-chosen secret.
-- **CSRF binding** for web clients, with an OAuth 2.1 bootstrap rule for page
-  reloads. `/refresh` additionally rejects any request the browser marks as
+- **CSRF binding** for web clients, with a bootstrap rule for page reloads (the
+  in-memory CSRF token is lost on reload while the `HttpOnly` cookie persists).
+  `/refresh` additionally rejects any request the browser marks as
   off-site: `Origin` and `Sec-Fetch-Site` are *forbidden header names*, so page
   script can neither forge nor strip them — unlike a custom `X-CSRF-Token`
   header, which a cross-site attacker simply omits. Set `csrf_trusted_origins`

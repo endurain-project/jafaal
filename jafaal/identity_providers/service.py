@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 import jafaal._internal.password_hasher as jafaal_password_hasher
 import jafaal._internal.security_stores as jafaal_security_stores
+import jafaal.audit as jafaal_audit
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_providers.crud as idp_crud
 import jafaal.identity_providers.links.crud as jafaal_identity_links_crud
@@ -155,6 +156,88 @@ def _verify_at_hash(access_token: str, alg: str, at_hash_claim: str) -> None:
     if not hmac.compare_digest(expected, at_hash_claim):
         logger.warning("ID token at_hash does not match the issued access token")
         raise jafaal_exceptions.InvalidTokenError("ID token at_hash mismatch")
+
+
+def _import_jwks_key(key_data: dict[str, Any]) -> RSAKey | ECKey | OctKey | None:
+    """Import one JWKS entry, or return ``None`` when it is unusable.
+
+    A JWK Set may legitimately mix key types and include entries for other uses
+    (e.g. encryption), so an entry we cannot import is skipped rather than
+    failing the whole verification.
+
+    Args:
+        key_data: A single JWK from the provider's key set.
+
+    Returns:
+        The imported key, or ``None`` if the type is unsupported or malformed.
+    """
+    key_type = key_data.get("kty")
+    try:
+        if key_type == "RSA":
+            return RSAKey.import_key(key_data)
+        if key_type == "EC":
+            return ECKey.import_key(key_data)
+        if key_type == "oct":
+            return OctKey.import_key(key_data)
+    except Exception:
+        logger.warning(f"Skipping unimportable JWKS entry (kty={key_type}, kid={key_data.get('kid')})")
+        return None
+    logger.debug(f"Skipping JWKS entry with unsupported key type: {key_type}")
+    return None
+
+
+def _select_jwks_keys(jwks: dict[str, Any], kid: str | None) -> list[RSAKey | ECKey | OctKey]:
+    """Return the JWKS keys to try for an ID token, most likely first.
+
+    When the token carries a ``kid`` that matches an entry, only that key is
+    used. Otherwise every usable key in the set is returned: ``kid`` is optional
+    on an ID token (OIDC Core does not require it, and single-key providers
+    routinely omit it), so demanding one would refuse those providers outright.
+    Trying the whole set is not a weakening — the signature must still verify
+    against a key the IdP itself published, under the pinned algorithm
+    allow-list.
+
+    Args:
+        jwks: The provider's JSON Web Key Set.
+        kid: The ``kid`` from the ID token header, if any.
+
+    Returns:
+        Candidate keys; empty when the set holds nothing usable.
+    """
+    entries = [entry for entry in jwks.get("keys", []) if isinstance(entry, dict)]
+    if kid:
+        matched = [entry for entry in entries if entry.get("kid") == kid]
+        if matched:
+            entries = matched
+        else:
+            logger.warning(f"No JWKS entry matches kid={kid}; trying every published key")
+    # Signing keys only: an entry explicitly marked for encryption can never
+    # have produced this signature.
+    entries = [entry for entry in entries if entry.get("use") in (None, "sig")]
+    return [key for key in (_import_jwks_key(entry) for entry in entries) if key is not None]
+
+
+def _decode_with_any_key(id_token: str, keys: list[RSAKey | ECKey | OctKey]) -> Any:
+    """Decode ``id_token`` against the first key whose signature verifies.
+
+    Args:
+        id_token: The raw ID token JWT.
+        keys: Candidate verification keys from the provider's JWKS.
+
+    Returns:
+        The decoded token.
+
+    Raises:
+        BadSignatureError: If no candidate key verifies the signature.
+    """
+    last_error: Exception | None = None
+    for key in keys:
+        try:
+            return jwt.decode(id_token, key, algorithms=list(ID_TOKEN_ALLOWED_ALGORITHMS))
+        except BadSignatureError as err:
+            last_error = err
+            continue
+    raise last_error if last_error is not None else BadSignatureError()
 
 
 class TokenAction(Enum):
@@ -410,10 +493,6 @@ class IdentityProviderService:
             kid = header.get("kid")
             alg = header.get("alg")
 
-            if not kid:
-                logger.warning("ID token header missing 'kid' claim")
-                raise jafaal_exceptions.InvalidTokenError("ID token missing key identifier")
-
             if not alg:
                 logger.warning("ID token header missing 'alg' claim")
                 raise jafaal_exceptions.InvalidTokenError("ID token missing algorithm")
@@ -431,32 +510,18 @@ class IdentityProviderService:
             # Step 2: Fetch JWKS from IdP
             jwks = await self._fetch_jwks(jwks_uri)
 
-            # Step 3: Find the matching key in JWKS
-            matching_key = None
-            for key_data in jwks.get("keys", []):
-                if key_data.get("kid") == kid:
-                    matching_key = key_data
-                    break
-
-            if not matching_key:
-                logger.warning(f"No matching key found in JWKS for kid={kid}")
+            # Step 3/4: Select and import the candidate key(s) from the JWKS.
+            #
+            # ``kid`` is only a hint: OIDC Core does not require it on the ID
+            # token and single-key providers routinely omit it, so demanding one
+            # would refuse those IdPs outright. When it is absent (or matches
+            # nothing) every usable key in the set is tried instead. That is not
+            # a weakening: the signature must still verify against one of the
+            # IdP's published keys under the same pinned algorithm allow-list.
+            candidate_keys = _select_jwks_keys(jwks, kid)
+            if not candidate_keys:
+                logger.warning(f"No usable key found in JWKS for kid={kid}")
                 raise jafaal_exceptions.InvalidTokenError("ID token signed with unknown key")
-
-            logger.debug(f"Found matching key in JWKS: kid={kid}, kty={matching_key.get('kty')}")
-
-            # Step 4: Import the key based on type
-            key_type = matching_key.get("kty")
-
-            key: RSAKey | ECKey | OctKey
-            if key_type == "RSA":
-                key = RSAKey.import_key(matching_key)
-            elif key_type == "EC":
-                key = ECKey.import_key(matching_key)
-            elif key_type == "oct":
-                key = OctKey.import_key(matching_key)
-            else:
-                logger.warning(f"Unsupported key type in JWKS: {key_type}")
-                raise jafaal_exceptions.InvalidTokenError(f"Unsupported key type: {key_type}")
 
             # Step 5: Verify signature and decode claims
             # joserfc will verify the signature using the public key.
@@ -464,11 +529,7 @@ class IdentityProviderService:
             # acceptable signature algorithms so a forged ``alg`` header
             # (``none`` or a symmetric ``HS*`` confusion attack) cannot
             # bypass verification, mirroring TokenManager.decode_token.
-            decoded = jwt.decode(
-                id_token,
-                key,
-                algorithms=list(ID_TOKEN_ALLOWED_ALGORITHMS),
-            )
+            decoded = _decode_with_any_key(id_token, candidate_keys)
             claims = decoded.claims
 
             # Step 5a: Validate claims (iss, aud, exp, iat)
@@ -1095,7 +1156,41 @@ class IdentityProviderService:
                             f"issuer={bool(expected_issuer)}"
                         )
                 except Exception as err:
-                    logger.warning(f"OIDC discovery failed for IdP {idp.name}: {err}", exc_info=err)
+                    # Fail closed. The IdP declares an ``issuer_url``, so this
+                    # flow is OIDC and the ID token is meant to be verified
+                    # against the discovered JWKS. Continuing without it would
+                    # silently skip signature, issuer and nonce validation and
+                    # fall back to trusting the userinfo response alone — the
+                    # exact downgrade an attacker able to disrupt discovery would
+                    # want. A transient outage becomes a failed login, not an
+                    # unverified one.
+                    logger.error(f"OIDC discovery failed for IdP {idp.name}: {err}", exc_info=err)
+                    jafaal_audit.record(
+                        jafaal_audit.Event.IDP_DISCOVERY_FAILED,
+                        outcome=jafaal_audit.Outcome.FAILURE,
+                        level=logging.ERROR,
+                        idp=idp.slug,
+                        reason=type(err).__name__,
+                    )
+                    raise jafaal_exceptions.IdentityProviderError(
+                        f"Could not reach the {idp.name} discovery endpoint, so the ID token cannot be "
+                        "verified. Please try again later."
+                    ) from err
+
+                if not jwks_uri:
+                    # Discovery succeeded but published no JWKS: there is no way
+                    # to verify the ID token, so the same reasoning applies.
+                    logger.error(f"OIDC discovery for IdP {idp.name} returned no jwks_uri")
+                    jafaal_audit.record(
+                        jafaal_audit.Event.IDP_DISCOVERY_FAILED,
+                        outcome=jafaal_audit.Outcome.FAILURE,
+                        level=logging.ERROR,
+                        idp=idp.slug,
+                        reason="no_jwks_uri",
+                    )
+                    raise jafaal_exceptions.IdentityProviderError(
+                        f"Identity provider {idp.name} publishes no JWKS, so its ID token cannot be verified."
+                    )
 
             # Retrieve nonce from database state
             expected_nonce = oauth_state.nonce

@@ -239,6 +239,7 @@ def create_auth_router(
     app: FastAPI | None = None,
     rate_limiter: RateLimiter | None = None,
     prefixes: RouterPrefixes | None = None,
+    verify: bool = True,
 ) -> APIRouter:
     """Build the aggregated JAFAAL auth router.
 
@@ -252,11 +253,22 @@ def create_auth_router(
             limiter already in effect (no enforcement).
         prefixes: Override the default sub-prefixes (keep them in lockstep with
             :class:`~jafaal.settings.AuthSettings` path fields).
+        verify: Run :func:`verify_configuration` first (default), so a missing
+            host adapter fails here with one clear message instead of surfacing
+            as a ``RuntimeError`` on the first request that needs it. Set
+            ``False`` only when the router is built before the adapters are
+            installed (then call :func:`verify_configuration` yourself once they
+            are).
 
     Returns:
         An ``APIRouter`` the host mounts under its API root, e.g.::
 
             app.include_router(create_auth_router(app=app), prefix="/api/v1")
+
+    Raises:
+        RuntimeError: If ``verify`` is set and a required component is missing,
+            or a deployed environment is running on the in-memory state store or
+            without an enforcing rate limiter.
     """
     if rate_limiter is not None:
         configure_rate_limiter(rate_limiter)
@@ -266,8 +278,14 @@ def create_auth_router(
 
     _warn_on_insecure_defaults()
     _warn_on_router_prefix_mismatch(prefixes)
-    _ensure_state_store_safe_for_deployment()
-    _ensure_rate_limiter_safe_for_deployment()
+    if verify:
+        verify_configuration()
+    else:
+        # The deployment guards are not optional even when the adapter check is
+        # deferred: they are what keeps a deployed environment from silently
+        # running unprotected.
+        _ensure_state_store_safe_for_deployment()
+        _ensure_rate_limiter_safe_for_deployment()
 
     # Import the sub-routers here, after installing the limiter. The rate-limit
     # decorators bind the configured limiter lazily (on first request, re-binding
