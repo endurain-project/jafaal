@@ -30,9 +30,11 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 
 import jafaal
+import jafaal.mfa.crud as mfa_crud
 import jafaal.orm as jafaal_orm
 import jafaal.webauthn.crud as webauthn_crud
 import jafaal.webauthn.service as webauthn_service
+from jafaal._core import crypto
 from jafaal._core.optional_deps import MissingDependencyError
 
 REG_BEGIN = "/api/v1/auth/webauthn/register/begin"
@@ -42,6 +44,11 @@ MFA_BEGIN = "/api/v1/auth/webauthn/mfa/begin"
 MFA_COMPLETE = "/api/v1/auth/webauthn/mfa/complete"
 AUTH_BEGIN = "/api/v1/public/webauthn/authenticate/begin"
 AUTH_COMPLETE = "/api/v1/public/webauthn/authenticate/complete"
+
+
+def _enable_totp(user_id, db):
+    """Enrol TOTP for ``user_id`` so the passkey/MFA policy has something to see."""
+    mfa_crud.update_user_mfa(user_id, db, encrypted_secret=crypto.encrypt_token_fernet("JBSWY3DPEHPK3PXP"))
 
 
 # --------------------------------------------------------------------------- #
@@ -355,10 +362,68 @@ def test_passwordless_authentication_issues_tokens(client, make_user, mock_verif
     assert stored.last_used_at is not None
 
 
+def test_passwordless_completes_for_a_totp_account_by_default(client, make_user, mock_verify, db):
+    # The passwordless ceremony forces user verification, so a successful
+    # assertion is possession *and* a PIN/biometric — two factors. Treating it
+    # as sufficient is the default, and it is now an explicit setting rather
+    # than an accident of which endpoint was called.
+    user = make_user(username="alice")
+    _register_credential(user.id, raw_id=b"cred-1")
+    _enable_totp(user.id, db)
+    mock_verify["authentication"] = _fake_authentication()
+
+    challenge_id = client.post(AUTH_BEGIN, json={"username": "alice"}).json()["challenge_id"]
+    resp = client.post(
+        AUTH_COMPLETE,
+        json={"challenge_id": challenge_id, "credential": _assertion_credential(), "client_id": WEB_CLIENT_ID},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["access_token"]
+
+
+def test_passwordless_is_refused_for_a_totp_account_when_policy_says_so(client, make_user, mock_verify, db):
+    # A deployment whose policy names TOTP specifically, rather than "two
+    # factors", can close the shortcut.
+    user = make_user(username="alice")
+    _register_credential(user.id, raw_id=b"cred-1")
+    _enable_totp(user.id, db)
+    mock_verify["authentication"] = _fake_authentication()
+
+    original = jafaal.get_settings()
+    jafaal.configure(replace_settings(original, passkey_login_satisfies_mfa=False))
+    try:
+        challenge_id = client.post(AUTH_BEGIN, json={"username": "alice"}).json()["challenge_id"]
+        resp = client.post(
+            AUTH_COMPLETE,
+            json={"challenge_id": challenge_id, "credential": _assertion_credential(), "client_id": WEB_CLIENT_ID},
+        )
+        assert resp.status_code == 403
+        assert "access_token" not in resp.json()
+    finally:
+        jafaal.configure(original)
+
+
+def test_the_policy_does_not_affect_accounts_without_totp(client, make_user, mock_verify, db):
+    user = make_user(username="alice")
+    _register_credential(user.id, raw_id=b"cred-1")
+    mock_verify["authentication"] = _fake_authentication()
+
+    original = jafaal.get_settings()
+    jafaal.configure(replace_settings(original, passkey_login_satisfies_mfa=False))
+    try:
+        challenge_id = client.post(AUTH_BEGIN, json={"username": "alice"}).json()["challenge_id"]
+        resp = client.post(
+            AUTH_COMPLETE,
+            json={"challenge_id": challenge_id, "credential": _assertion_credential(), "client_id": WEB_CLIENT_ID},
+        )
+        assert resp.status_code == 200
+    finally:
+        jafaal.configure(original)
+
+
 def test_passwordless_usernameless_flow(client, make_user, mock_verify):
     user = make_user(username="alice")
     _register_credential(user.id, raw_id=b"cred-1")
-
     # No username → discoverable-credential ceremony (empty allow-list).
     begin = client.post(AUTH_BEGIN, json={})
     assert begin.status_code == 200

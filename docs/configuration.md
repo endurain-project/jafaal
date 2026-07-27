@@ -210,6 +210,7 @@ the settings and invalidates settings-derived caches (e.g. the token manager).
 | `user_verification` | `"preferred"` | User-verification requirement (`required`/`preferred`/`discouraged`). |
 | `attestation` | `"none"` | Attestation conveyance requested at registration (`none`/`direct`). |
 | `second_factor_enabled` | `False` | Require a registered passkey as a second factor after password login. |
+| `passkey_login_satisfies_mfa` | `True` | Whether a passwordless passkey login completes on its own for an account that also has TOTP enrolled. The ceremony always forces user verification, so it is possession **and** a PIN/biometric. Set `False` if your policy names TOTP specifically. |
 | `challenge_ttl_seconds` | `300` | Lifetime of a WebAuthn challenge held in the state store. |
 | `sensitive` | `"10/minute"` | Budget hint for sensitive endpoints. |
 | `write` | `"30/minute"` | Budget hint for write endpoints. |
@@ -372,7 +373,8 @@ GET  <your-api-root>/.well-known/oauth-authorization-server
   "response_types_supported": ["code"],
   "token_endpoint_auth_methods_supported": ["none"],
   "scopes_supported": ["identity_providers:read", "profile", "users:read"],
-  "code_challenge_methods_supported": ["S256"]
+  "code_challenge_methods_supported": ["S256"],
+  "authorization_response_iss_parameter_supported": true
 }
 ```
 
@@ -380,6 +382,20 @@ The endpoint URLs follow your [`RouterPrefixes`][jafaal.RouterPrefixes] automati
 and `scopes_supported` reflects the installed scope catalog. The origin is taken
 from `base_url` when it is set, so a forged `Host` header cannot make JAFAAL
 advertise an attacker-controlled `token_endpoint`.
+
+`authorization_response_iss_parameter_supported` is
+[RFC 9207](https://www.rfc-editor.org/rfc/rfc9207): every authorization response
+carries `iss`, so a client configured against more than one authorization server
+can prove which one answered and refuse a code steered in from another (the
+mix-up attack). Advertising it is what lets a client *require* the check.
+
+!!! note "`jwks_uri` appears only when you sign asymmetrically"
+    Under the default HS256 there is no public key, and the JWKS endpoint
+    answers `404`. Advertising a URL whose document is `{"keys": []}` would tell
+    a verifier the issuer had rotated every key away — sending it into refresh
+    and retry logic — rather than that stateless verification was never on
+    offer. Set an asymmetric `algorithm` (with `secrets.private_key`) to publish
+    keys.
 
 There are **no extension members**. Everything a client needs to drive JAFAAL is
 a standard field; a bespoke one would mean an endpoint a stock OAuth library
@@ -463,7 +479,7 @@ JAFAAL exposes RFC 7662 introspection and RFC 7009 revocation for its own
 access/refresh tokens, mounted on the auth router:
 
 - **`POST <api-root>/auth/introspect`** (RFC 7662) returns `{"active": …}` plus
-  the token's metadata (`sub`, `scope`, `exp`, `typ`, `sid`, …). It is
+  the token's metadata (`sub`, `scope`, `exp`, `token_use`, `sid`, …). It is
   **protected**: the caller must present a credential (JWT or API key) carrying
   the `auth:introspect` scope. Grant it to a resource-server API key:
 
@@ -475,12 +491,21 @@ access/refresh tokens, mounted on the auth router:
     A token reads as inactive once it expires, its signature/claims don't match,
     its `jti` is revoked, or its session has been ended (logout / `/revoke`).
 
-- **`POST <api-root>/auth/revoke`** (RFC 7009) — present a token to revoke it
-  (possession is the authorisation); always returns `200`, even for an unknown
+- **`POST <api-root>/auth/revoke`** (RFC 7009) — present a token **and the
+  `client_id` it was issued to**; always returns `200`, even for an unknown
   token.
-    - A **refresh token** deletes its session — always effective.
+    - `client_id` is required (RFC 7009 §2.1) and the token must have been
+      issued to it (§5). Without that binding, possession of a leaked token is a
+      force-logout primitive: anyone who observes a refresh token can end its
+      owner's session. A token belonging to a *different* client is treated
+      exactly like an unknown one — a silent `200` — so the endpoint does not
+      answer "whose token is this?".
+    - A **refresh token** deletes its session — always effective. With
+      `denylist_enabled=True` the session id is denylisted too, so the access
+      tokens minted from the same grant stop working immediately rather than
+      lapsing minutes later (§2.1).
     - An **access token** is denylisted by `jti` **only when**
-      `access_token_denylist_enabled=True`; otherwise the short-lived token
+      `denylist_enabled=True`; otherwise the short-lived token
       lapses at expiry. Enable that setting (or `strict_binding`) for
       immediate access-token revocation — each adds one state-store lookup per
       authenticated request.

@@ -174,14 +174,21 @@ class TokenIntrospectionResponse(BaseModel):
     """RFC 7662 token introspection response.
 
     ``active`` is the only guaranteed field; the rest are populated only for an
-    active token. ``typ`` and ``sid`` are JAFAAL extensions (the token's own type
-    and its session id).
+    active token. ``token_use`` and ``sid`` are JAFAAL extensions (§2.2 permits
+    them), reporting the token's own use and its session id.
+
+    The extension is named ``token_use`` rather than ``typ`` for the same reason
+    the payload claim is: §2.2 already defines ``token_type`` as the RFC 6749
+    §7.1 type (``Bearer``), and RFC 9068 uses ``typ`` for the JOSE *header*'s
+    media type. A third spelling of "type" meaning a third thing is how a client
+    reads the wrong one.
 
     Attributes:
         active: Whether the token is currently valid.
         sub: Subject (user) identifier.
         scope: Space-delimited granted scopes.
-        typ: JAFAAL token type (``access`` or ``refresh``).
+        token_use: JAFAAL token use (``access`` or ``refresh``); mirrors the
+            token's own ``token_use`` claim.
         token_type: ``Bearer`` for an active token.
         client_id: OAuth client identifier the token was issued to.
         exp: Expiry (epoch seconds).
@@ -198,7 +205,7 @@ class TokenIntrospectionResponse(BaseModel):
     active: StrictBool
     sub: StrictStr | None = None
     scope: StrictStr | None = None
-    typ: StrictStr | None = None
+    token_use: StrictStr | None = None
     token_type: StrictStr | None = None
     client_id: StrictStr | None = None
     exp: StrictInt | None = None

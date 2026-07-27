@@ -451,6 +451,15 @@ class WebAuthnSettings:
             must present one as a second factor after a successful password
             login. Off by default; passwordless authentication is always
             available regardless.
+        passkey_login_satisfies_mfa: Whether a passwordless passkey login
+            completes on its own for an account that also has TOTP enrolled.
+            ``True`` (default) treats the ceremony as already multi-factor: the
+            passwordless path always demands user verification, so the
+            authenticator has checked possession *and* a PIN/biometric before it
+            will sign. ``False`` refuses the shortcut and makes such an account
+            log in with its password + TOTP, for deployments whose policy names
+            TOTP specifically rather than "two factors". Accounts without TOTP
+            are unaffected either way.
         challenge_ttl_seconds: Lifetime of a challenge held in the state store
             before it must be redeemed. Kept short (a ceremony is interactive
             and immediate) to bound replay of a leaked challenge.
@@ -462,6 +471,7 @@ class WebAuthnSettings:
     user_verification: str = "preferred"
     attestation: str = "none"
     second_factor_enabled: bool = False
+    passkey_login_satisfies_mfa: bool = True
     challenge_ttl_seconds: int = 300
 
     def __post_init__(self) -> None:

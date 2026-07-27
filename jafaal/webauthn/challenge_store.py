@@ -17,12 +17,15 @@ Three namespaces, by ceremony:
 from __future__ import annotations
 
 import hashlib
+import logging
 import secrets
 
 import jafaal.settings as jafaal_settings
 from jafaal.exceptions import ServiceUnavailableError
 from jafaal.orm import UserId
 from jafaal.state_store import StateStoreUnavailableError, get_state_store
+
+logger = logging.getLogger(__name__)
 
 _REG_PREFIX = "webauthn:reg"
 _AUTH_PREFIX = "webauthn:auth"
@@ -72,6 +75,32 @@ def store_registration_challenge(user_id: UserId, challenge: bytes) -> None:
 def pop_registration_challenge(user_id: UserId) -> bytes | None:
     """Retrieve and consume the registration challenge for ``user_id``."""
     return _pop(_key(_REG_PREFIX, str(user_id)))
+
+
+def discard_registration_challenge(user_id: UserId) -> None:
+    """Drop any pending registration challenge for ``user_id``.
+
+    Called from the credential-change sweep. ``/register/begin`` is step-up
+    gated and ``/register/complete`` is not — the minted challenge *is* the proof
+    that step-up passed. So an attacker who holds a stolen access token, passes
+    step-up with a password they are about to lose, and stops before completing,
+    keeps a live licence to bind a passkey (a full login credential) for the rest
+    of the challenge TTL. Rotating the password has to invalidate it.
+
+    Best-effort: a state-store outage is swallowed, because the credential change
+    that triggered the sweep must still succeed and the challenge expires on its
+    own shortly after.
+
+    Args:
+        user_id: The user whose pending registration challenge is dropped.
+    """
+    try:
+        get_state_store().delete(_key(_REG_PREFIX, str(user_id)))
+    except StateStoreUnavailableError:
+        logger.warning(
+            "Could not drop the pending WebAuthn registration challenge; it will expire via TTL",
+            exc_info=True,
+        )
 
 
 def store_authentication_challenge(challenge_id: str, challenge: bytes) -> None:

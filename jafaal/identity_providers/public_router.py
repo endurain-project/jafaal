@@ -11,6 +11,7 @@ scheme-level allow-list: a URI is either registered, byte-for-byte, or JAFAAL
 will not send a browser to it.
 """
 
+import hmac
 import logging
 from typing import Annotated
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -27,6 +28,7 @@ import jafaal._internal.user_guards as jafaal_user_guards
 import jafaal.audit as jafaal_audit
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_providers.crud as idp_crud
+import jafaal.identity_providers.models as idp_models
 import jafaal.identity_providers.schema as idp_schema
 import jafaal.identity_providers.service as idp_service
 import jafaal.oauth_state.crud as oauth_state_crud
@@ -34,6 +36,7 @@ import jafaal.oauth_state.models as oauth_state_models
 import jafaal.orm as jafaal_orm
 import jafaal.rate_limit as jafaal_rate_limit
 import jafaal.sessions.utils as jafaal_sessions_utils
+import jafaal.settings as jafaal_settings
 from jafaal._core import network
 
 logger = logging.getLogger(__name__)
@@ -117,6 +120,53 @@ def _provider_error_params(error: str, error_description: str | None) -> dict[st
     return params
 
 
+def _reject_issuer_mismatch(
+    idp: idp_models.IdentityProvider,
+    response_iss: str | None,
+) -> None:
+    """Assert an RFC 9207 ``iss`` in the callback names the provider we asked.
+
+    RFC 9207 has the authorization server put its issuer identifier in the
+    authorization *response*, so a client cannot be tricked into redeeming a code
+    at a server other than the one that issued it (the mix-up attack). JAFAAL is
+    already well defended here — the callback path names the provider, the state
+    is bound to ``idp_id``, and the ID token's ``iss`` is pinned to the
+    discovered issuer — but those checks all happen *after* the code has been
+    sent to a token endpoint. This one runs before, which is the point of the
+    parameter.
+
+    Only enforced when the provider actually sends it: RFC 9207 is an extension
+    and a provider that predates it omits the parameter entirely. A provider
+    that sends a *wrong* one is a different matter, and is refused.
+
+    Args:
+        idp: The provider named by the callback path.
+        response_iss: The ``iss`` authorization-response parameter, if present.
+
+    Raises:
+        InvalidRequestError: If ``iss`` is present and does not match the
+            provider's configured issuer.
+    """
+    if not response_iss:
+        return
+    configured = (idp.issuer_url or "").rstrip("/")
+    if not configured:
+        # A provider configured by explicit endpoints rather than discovery has
+        # no issuer to compare against; there is nothing to check.
+        return
+    if not hmac.compare_digest(configured, response_iss.rstrip("/")):
+        logger.warning(f"Authorization response for {idp.slug} carried iss={response_iss!r}, expected {configured!r}")
+        jafaal_audit.record(
+            jafaal_audit.Event.OAUTH_ISSUER_MISMATCH,
+            outcome=jafaal_audit.Outcome.BLOCKED,
+            level=logging.WARNING,
+            idp=idp.slug,
+            expected_issuer=configured,
+            response_issuer=response_iss,
+        )
+        raise jafaal_exceptions.InvalidRequestError("The authorization response came from an unexpected issuer.")
+
+
 def _audit_state_ip_mismatch(
     oauth_state: oauth_state_models.OAuthState,
     idp_slug: str,
@@ -169,6 +219,13 @@ def _return_to_client(oauth_state: oauth_state_models.OAuthState, params: dict[s
     rather than string concatenation — otherwise a value could inject additional
     parameters into the URL the client parses.
 
+    Every response carries ``iss`` (RFC 9207). A client configured against more
+    than one authorization server otherwise has no way to tell which one
+    answered, which is what makes the mix-up attack work: an attacker who can
+    influence which server the flow started at gets a code issued by a server it
+    controls accepted as if it came from this one. ``state`` does not close it —
+    the honest server's own ``state`` is what is replayed.
+
     Args:
         oauth_state: The state row carrying the validated redirect target and the
             client's opaque ``state``.
@@ -185,6 +242,7 @@ def _return_to_client(oauth_state: oauth_state_models.OAuthState, params: dict[s
     """
     if not oauth_state.redirect_uri:
         raise jafaal_exceptions.InternalError("OAuth state has no validated redirect_uri")
+    params = {**params, "iss": jafaal_settings.get_settings().resolved_issuer}
     if oauth_state.client_state:
         params = {**params, "state": oauth_state.client_state}
     return RedirectResponse(
@@ -241,6 +299,7 @@ async def handle_callback(
     error: str | None = Query(None, description="RFC 6749 §4.1.2.1 error code, when the provider refused"),
     error_description: str | None = Query(None, description="Human-readable detail accompanying `error`"),
     error_uri: str | None = Query(None, description="Provider's error page; logged, never forwarded"),
+    iss: str | None = Query(None, description="RFC 9207 issuer identifier; verified when the provider sends it"),
 ):
     """Handle the OAuth callback from an identity provider.
 
@@ -276,6 +335,9 @@ async def handle_callback(
         error: The provider's error code, when it refused the request.
         error_description: Human-readable detail accompanying ``error``.
         error_uri: The provider's error page; logged, never forwarded onward.
+        iss: The RFC 9207 issuer identifier. Verified against the provider's
+            configured issuer when present; providers predating the extension
+            omit it.
 
     Returns:
         RedirectResponse: To the client's registered redirect URI.
@@ -291,6 +353,9 @@ async def handle_callback(
         idp = idp_crud.get_identity_provider_by_slug(idp_slug, db)
         if not idp or not idp.enabled:
             raise jafaal_exceptions.NotFoundError("Identity provider not found or disabled")
+
+        # RFC 9207 mix-up defence, checked before the code is sent anywhere.
+        _reject_issuer_mismatch(idp, iss)
 
         # Lookup OAuth state from database (mandatory for all clients)
         oauth_state = oauth_state_crud.get_oauth_state_by_id_and_not_used(state, db)

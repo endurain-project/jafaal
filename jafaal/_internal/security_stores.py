@@ -887,3 +887,23 @@ def consume_step_up_reauth_grant(user_id: UserId) -> bool:
     except StateStoreUnavailableError as err:
         logger.warning("Step-up grant check skipped; state store unavailable", exc_info=err)
         return False
+
+
+def clear_step_up_reauth_grant(user_id: UserId) -> None:
+    """Drop an unconsumed step-up grant for ``user_id``.
+
+    Part of the credential-change sweep. A grant is a bearer licence to perform
+    one sensitive operation — change a password, mint an API key, bind or remove
+    a passkey — without presenting any factor at all. Leaving one live across a
+    password reset means the reset does not actually evict whoever obtained it.
+
+    Best-effort, like every other entry in the sweep: the credential change must
+    succeed regardless, and the grant's TTL is short.
+
+    Args:
+        user_id: The user whose outstanding grant is dropped.
+    """
+    try:
+        get_state_store().delete(_step_up_grant_key(user_id))
+    except StateStoreUnavailableError as err:
+        logger.warning("Could not drop the step-up grant; it will expire via TTL", exc_info=err)

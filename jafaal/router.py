@@ -783,6 +783,10 @@ def _authorize_error_redirect(
     strands the client: a native app waiting on its redirect never learns the
     request failed, and the user is left on a blank browser tab.
 
+    ``iss`` is included here as well as on the success response: RFC 9207 §2
+    requires the issuer identifier on *every* authorization response, so a client
+    that validates it unconditionally does not have to special-case failures.
+
     Args:
         redirect_uri: The already-validated redirect target.
         err: The OAuth error to report.
@@ -792,7 +796,11 @@ def _authorize_error_redirect(
     Returns:
         A 302 to the client's redirect URI carrying the error.
     """
-    params = {"error": err.oauth_error, "error_description": err.detail}
+    params = {
+        "error": err.oauth_error,
+        "error_description": err.detail,
+        "iss": jafaal_settings.get_settings().resolved_issuer,
+    }
     if state is not None:
         params["state"] = state
     return RedirectResponse(
@@ -1210,8 +1218,8 @@ def introspect_token_endpoint(
     Args:
         response: The HTTP response object, marked ``no-store``.
         token: The token to introspect (form field).
-        token_type_hint: Optional RFC 7662 hint; ignored (the token's ``typ``
-            claim is authoritative).
+        token_type_hint: Optional RFC 7662 hint; ignored (the token's
+            ``token_use`` claim is authoritative).
 
     Returns:
         The RFC 7662 introspection response.
@@ -1233,26 +1241,45 @@ def revoke_token_endpoint(
         Depends(jafaal_token_manager.get_token_manager),
     ],
     db: Annotated[Session, Depends(jafaal_orm.get_db)],
+    client_id: Annotated[str | None, Form(description="The registered client the token was issued to.")] = None,
     token_type_hint: Annotated[str | None, Form()] = None,
 ) -> dict:
     """Revoke a JAFAAL token (RFC 7009).
 
-    Present the token to revoke it (possession is the authorisation). A refresh
-    token deletes its session; an access token is denylisted when
-    ``access_token_denylist_enabled`` is set. Always returns 200, even for an
-    unknown token.
+    ``client_id`` is required and the token must have been issued to it. RFC 7009
+    §2.1 has a public client identify itself and §5 has the server verify the
+    token was its own; without both, possession of a leaked token is a
+    force-logout primitive against the account it belongs to. A token issued to
+    another client is treated as unknown — a silent 200 — so the endpoint does
+    not answer "whose token is this?".
+
+    A refresh token deletes its session (and, with ``tokens.denylist_enabled``,
+    denylists the session id so its access tokens die with it). An access token
+    is denylisted by ``jti`` under the same setting. Always returns 200, even for
+    an unknown token.
 
     Args:
         response: The HTTP response object, marked ``no-store``.
         token: The token to revoke (form field).
-        token_type_hint: Optional RFC 7009 hint; ignored (the token's ``typ``
-            claim is authoritative).
+        client_id: The registered client presenting the request (form field).
+        token_type_hint: Optional RFC 7009 hint; ignored (the token's
+            ``token_use`` claim is authoritative).
 
     Returns:
         An empty object (RFC 7009 mandates a 200 with no error).
+
+    Raises:
+        InvalidClientError: If ``client_id`` is absent or unregistered. That is a
+            malformed *request*, not an unrecognised token, so §2.2's "answer 200
+            for an invalid token" does not apply.
     """
     # The request body carried a live credential; a cached response keyed on it
     # is a cached credential. RFC 7009 §2.1 inherits RFC 6749 §5.1's no-store.
     jafaal_utils.apply_no_store(response)
-    token_admin_service.revoke_token(token, token_manager, db)
+    if not client_id:
+        raise jafaal_exceptions.InvalidClientError(
+            "client_id is required. Send the id of the registered client the token was issued to."
+        )
+    client = authorization_code_service.resolve_client(client_id)
+    token_admin_service.revoke_token(token, client.client_id, token_manager, db)
     return {}

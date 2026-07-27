@@ -13,6 +13,7 @@ They operate on JAFAAL's own access/refresh JWTs:
 
 from __future__ import annotations
 
+import hmac
 import logging
 from datetime import UTC, datetime
 from typing import Any
@@ -100,7 +101,9 @@ def introspect_token(
         "active": True,
         "sub": None if claims.get("sub") is None else str(claims.get("sub")),
         "scope": None if scopes is None else " ".join(scopes),
-        "typ": jafaal_token_manager.token_use(claims),
+        # Named for the claim it reports: §2.2's ``token_type`` is already the
+        # RFC 6749 §7.1 type (below), so this cannot also be called a "type".
+        "token_use": jafaal_token_manager.token_use(claims),
         "token_type": "Bearer",
         "client_id": claims.get("client_id"),
         "exp": claims.get("exp"),
@@ -115,19 +118,31 @@ def introspect_token(
 
 def revoke_token(
     token: str,
+    client_id: str,
     token_manager: jafaal_token_manager.TokenManager,
     db: Session,
 ) -> None:
     """Revoke ``token`` (RFC 7009). Silently no-ops on an unrecognised token.
 
-    * Refresh token \u2192 delete its session (always effective), provided the token
-      matches that session's current hash.
-    * Access token \u2192 add its ``jti`` to the revocation denylist **when**
-      :attr:`~jafaal.settings.AuthSettings.access_token_denylist_enabled` is set;
-      otherwise the short-lived token simply lapses.
+    * Refresh token → delete its session (always effective), provided the token
+      matches that session's current hash. When the denylist is enabled the
+      session id is denylisted too, so the access tokens minted from the same
+      grant stop working immediately rather than lapsing minutes later (§2.1).
+    * Access token → add its ``jti`` to the revocation denylist **when**
+      :attr:`~jafaal.settings.TokenSettings.denylist_enabled` is set; otherwise
+      the short-lived token simply lapses.
+
+    **Client binding.** §2.1 has the client identify itself, and §5 has the
+    server check the token was issued to it. Without that, possession of a leaked
+    token is a force-logout primitive against its owner — anyone who observes a
+    refresh token can kill the session. A token belonging to a *different* client
+    is treated exactly like an unknown one: a silent no-op, per §2.2. Answering
+    differently would turn the endpoint into an oracle for "does this token
+    belong to client X?", which is the question an attacker is asking.
 
     Args:
         token: The token to revoke.
+        client_id: The registered client presenting the request.
         token_manager: Configured token manager.
         db: Database session.
     """
@@ -137,6 +152,19 @@ def revoke_token(
         return  # RFC 7009: an invalid token is a successful (no-op) revocation.
 
     claims = decoded.claims
+
+    token_client_id = claims.get("client_id")
+    if not isinstance(token_client_id, str) or not hmac.compare_digest(token_client_id, client_id):
+        logger.warning("Revocation refused: the token was issued to a different client")
+        jafaal_audit.record(
+            jafaal_audit.Event.TOKEN_REVOKE_REFUSED,
+            outcome=jafaal_audit.Outcome.BLOCKED,
+            level=logging.WARNING,
+            client_id=client_id,
+            reason="client_mismatch",
+        )
+        return
+
     typ = jafaal_token_manager.token_use(claims)
 
     if typ == jafaal_token_manager.TokenType.REFRESH.value:
@@ -168,6 +196,14 @@ def _revoke_refresh_token(
         return  # The presented token does not belong to this session; do not revoke.
 
     jafaal_sessions_crud.delete_session(session.id, user_id, db)
+    # RFC 7009 §2.1: revoking a refresh token SHOULD invalidate the access tokens
+    # issued from the same grant. Deleting the session does not — access-token
+    # validation is stateless — so denylist the session id, which is the only
+    # handle those (unenumerable) tokens share. Bounded by the access-token
+    # lifetime: nothing carrying this sid can outlive it.
+    if jafaal_settings.get_settings().tokens.denylist_enabled:
+        ttl = jafaal_settings.get_settings().tokens.access_token_expire_minutes * 60 + _DENYLIST_TTL_BUFFER_SECONDS
+        token_denylist.deny_session(session.id, ttl)
     jafaal_audit.record(
         jafaal_audit.Event.TOKEN_REVOKED,
         user_id=user_id,

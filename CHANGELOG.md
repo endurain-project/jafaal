@@ -11,42 +11,6 @@ exception `code` slugs, the HTTP surface, the token/cookie wire formats, and the
 `jafaal.audit` event slugs are covered by SemVer; anything under `_core` /
 `_internal`, log message text, and default security parameters are not.
 
-## [Unreleased]
-
-### Fixed
-
-- **Identity-provider callbacks now accept an RFC 6749 §4.1.2.1 error response.**
-  `code` was a required query parameter, so a provider that refused the request
-  (the user pressing "Deny", `login_required`, `temporarily_unavailable`, …) —
-  which returns `error` and `state` with **no** `code` — produced a validation
-  error instead of a redirect: the OAuth state stayed redeemable until its TTL
-  lapsed, and a native app waiting on its callback listener never learned the
-  flow had failed. The error now travels the same path as a success (state
-  resolution, IdP binding, single-use claim) and is delivered to the client's
-  registered `redirect_uri`. Codes outside the RFC 6749 / OIDC Core registries
-  are reported as `access_denied`, `error_description` is bounded, and
-  `error_uri` is logged rather than forwarded. New audit event:
-  `idp.authorization_denied`.
-- **A client's requested `scope` is now honoured (RFC 6749 §3.3, §6).** The
-  `scope` parameter was validated against the catalog and the client's ceiling
-  and then discarded, so a client asking for `profile` was issued a token
-  carrying its user's entire account. The requested scope is now a third
-  narrowing bound on every issuance path: direct login, the authorization-code
-  exchange (persisted on the OAuth state across the browser round trip), and MFA
-  / passkey second-factor completion (carried on the pending-login ticket, so
-  finishing in two steps cannot widen what step one asked for). Refresh-token
-  rotation replays the presented token's own `scope` claim, so a rotation can no
-  longer restore a scope the grant never had.
-- `POST /auth/introspect` and `POST /auth/revoke` now send `Cache-Control:
-  no-store` (RFC 7662 §4; RFC 7009 §2.1 inheriting RFC 6749 §5.1). Both handle a
-  live credential, and neither was marked uncacheable.
-
-### Migrations
-
-- `0006_oauth_state_requested_scope` adds a nullable `requested_scope` column to
-  `oauth_states`. Idempotent, like the preceding revisions: a fresh database
-  gets it from the baseline, and the revision only adds what is missing.
-
 ## [1.0.0]
 
 First release.
@@ -112,7 +76,16 @@ First release.
   Access Tokens*), so a resource server can verify them with a stock JWT
   library.
 - HS256 by default, or asymmetric signing (RS/PS/ES 256/384/512) with the public
-  key published at a JWKS endpoint for stateless verification.
+  key published at a JWKS endpoint for stateless verification. Under HS256 there
+  is no public key, so the JWKS endpoint answers `404` and `jwks_uri` is omitted
+  from the discovery document — serving `{"keys": []}` would tell a verifier the
+  issuer had rotated every key away, sending it into refresh and retry logic,
+  rather than that stateless verification was never on offer.
+- `nbf` is backdated a few seconds from `iat`. A resource server runs on someone
+  else's clock and has no access to this deployment's `leeway_seconds`, so
+  `nbf == iat` makes a sub-second clock difference reject a token minted moments
+  earlier. RFC 7519 §4.1.5 anticipates the allowance; applying it at issuance is
+  what makes the token portable without asking every verifier to configure one.
 - RFC 8414 authorization-server metadata at
   `/.well-known/oauth-authorization-server`, so a client discovers the issuer,
   JWKS, and endpoint URLs instead of hard-coding them. It carries **no extension
@@ -129,6 +102,20 @@ First release.
   and every redemption failure returns the same `invalid_grant` so the endpoint
   is not an oracle. Errors follow §5.2 (`{"error", "error_description"}`) and,
   once the redirect URI validates, §4.1.2.1 (reported *at* that URI).
+- RFC 9207 issuer identification: every authorization response — success *and*
+  error — carries `iss`, and `authorization_response_iss_parameter_supported` is
+  advertised so a client can *require* the check. A client configured against
+  more than one authorization server otherwise cannot tell which one answered,
+  which is what makes the mix-up attack work; `state` does not close it, because
+  the honest server's own `state` is what gets replayed.
+- **The client's requested `scope` is a real bound** (RFC 6749 §3.3). It is the
+  third narrowing step after the host's `ScopeResolver` and the client's ceiling,
+  applied on every issuance path: direct login, the authorization-code exchange
+  (persisted on the OAuth state across the browser round trip), and MFA or
+  passkey second-factor completion (carried on the pending-login ticket, so
+  finishing a login in two steps cannot widen what step one asked for). Rotation
+  replays the presented token's own `scope` claim, since §6 forbids a refresh
+  from adding a scope the original grant did not carry.
 - **The registered client is the unit of policy.** `token_delivery`
   (`body` per RFC 6749 §5.1, or `cookie` per RFC 9700 §7.2) and an optional scope
   ceiling are properties of the registration, never of the request. On refresh
@@ -162,9 +149,10 @@ First release.
   `expires_at` was recomputed as `now + refresh_token_expire_days` each time, so
   a client refreshing once per token lifetime kept one login alive forever — the
   unbounded refresh-token lifetime RFC 9700 §4.14.2 warns against.
-- Every response carrying a token — login, `/auth/token`, `/auth/refresh`, and
-  the MFA challenge — is sent `Cache-Control: no-store` and `Pragma: no-cache`
-  (RFC 6749 §5.1), so no intermediary retains a credential.
+- Every response carrying or handling a credential — login, `/auth/token`,
+  `/auth/refresh`, the MFA challenge, `/auth/introspect` and `/auth/revoke` — is
+  sent `Cache-Control: no-store` and `Pragma: no-cache` (RFC 6749 §5.1;
+  RFC 7662 §4), so no intermediary retains one.
 - Server-side sessions with an always-enforced absolute lifetime, an optional
   idle timeout, device metadata, and a CSRF token bound to the session. The
   device fingerprint is recorded at login and never rewritten by a refresh:
@@ -174,8 +162,25 @@ First release.
 - RFC 7662 token introspection and RFC 7009 revocation. `auth:introspect` is
   grantable directly to a service API key (it is outside the catalog tiers, so
   no user holds it — the host allow-list is its gate) and is advertised in
-  `scopes_supported`. Revoking an access token while the denylist is off is
-  logged and audited rather than silently reported as successful.
+  `scopes_supported`. The introspection response reports the token's use as
+  `token_use`, matching the claim it reads: §2.2 already defines `token_type` as
+  the RFC 6749 §7.1 type (`Bearer`) and RFC 9068 uses `typ` for the JOSE
+  *header*'s media type, and a third spelling of "type" meaning a third thing is
+  how a client reads the wrong one.
+- **Revocation is bound to the client the token was issued to.** RFC 7009 §2.1
+  has a public client identify itself with `client_id` and §5 has the server
+  check the token was its own; without both, possession of a leaked token is a
+  force-logout primitive — anyone who observes a refresh token can end its
+  owner's session. An absent or unregistered `client_id` is `invalid_client`; a
+  token belonging to a *different* registered client is treated exactly like an
+  unknown one (a silent `200`, per §2.2), so the endpoint does not become an
+  oracle for "whose token is this?". Revoking a refresh token additionally
+  denylists the session id when `denylist_enabled` is set, so the access tokens
+  minted from the same grant stop working immediately (§2.1) instead of lasting
+  out their lifetime — deleting the session does not reach them, because
+  access-token validation is stateless. Revoking an access token while the
+  denylist is off is logged and audited rather than silently reported as
+  successful.
 - **RFC 6750 challenges carry their error code.** A 401 for a *presented but
   unusable* credential sends `Bearer error="invalid_token", error_description=
   "…"`; a request with no credential at all sends a bare `Bearer`, as §3
@@ -203,6 +208,13 @@ First release.
   `allowCredentials` for an unknown or passkey-less username, so the response
   shape no longer distinguishes accounts or leaks real credential IDs (W3C
   WebAuthn L2 §14.6.3).
+- Whether a passwordless passkey login completes on its own for an account that
+  also has TOTP enrolled is an explicit setting
+  (`passkey_login_satisfies_mfa`, default on) rather than an accident of which
+  endpoint was called. The passwordless ceremony always forces user
+  verification, so a successful assertion is possession *and* a PIN/biometric;
+  turn it off for a deployment whose policy names TOTP specifically, and such an
+  account is sent to the password + TOTP flow instead.
 - Every factor change — TOTP enable/disable, backup-code regeneration, passkey
   add/delete — emits an `AuthenticatorChanged` notification, so an attacker
   enrolling their own factor cannot do it in silence.- Step-up re-authentication for sensitive operations, including delegation to a
@@ -221,6 +233,20 @@ First release.
   (OIDC Discovery 1.0 §4.3, a MUST). Without it the value `iss` is validated
   against is simply whatever the fetched document declared — self-referential,
   so a document served by one provider can claim to be another.
+- An RFC 9207 `iss` returned by a provider is verified against that provider's
+  configured issuer **before** the code is sent to any token endpoint. The
+  callback path, the state's provider binding and the ID token's own `iss` all
+  defend against mix-up already, but each of those runs after the code has left;
+  this one runs first, which is the point of the parameter. Providers predating
+  the extension omit it and are unaffected.
+- A provider that refuses the request answers per RFC 6749 §4.1.2.1 — `error`
+  and `state`, no `code` — and that response is carried through to the client's
+  registered `redirect_uri`, having gone through the same state resolution,
+  provider binding and single-use claim as a success. Codes outside the
+  RFC 6749 / OIDC Core registries are reported as `access_denied`,
+  `error_description` is bounded, and `error_uri` is logged rather than
+  forwarded: nothing obliges this server to hand its clients a provider-supplied
+  URL that a UI would render as a link.
 - Only asymmetric JWKS entries are materialised as ID-token verification
   candidates. A symmetric `oct` key can never verify a provider's signature, and
   importing one left a live RS256→HS256 confusion primitive whose harmlessness
@@ -260,6 +286,17 @@ First release.
 - API keys with a host-configured scope allow-list. A key can additionally never
   carry a scope the account minting it does not itself hold, so a credential
   cannot delegate authority its creator lacks.
+- **One revocation sweep for every credential derived from a password.** Changing
+  a password — by the user, by an administrator, or through a reset token —
+  revokes the account's sessions, API keys, outstanding reset tokens,
+  pending-MFA tickets, step-up grants, and pending passkey-registration
+  challenges. The last two matter because neither is obviously a credential: a
+  step-up grant is a bearer licence to perform one sensitive operation with no
+  factor at all, and `/register/complete` carries no step-up of its own — the
+  challenge minted by `/register/begin` *is* the proof that step-up passed, so a
+  live one is a licence to bind a passkey. The list lives in one place and is
+  tested as a matrix (every credential × every path), because a list restated at
+  three call sites is a list that drifts.
 - Optional `reauthorize_scopes_per_request`: an access token's scopes are
   intersected with the tier its account currently holds, so demoting an
   administrator applies immediately rather than at token expiry. Strictly

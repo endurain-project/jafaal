@@ -18,6 +18,7 @@ from urllib.parse import parse_qs, urlsplit
 from conftest import NATIVE_CLIENT_ID, NATIVE_REDIRECT_URI
 from starlette.requests import Request
 
+import jafaal
 import jafaal.identity_providers.crud as idp_crud
 import jafaal.identity_providers.schema as idp_schema
 import jafaal.identity_providers.service as idp_service
@@ -421,3 +422,92 @@ def test_callback_without_code_or_error_is_reported_to_the_client(client):
     params = _query(resp.headers["location"])
     assert params["error"] == "access_denied"
     assert "code" not in params
+
+
+# --------------------------------------------------------------------------- #
+# RFC 9207 — issuer identification (mix-up defence)
+# --------------------------------------------------------------------------- #
+
+
+def test_authorization_response_carries_the_issuer(client, make_user, monkeypatch):
+    # A client configured against more than one authorization server otherwise
+    # cannot tell which one answered — which is what makes the mix-up attack
+    # work. ``state`` does not close it: the honest server's own state is what
+    # gets replayed.
+    user = make_user(username="ssouser")
+    idp = _create_idp(slug="goog")
+    _verifier, challenge = _pkce()
+    state_id = _create_oauth_state(idp.id, code_challenge=challenge)
+
+    async def fake_handle(*args, **kwargs):
+        return {"user": user, "token_data": {}, "userinfo": {}}
+
+    monkeypatch.setattr(idp_service.idp_service, "handle_callback", fake_handle)
+
+    resp = client.get(f"{BASE}/callback/goog?code=abc&state={state_id}", follow_redirects=False)
+    assert _query(resp.headers["location"])["iss"] == jafaal.get_settings().resolved_issuer
+
+
+def test_error_responses_carry_the_issuer_too(client):
+    # §2 puts iss on *every* authorization response, so a client that validates
+    # it unconditionally does not have to special-case failures.
+    idp = _create_idp(slug="goog")
+    state_id = _create_oauth_state(idp.id)
+
+    resp = client.get(f"{BASE}/callback/goog?error=access_denied&state={state_id}", follow_redirects=False)
+    assert _query(resp.headers["location"])["iss"] == jafaal.get_settings().resolved_issuer
+
+
+def test_callback_from_an_unexpected_issuer_is_refused(client, monkeypatch):
+    # The state resolves, so the failure is reported to the client — but the
+    # code is never sent to a token endpoint, which is the point of checking
+    # ``iss`` before anything else happens.
+    idp = _create_idp(slug="goog", issuer_url="https://idp.example")
+    state_id = _create_oauth_state(idp.id)
+
+    async def fake_handle(*args, **kwargs):
+        raise AssertionError("the code must not be redeemed after an issuer mismatch")
+
+    monkeypatch.setattr(idp_service.idp_service, "handle_callback", fake_handle)
+
+    resp = client.get(
+        f"{BASE}/callback/goog?code=abc&state={state_id}&iss=https://evil.example",
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
+
+
+def test_a_matching_issuer_is_accepted(client, make_user, monkeypatch):
+    # Trailing-slash differences are normalised; providers are inconsistent.
+    user = make_user(username="ssouser")
+    idp = _create_idp(slug="goog", issuer_url="https://idp.example")
+    state_id = _create_oauth_state(idp.id)
+
+    async def fake_handle(*args, **kwargs):
+        return {"user": user, "token_data": {}, "userinfo": {}}
+
+    monkeypatch.setattr(idp_service.idp_service, "handle_callback", fake_handle)
+
+    resp = client.get(
+        f"{BASE}/callback/goog?code=abc&state={state_id}&iss=https://idp.example/",
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+    assert _query(resp.headers["location"])["code"]
+
+
+def test_a_provider_that_omits_iss_still_works(client, make_user, monkeypatch):
+    # RFC 9207 is an extension; a provider predating it sends nothing, and
+    # refusing those would break every such integration.
+    user = make_user(username="ssouser")
+    idp = _create_idp(slug="goog", issuer_url="https://idp.example")
+    state_id = _create_oauth_state(idp.id)
+
+    async def fake_handle(*args, **kwargs):
+        return {"user": user, "token_data": {}, "userinfo": {}}
+
+    monkeypatch.setattr(idp_service.idp_service, "handle_callback", fake_handle)
+
+    resp = client.get(f"{BASE}/callback/goog?code=abc&state={state_id}", follow_redirects=False)
+    assert resp.status_code == 302
+    assert _query(resp.headers["location"])["code"]

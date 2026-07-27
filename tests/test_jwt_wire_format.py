@@ -115,6 +115,20 @@ def test_the_colliding_typ_payload_claim_is_never_emitted():
     assert "typ" not in _payload(token)
 
 
+def test_nbf_is_backdated_so_a_slightly_slow_verifier_still_accepts():
+    # A resource server runs on someone else's clock and has no access to this
+    # deployment's ``leeway_seconds``. With ``nbf == iat`` a sub-second
+    # difference rejects a token minted moments earlier; RFC 7519 §4.1.5
+    # anticipates the small leeway, applied here at issuance so the token is
+    # portable without asking every verifier to configure one.
+    _, token = get_token_manager().create_token("sid-1", _user(), TokenType.ACCESS)
+    claims = _payload(token)
+    assert claims["nbf"] < claims["iat"]
+    # Bounded: this absorbs skew, it must not extend the credential's life.
+    assert claims["iat"] - claims["nbf"] <= 60
+    assert claims["nbf"] < claims["exp"]
+
+
 def test_client_id_defaults_to_the_audience_and_can_be_overridden():
     settings = settings_mod.get_settings()
     _, token = get_token_manager().create_token("sid-1", _user(), TokenType.ACCESS)

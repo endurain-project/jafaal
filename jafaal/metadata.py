@@ -56,6 +56,13 @@ endpoint, and a revocation endpoint. This document advertises exactly that:
   because RFC 8414 §2 makes ``client_secret_basic`` the default when the field is
   absent, and JAFAAL's clients are public: PKCE, not a client credential, is what
   binds a code to its requester.
+* ``authorization_response_iss_parameter_supported`` is ``true`` (RFC 9207): the
+  authorization response always carries ``iss``, so a client configured against
+  several authorization servers can prove which one answered.
+* ``jwks_uri`` appears only when tokens are signed asymmetrically. Under HS256
+  there is no public key, and advertising a URL that returns an empty key set
+  tells a verifier the issuer rotated its keys away rather than that stateless
+  verification was never available.
 
 The document carries no extension members. Everything a client needs to drive
 JAFAAL is here in standard fields; anything that would need a bespoke one is a
@@ -111,9 +118,8 @@ def get_authorization_server_metadata(*, api_root: str, auth_prefix: str = "/aut
     """
     settings = jafaal_settings.get_settings()
     auth_root = _join_url(api_root, auth_prefix)
-    return {
+    metadata: dict[str, Any] = {
         "issuer": settings.resolved_issuer,
-        "jwks_uri": _join_url(api_root, "/.well-known/jwks.json"),
         "authorization_endpoint": _join_url(auth_root, "/authorize"),
         "token_endpoint": _join_url(auth_root, "/token"),
         "introspection_endpoint": _join_url(auth_root, "/introspect"),
@@ -140,11 +146,28 @@ def get_authorization_server_metadata(*, api_root: str, auth_prefix: str = "/aut
         # ``"bearer"`` would be an unregistered token that a strict client may
         # reject, and ``"none"`` would claim the endpoint is unprotected. The
         # required scope is discoverable via ``scopes_supported`` instead.
-        # RFC 7009: possession of the token is the authorisation to revoke it.
+        # RFC 6749 §3.2.1: a public client identifies itself with ``client_id``
+        # and authenticates with nothing, which is the registry's ``none``.
+        # ``/revoke`` requires that ``client_id`` and checks the token was issued
+        # to it (RFC 7009 §5), but identification is not authentication and the
+        # registry has no value for it.
         "revocation_endpoint_auth_methods_supported": ["none"],
         # PKCE is mandatory, and ``plain`` is refused.
         "code_challenge_methods_supported": ["S256"],
+        # RFC 9207: every authorization response carries ``iss``, so a client
+        # talking to more than one authorization server can tell which one
+        # answered and refuse a code steered in from another (the mix-up
+        # attack). Advertising it is what lets a client *require* the check.
+        "authorization_response_iss_parameter_supported": True,
     }
+    # ``jwks_uri`` only when there is something to publish. Under HS256 the key
+    # set is empty, and RFC 8414 §2 describes ``jwks_uri`` as the location of
+    # the issuer's signing keys — pointing a verifier at a document that
+    # contains none tells it the keys were rotated away, not that stateless
+    # verification was never on offer. Omitting the field says the latter.
+    if settings.tokens.is_asymmetric:
+        metadata["jwks_uri"] = _join_url(api_root, "/.well-known/jwks.json")
+    return metadata
 
 
 def _resolve_api_root(request: Request) -> str:

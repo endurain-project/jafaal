@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 from conftest import replace_settings
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 
 import jafaal
 import jafaal.metadata as metadata
@@ -20,11 +22,43 @@ def doc(client):
     return response.json()
 
 
-def test_metadata_is_served_beside_jwks(client, doc):
-    # The document must point at the JWKS route that is actually mounted, not a
-    # guessed one — a wrong ``jwks_uri`` silently breaks every verifier.
-    assert doc["jwks_uri"] == "https://app.test/api/v1/.well-known/jwks.json"
-    assert client.get("/api/v1/.well-known/jwks.json").status_code == 200
+def test_jwks_uri_is_omitted_when_there_is_no_public_key(client, doc):
+    # The suite runs on HS256. Advertising a jwks_uri whose document is
+    # ``{"keys": []}`` tells a verifier the issuer rotated every key away and
+    # sends it into refresh/retry logic; omitting the member says the true
+    # thing, which is that stateless verification is not on offer.
+    assert "jwks_uri" not in doc
+    assert client.get("/api/v1/.well-known/jwks.json").status_code == 404
+
+
+def test_jwks_uri_is_published_when_signing_asymmetrically(client):
+    original = jafaal.get_settings()
+    private_key = (
+        ec.generate_private_key(ec.SECP256R1())
+        .private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+        .decode()
+    )
+    jafaal.configure(replace_settings(original, algorithm="ES256", private_key=private_key))
+    try:
+        document = client.get(METADATA_URL).json()
+        # It must point at the route that is actually mounted, not a guessed
+        # one — a wrong ``jwks_uri`` silently breaks every verifier.
+        assert document["jwks_uri"] == "https://app.test/api/v1/.well-known/jwks.json"
+        keys = client.get("/api/v1/.well-known/jwks.json")
+        assert keys.status_code == 200
+        assert keys.json()["keys"]
+    finally:
+        jafaal.configure(original)
+
+
+def test_issuer_parameter_support_is_advertised(doc):
+    # RFC 9207: a client can only *require* the iss check if the server says it
+    # sends one. Without the advertisement the mix-up defence is opt-in guesswork.
+    assert doc["authorization_response_iss_parameter_supported"] is True
 
 
 def test_issuer_matches_the_iss_claim_jafaal_mints(doc):
@@ -50,7 +84,6 @@ def test_endpoint_urls_follow_custom_router_prefixes():
     assert document["token_endpoint"] == "https://app.test/api/v2/identity/token"
     assert document["authorization_endpoint"] == "https://app.test/api/v2/identity/authorize"
     assert document["revocation_endpoint"] == "https://app.test/api/v2/identity/revoke"
-    assert document["jwks_uri"] == "https://app.test/api/v2/.well-known/jwks.json"
 
 
 def test_client_auth_is_declared_so_the_spec_default_does_not_apply(doc):

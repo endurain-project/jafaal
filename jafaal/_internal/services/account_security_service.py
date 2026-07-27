@@ -8,12 +8,11 @@ from typing import TYPE_CHECKING
 from sqlalchemy.orm import Session
 
 import jafaal._internal.security_stores as jafaal_security_stores
+import jafaal._internal.services.credential_sweep as credential_sweep
 import jafaal._internal.services.step_up_service as step_up_service
 import jafaal._internal.user_guards as jafaal_user_guards
-import jafaal.api_keys.crud as jafaal_api_keys_crud
 import jafaal.audit as jafaal_audit
 import jafaal.password_policy as jafaal_password_policy
-import jafaal.password_reset_tokens.crud as password_reset_tokens_crud
 import jafaal.ports as jafaal_ports
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.schema as jafaal_sessions_schema
@@ -146,23 +145,20 @@ def change_own_password(
         new_password,
     )
     identity_service.set_local_password_hash(user_id, hashed_password)
-    jafaal_security_stores.clear_pending_mfa_for_user(user_id)
 
-    # Outstanding reset tokens are credentials for this account too: one phished
-    # before the change would otherwise stay redeemable for the rest of its TTL.
-    password_reset_tokens_crud.mark_user_password_reset_tokens_used(user_id, db)
-
-    # API keys outlive sessions (expiry is optional), so a password change that
-    # leaves them active does not evict an attacker who minted one.
-    jafaal_api_keys_crud.revoke_all_api_keys_for_user(user_id, db, reason="password_change")
+    # Everything the old password could still reach — other sessions, API keys,
+    # outstanding reset tokens, a pending-MFA ticket, a step-up grant, a live
+    # passkey-registration challenge. The list lives in one place; see
+    # credential_sweep for why each entry is on it.
+    revoked = credential_sweep.revoke_derived_credentials(
+        user_id,
+        db,
+        reason="password_change",
+        revoke_sessions=revoke_other_sessions,
+        keep_session_id=current_session_id,
+    )
 
     if revoke_other_sessions:
-        revoked = jafaal_sessions_crud.delete_sessions_by_user(
-            user_id,
-            db,
-            exclude_session_id=current_session_id,
-        )
-        logger.info(f"User {user_id} revoked {revoked} other session(s) after password change")
         jafaal_audit.record(
             jafaal_audit.Event.SESSION_REVOKED,
             user_id=user_id,
@@ -204,10 +200,7 @@ def change_managed_user_password(
         new_password,
     )
     identity_service.set_local_password_hash(user_id, hashed_password)
-    jafaal_sessions_crud.delete_sessions_by_user(user_id, db)
-    jafaal_security_stores.clear_pending_mfa_for_user(user_id)
-    password_reset_tokens_crud.mark_user_password_reset_tokens_used(user_id, db)
-    jafaal_api_keys_crud.revoke_all_api_keys_for_user(user_id, db, reason="admin_password_change")
+    credential_sweep.revoke_derived_credentials(user_id, db, reason="admin_password_change")
     jafaal_audit.record(
         jafaal_audit.Event.PASSWORD_CHANGED,
         level=logging.WARNING,

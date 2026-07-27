@@ -7,9 +7,8 @@ from uuid import uuid4
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-import jafaal._internal.security_stores as jafaal_security_stores
+import jafaal._internal.services.credential_sweep as credential_sweep
 import jafaal._internal.user_guards as jafaal_user_guards
-import jafaal.api_keys.crud as jafaal_api_keys_crud
 import jafaal.audit as jafaal_audit
 import jafaal.credentials.crud as jafaal_credentials_crud
 import jafaal.exceptions as jafaal_exceptions
@@ -17,7 +16,6 @@ import jafaal.password_policy as jafaal_password_policy
 import jafaal.password_reset_tokens.crud as password_reset_tokens_crud
 import jafaal.password_reset_tokens.schema as password_reset_tokens_schema
 import jafaal.ports as jafaal_ports
-import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.token_hashing as token_hashing
 from jafaal.identity_service import LocalCredentialStore
 from jafaal.orm import UserId, session_scope
@@ -172,12 +170,9 @@ def use_password_reset_token(
             db,
             commit=False,
         )
-        password_reset_tokens_crud.mark_user_password_reset_tokens_used(token_user_id, db)
-        jafaal_sessions_crud.delete_sessions_by_user(token_user_id, db, commit=False)
-        # API keys outlive sessions (expiry is optional), so a reset that leaves
-        # them active does not evict an attacker who minted one while holding
-        # the account.
-        jafaal_api_keys_crud.revoke_all_api_keys_for_user(token_user_id, db, reason="password_reset")
+        # Every other credential the old password could still reach. The list
+        # lives in one place; see credential_sweep for why each entry is on it.
+        credential_sweep.revoke_derived_credentials(token_user_id, db, reason="password_reset")
         db.flush()
     except jafaal_exceptions.JafaalError:
         db.rollback()
@@ -186,9 +181,6 @@ def use_password_reset_token(
         db.rollback()
         raise jafaal_exceptions.InternalError("Failed to reset password") from err
 
-    # Drop any in-flight pending-MFA login that was started with the
-    # now-rotated password.
-    jafaal_security_stores.clear_pending_mfa_for_user(token_user_id)
     jafaal_audit.record(jafaal_audit.Event.PASSWORD_RESET_COMPLETED, user_id=token_user_id)
     jafaal_audit.record(
         jafaal_audit.Event.SESSION_REVOKED,

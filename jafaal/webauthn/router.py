@@ -35,10 +35,12 @@ import jafaal._internal.user_guards as jafaal_user_guards
 import jafaal.audit as jafaal_audit
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_service as jafaal_identity_service
+import jafaal.mfa.service as mfa_service
 import jafaal.orm as jafaal_orm
 import jafaal.ports as jafaal_ports
 import jafaal.rate_limit as jafaal_rate_limit
 import jafaal.schema as jafaal_schema
+import jafaal.settings as jafaal_settings
 import jafaal.utils as jafaal_utils
 import jafaal.webauthn.challenge_store as webauthn_challenge_store
 import jafaal.webauthn.crud as webauthn_crud
@@ -385,10 +387,41 @@ def complete_authentication(
     ],
     db: Annotated[Session, Depends(jafaal_orm.get_db)],
 ) -> dict:
-    """Verify a passwordless passkey assertion and issue JAFAAL tokens."""
+    """Verify a passwordless passkey assertion and issue JAFAAL tokens.
+
+    The ceremony always demands user verification, so a successful assertion
+    proves possession of the authenticator *and* a PIN/biometric — two factors,
+    which is why it completes a login on its own by default. A deployment whose
+    policy names TOTP specifically can set
+    ``WebAuthnSettings.passkey_login_satisfies_mfa=False``, which refuses this
+    shortcut for an account that has TOTP enrolled and sends it to the password
+    + TOTP flow instead.
+    """
     client = authorization_code_service.resolve_login_client(data.client_id, request)
     user = webauthn_service.complete_authentication(data.challenge_id, data.credential, db)
     jafaal_user_guards.check_user_is_active(user)
+
+    if not jafaal_settings.get_settings().webauthn.passkey_login_satisfies_mfa and mfa_service.is_mfa_enabled_for_user(
+        user.id, db
+    ):
+        # Refused *after* the assertion verified: the account exists and the
+        # passkey is genuine, so there is nothing left to disclose, and the
+        # caller needs to be told which flow to use instead.
+        logger.info("Passwordless login refused for a TOTP-enrolled account (passkey_login_satisfies_mfa=False)")
+        jafaal_audit.record(
+            jafaal_audit.Event.WEBAUTHN_AUTH_FAILURE,
+            outcome=jafaal_audit.Outcome.BLOCKED,
+            level=logging.WARNING,
+            user_id=user.id,
+            username=user.username,
+            ip=network.get_ip_address(request),
+            ceremony="passwordless",
+            reason="mfa_required_by_policy",
+        )
+        raise jafaal_exceptions.AuthorizationError(
+            "This account requires multi-factor authentication. Sign in with your password and MFA code."
+        )
+
     jafaal_audit.record(
         jafaal_audit.Event.WEBAUTHN_AUTH_SUCCESS,
         user_id=user.id,

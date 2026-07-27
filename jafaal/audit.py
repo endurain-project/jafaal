@@ -122,6 +122,7 @@ class Event:
     TOKEN_REFRESHED: Final = "token.refreshed"
     TOKEN_REVOKED: Final = "token.revoked"
     TOKEN_REVOKE_INEFFECTIVE: Final = "token.revoke_ineffective"
+    TOKEN_REVOKE_REFUSED: Final = "token.revoke_refused"
     SESSION_REVOKED: Final = "session.revoked"
 
     # --- API keys ---
@@ -140,6 +141,7 @@ class Event:
     IDP_AUTHORIZATION_DENIED: Final = "idp.authorization_denied"
     OAUTH_STATE_REPLAY_REJECTED: Final = "oauth_state.replay_rejected"
     OAUTH_STATE_IP_MISMATCH: Final = "oauth_state.ip_mismatch"
+    OAUTH_ISSUER_MISMATCH: Final = "oauth.issuer_mismatch"
 
     # --- authorization ---
     SCOPE_DENIED: Final = "scope.denied"

@@ -57,6 +57,16 @@ _TYP_HEADER_BY_TOKEN_TYPE: dict[TokenType, str] = {
 # AWS Cognito convention) keeps the two distinct.
 TOKEN_USE_CLAIM = "token_use"
 
+# Seconds the ``nbf`` claim is backdated from ``iat``.
+#
+# A resource server verifying JAFAAL's tokens runs on someone else's clock and
+# has no access to this deployment's ``leeway_seconds``, so a strict
+# ``nbf == iat`` makes a sub-second clock difference reject a token that was
+# minted moments earlier. RFC 7519 §4.1.5 allows for exactly this small leeway.
+# Kept deliberately tiny: the token is valid from issuance anyway, so this only
+# absorbs skew, it does not extend the credential's life.
+_NBF_BACKDATE_SECONDS = 30
+
 
 def token_use(claims: dict[str, Any]) -> str | None:
     """Return the token's use (``"access"`` / ``"refresh"``) from its claims.
@@ -526,7 +536,17 @@ class TokenManager:
             "iss": self.issuer,
             "aud": self.audience,
             "iat": now,
-            "nbf": now,
+            # Backdated by a few seconds. ``nbf == iat`` is correct in the
+            # abstract and a reliable interop failure in practice: a *resource
+            # server* verifying with a stock JWT library and a clock a second
+            # behind ours rejects a token that was minted milliseconds earlier,
+            # and it has no ``leeway_seconds`` of ours to fall back on. RFC 7519
+            # §4.1.5 anticipates exactly this ("implementers MAY provide for
+            # some small leeway"); applying it at issuance rather than asking
+            # every verifier to configure it is what makes the token portable.
+            # Small enough not to widen any meaningful attack window: the token
+            # is already valid from the instant it is handed out.
+            "nbf": now - _NBF_BACKDATE_SECONDS,
             "exp": exp,
             "jti": str(uuid.uuid4()),
             # RFC 9068 / RFC 7519 shapes, so a resource server verifying against

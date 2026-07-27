@@ -567,11 +567,15 @@ class DefaultIdentityService:
         jafaal_user_guards.check_user_is_active(user)
 
         settings = jafaal_settings.get_settings()
-        # Reject a token whose jti was revoked (RFC 7009), when the opt-in
-        # denylist is enabled. A state-store outage fails open (see token_denylist).
+        # Reject a token whose jti was revoked, or whose whole session was
+        # revoked by a refresh-token revocation (RFC 7009 §2.1), when the opt-in
+        # denylist is enabled. A state-store outage fails open (see
+        # token_denylist).
         if settings.tokens.denylist_enabled:
             jti = claims.get("jti")
             if isinstance(jti, str) and jafaal_token_denylist.is_access_token_denied(jti):
+                raise jafaal_exceptions.InvalidTokenError("Access token has been revoked")
+            if jafaal_token_denylist.is_session_denied(sid):
                 raise jafaal_exceptions.InvalidTokenError("Access token has been revoked")
 
         if settings.sessions.strict_binding:
