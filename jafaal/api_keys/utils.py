@@ -5,6 +5,7 @@ import secrets
 from collections.abc import Iterable
 
 import jafaal.exceptions as jafaal_exceptions
+import jafaal.scopes as jafaal_scopes
 import jafaal.settings as jafaal_settings
 import jafaal.token_hashing as token_hashing
 from jafaal._core.registry import ConfigSlot
@@ -112,6 +113,16 @@ def scopes_outside_allow_list(requested_scopes: Iterable[str]) -> set[str]:
     return set(requested_scopes) - get_api_key_scopes()
 
 
+def _catalog_governed_scopes() -> set[str]:
+    """Scopes the tiered catalog can actually grant a user.
+
+    Anything outside this set is a capability no principal is ever issued, so
+    "does the caller hold it?" is not a meaningful question to ask about it.
+    """
+    catalog = jafaal_scopes.get_scope_catalog()
+    return set(catalog.admin) | set(catalog.regular)
+
+
 def validate_api_key_scopes(
     requested_scopes: list[str],
     *,
@@ -155,7 +166,17 @@ def validate_api_key_scopes(
     # this scope" and "you do not hold this scope" are different problems, and
     # conflating them would tell a caller that an admin scope exists but hide why
     # it was refused.
-    not_granted = set(requested_scopes) - set(granted_scopes)
+    #
+    # Service capabilities the catalog does not govern are exempt from the
+    # "caller must hold it" rule. :data:`~jafaal.scopes.AUTH_INTROSPECT` is the
+    # built-in case: it is deliberately never minted into a user's token
+    # (RFC 7662 §2.1 treats introspection as service-to-service), so *no*
+    # principal ever holds it — meaning the delegation check alone made it
+    # impossible to grant through the API at all, and the only workaround was to
+    # put it in the catalog and hand it to every admin's session. The host
+    # allow-list above is the real gate for these.
+    ungoverned = set(requested_scopes) - _catalog_governed_scopes()
+    not_granted = set(requested_scopes) - set(granted_scopes) - ungoverned
     if not_granted:
         raise jafaal_exceptions.InvalidRequestError(
             f"Cannot grant API key scopes you do not hold: {sorted(not_granted)}. "

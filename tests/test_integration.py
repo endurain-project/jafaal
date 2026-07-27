@@ -80,7 +80,7 @@ def test_login_ip_lockout_blocks_spray_across_usernames(client, make_user):
     assert "network" in blocked.json()["detail"].lower()
 
 
-def test_successful_login_resets_ip_backoff(client, make_user):
+def test_successful_login_does_not_reset_ip_backoff(client, make_user):
     from jafaal._internal.security_stores import get_failed_login_attempts
 
     make_user(username="victim", password="Str0ng!Pass")
@@ -88,13 +88,14 @@ def test_successful_login_resets_ip_backoff(client, make_user):
     for _ in range(49):
         store.record_ip_failure("testclient")
 
-    # A successful login from this IP clears the per-IP failure counter...
+    # Authenticating as an account you own says nothing about failures sprayed
+    # at other usernames from the same address...
     assert _login(client, username="victim").status_code == 200
 
-    # ...so it takes a fresh 49 failures again to approach the lock (not 98).
-    for _ in range(49):
-        store.record_ip_failure("testclient")
-    assert store.is_ip_locked_out("testclient") is False
+    # ...so the counter keeps climbing and the address still locks out. Were it
+    # cleared, "spray 49, log in, repeat" would defeat the tier entirely.
+    store.record_ip_failure("testclient")
+    assert store.is_ip_locked_out("testclient") is True
 
 
 def test_login_without_client_id_rejected(client, make_user):

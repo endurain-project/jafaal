@@ -44,7 +44,7 @@ import jafaal.rate_limit as jafaal_rate_limit
 import jafaal.settings as jafaal_settings
 import jafaal.state_store as jafaal_state_store
 from jafaal._core import network
-from jafaal.exceptions import RateLimitedError
+from jafaal.exceptions import RateLimitedError, ServiceUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -90,8 +90,30 @@ def _parse_budget(raw: str) -> tuple[int, int]:
     return count, window
 
 
+def _as_count(raw: bytes | None) -> int:
+    """Read a counter value written by ``StateStore.increment``."""
+    if raw is None:
+        return 0
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 0
+
+
 class StateStoreRateLimiter:
-    """Fixed-window, per-client-IP rate limiter over the configured StateStore."""
+    """Sliding-window, per-client-IP rate limiter over the configured StateStore.
+
+    Args:
+        fail_open: What to do when the state store is unreachable. ``True``
+            (default) serves the request unthrottled and logs it — the
+            per-account progressive lockout is a separate, fail-*closed*
+            control, so brute-force stays bounded. ``False`` refuses with a 503
+            instead, for deployments that would rather drop traffic than serve
+            it without a limiter.
+    """
+
+    def __init__(self, *, fail_open: bool = True) -> None:
+        self._fail_open = fail_open
 
     def limit(self, category: str) -> Callable[[F], F]:
         """Return a decorator that enforces ``category``'s budget on the endpoint.
@@ -127,13 +149,22 @@ class StateStoreRateLimiter:
     def _enforce(self, category: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
         """Count this request and raise 429 when the client is over budget.
 
-        Fails open on any condition that would otherwise wrongly block auth: no
-        resolvable client IP, a malformed/unavailable budget, or a state-store
-        outage.
+        Uses a **sliding** window: the previous window's count is carried over,
+        weighted by how much of it still overlaps the trailing ``window``
+        seconds. A plain fixed window lets a client spend its whole budget at
+        the end of one bucket and again at the start of the next — 2x the
+        nominal rate across the boundary, which on a login endpoint is the
+        difference between the configured limit and twice it.
+
+        On a state-store outage the behaviour follows ``fail_open``. The default
+        keeps auth reachable when the store blips (the per-account progressive
+        lockout is independent and fails *closed*, so brute-force is still
+        bounded); ``fail_open=False`` prefers refusing traffic to serving it
+        unthrottled.
 
         Raises:
             RateLimitedError: 429 when the client has exceeded the category's
-                budget in the current window (carries ``Retry-After``).
+                budget in the trailing window (carries ``Retry-After``).
         """
         request = self._find_request(args, kwargs)
         if request is None:
@@ -155,17 +186,29 @@ class StateStoreRateLimiter:
 
         client_ip = network.get_ip_address(request)
         now = int(time.time())
-        bucket = now // window  # fixed window: the window index is part of the key
-        key = f"{settings.store_key_prefix}:ratelimit:{category}:{client_ip}:{bucket}"
+        bucket = now // window
+        prefix = f"{settings.store_key_prefix}:ratelimit:{category}:{client_ip}"
 
         try:
-            count = jafaal_state_store.get_state_store().increment(key, window)
+            store = jafaal_state_store.get_state_store()
+            # Two keys, kept for two windows so the previous one is still
+            # readable while it is being weighted in.
+            count = store.increment(f"{prefix}:{bucket}", window * 2)
+            previous = store.get(f"{prefix}:{bucket - 1}")
         except jafaal_state_store.StateStoreUnavailableError as err:
-            logger.warning("Rate limiter fail-open: state store unavailable", exc_info=err)
-            return
+            if self._fail_open:
+                logger.warning("Rate limiter fail-open: state store unavailable", exc_info=err)
+                return
+            logger.error("Rate limiter fail-closed: state store unavailable", exc_info=err)
+            raise ServiceUnavailableError("Rate limiting is temporarily unavailable. Please try again.") from err
 
-        if count > limit:
-            retry_after = window - (now % window)
+        # Fraction of the previous window still inside the trailing window.
+        elapsed = now % window
+        overlap = (window - elapsed) / window
+        effective = count + _as_count(previous) * overlap
+
+        if effective > limit:
+            retry_after = window - elapsed
             raise RateLimitedError(
                 "Rate limit exceeded. Please slow down and try again shortly.",
                 retry_after=retry_after,

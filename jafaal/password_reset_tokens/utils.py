@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 import jafaal._internal.security_stores as jafaal_security_stores
 import jafaal._internal.user_guards as jafaal_user_guards
+import jafaal.api_keys.crud as jafaal_api_keys_crud
 import jafaal.audit as jafaal_audit
 import jafaal.credentials.crud as jafaal_credentials_crud
 import jafaal.exceptions as jafaal_exceptions
@@ -160,6 +161,10 @@ def use_password_reset_token(
         )
         password_reset_tokens_crud.mark_user_password_reset_tokens_used(token_user_id, db)
         jafaal_sessions_crud.delete_sessions_by_user(token_user_id, db, commit=False)
+        # API keys outlive sessions (expiry is optional), so a reset that leaves
+        # them active does not evict an attacker who minted one while holding
+        # the account.
+        jafaal_api_keys_crud.revoke_all_api_keys_for_user(token_user_id, db, reason="password_reset")
         db.flush()
     except jafaal_exceptions.JafaalError:
         db.rollback()

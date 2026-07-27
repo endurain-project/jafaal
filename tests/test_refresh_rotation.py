@@ -159,7 +159,7 @@ def test_refresh_after_logout_finds_no_session(client, make_user):
     # Re-present the (now-deleted) session's refresh token.
     _set_refresh_cookie(client, valid_cookie)
     resp = client.post(REFRESH)
-    assert resp.status_code in (401, 404)
+    assert resp.status_code == 400  # RFC 6749 §5.2 invalid_grant
 
 
 # --------------------------------------------------------------------------- #
@@ -185,7 +185,7 @@ def test_reuse_after_grace_is_theft_and_kills_the_family(client, make_user):
 
     # Theft invalidates the whole family: even the legitimate current token dies.
     _set_refresh_cookie(client, current)
-    assert client.post(REFRESH).status_code in (401, 404)
+    assert client.post(REFRESH).status_code == 400  # RFC 6749 §5.2 invalid_grant
 
 
 def test_theft_emits_security_event(client, make_user, event_sink):
@@ -248,8 +248,8 @@ def test_in_grace_replay_is_single_use_then_treated_as_theft(client, make_user):
     assert second.status_code == 401
 
     # The family is gone: the replacement no longer refreshes either. Its
-    # session row was deleted, so this reports 404 rather than 401.
-    assert client.post(REFRESH).status_code == 404
+    # session row was deleted, so the grant no longer resolves: invalid_grant.
+    assert client.post(REFRESH).status_code == 400
 
 
 def test_refresh_rejects_session_owner_mismatch(client, make_user):

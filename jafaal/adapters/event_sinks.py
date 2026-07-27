@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from jafaal.ports import (
         AccountLocked,
+        AuthenticatorChanged,
         AuthEventSink,
         EmailVerificationRequested,
         IdpAccountLinked,
@@ -121,6 +122,16 @@ class LoggingAuthEventSink:
             event.idp_slug,
         )
 
+    async def on_authenticator_changed(self, event: AuthenticatorChanged) -> None:
+        self._logger.log(
+            self._level,
+            "authenticator %s: user=%s factor=%s remaining=%s",
+            event.change,
+            event.user_id,
+            event.factor,
+            event.remaining_factors,
+        )
+
 
 class CompositeAuthEventSink:
     """Dispatch each event to several sinks in order.
@@ -168,3 +179,6 @@ class CompositeAuthEventSink:
 
     async def on_idp_account_linked(self, event: IdpAccountLinked) -> None:
         await self._dispatch("on_idp_account_linked", event)
+
+    async def on_authenticator_changed(self, event: AuthenticatorChanged) -> None:
+        await self._dispatch("on_authenticator_changed", event)

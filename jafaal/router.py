@@ -335,7 +335,7 @@ def login_for_access_token(
         # the caller's proof that *it* satisfied the password factor; without
         # it the second factor alone cannot complete a login.
         with _translate_store_outage():
-            mfa_token = pending_mfa_store.add_pending_login(form_data.username, user.id)
+            mfa_token = pending_mfa_store.add_pending_login(form_data.username, user.id, client.client_id)
 
         # Don't reset failed login attempts yet - wait for MFA verification
         # This prevents bypassing lockout by triggering MFA flow
@@ -460,6 +460,15 @@ def verify_mfa_and_login(
             "No pending MFA login found. Please start the login again.",
         )
 
+    # The second factor must finish against the client the password step was
+    # started for: the registration decides token delivery and the scope
+    # ceiling, so a swap here would widen a login mid-flow.
+    if claimed.client_id != client.client_id:
+        logger.warning(f"Pending MFA login for {username_log_id} was claimed by a different client")
+        raise jafaal_exceptions.InvalidRequestError(
+            "This login was started for a different client. Please start the login again.",
+        )
+
     # Get the user and complete login
     user = jafaal_ports.get_user_repository().get_by_id(user_id, db)
     if not user:
@@ -540,10 +549,11 @@ async def _grant_refresh_token(
 
     # Check if the session was found
     if session is None:
-        raise jafaal_exceptions.NotFoundError(
-            "Session not found",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        # RFC 6749 §5.2: a refresh token that no longer resolves to a grant is
+        # ``invalid_grant``, not a missing resource. A 404 would also tell the
+        # caller the difference between "revoked" and "never valid", which is an
+        # oracle the code-grant path deliberately avoids.
+        raise jafaal_exceptions.InvalidGrantError("The refresh token is invalid, expired, or was revoked.")
 
     # Defense-in-depth: ensure the session belongs to the user named in
     # the refresh token's `sub` claim. The refresh-token hash stored on
@@ -686,7 +696,6 @@ async def _grant_refresh_token(
     # last_rotation_at, and caps expires_at at the session's absolute deadline.
     if not jafaal_sessions_utils.rotate_session(
         session,
-        request,
         new_refresh_token,
         db,
         new_csrf_token=new_csrf_token,

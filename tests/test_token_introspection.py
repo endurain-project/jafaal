@@ -104,7 +104,7 @@ def test_revoke_refresh_token_kills_the_session(client, make_user):
         "/api/v1/auth/refresh",
         headers={"Authorization": f"Bearer {refresh}"},
     )
-    assert retry.status_code in (401, 404)
+    assert retry.status_code == 400  # RFC 6749 §5.2 invalid_grant
 
 
 def test_revoke_unknown_token_returns_200(client):

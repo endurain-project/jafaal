@@ -240,6 +240,147 @@ def test_api_key_scopes_are_narrowed_on_demotion_without_the_toggle(make_user, d
 
 
 # --------------------------------------------------------------------------- #
+# Second review batch (H-series)
+# --------------------------------------------------------------------------- #
+
+
+def test_introspect_scope_is_grantable_to_an_api_key():
+    """``auth:introspect`` is outside the catalog, so no principal ever holds it.
+
+    Requiring the caller to hold it made the documented recipe impossible: the
+    only workaround was to put it in the catalog, which hands it to every admin
+    session and turns each one into a token oracle (RFC 7662 §2.1 treats
+    introspection as service-to-service). The host allow-list is the real gate.
+    """
+    import jafaal.api_keys.utils as api_keys_utils
+
+    jafaal.configure_api_key_scopes([scopes.AUTH_INTROSPECT])
+    # Caller holds nothing, yet the ungoverned capability is still grantable.
+    api_keys_utils.validate_api_key_scopes([scopes.AUTH_INTROSPECT], granted_scopes=[])
+
+    # A catalog-governed scope the caller lacks is still refused.
+    jafaal.configure_api_key_scopes([scopes.SESSIONS_READ])
+    with pytest.raises(exc.InvalidRequestError, match="do not hold"):
+        api_keys_utils.validate_api_key_scopes([scopes.SESSIONS_READ], granted_scopes=[])
+
+
+def test_metadata_advertises_the_introspection_scope():
+    # A client reading the document must be able to learn the scope it needs to
+    # call the advertised introspection_endpoint.
+    document = metadata.get_authorization_server_metadata(api_root="https://app.test/api/v1")
+    assert scopes.AUTH_INTROSPECT in document["scopes_supported"]
+
+
+def test_pending_mfa_ticket_carries_the_client_it_was_issued_for():
+    """The second factor must finish against the client the password step began.
+
+    The registration decides token delivery and the scope ceiling, so a swap
+    would let a login started for a narrow body-delivery client finish as a wide
+    cookie-delivery one. The completion handlers compare this value; storing it
+    is what makes that check possible.
+    """
+    from jafaal._internal.security_stores import PendingMFALogin
+
+    store = PendingMFALogin()
+    ticket = store.add_pending_login("mfabind", 7, NATIVE_CLIENT_ID)
+
+    claimed = store.claim_pending_login(ticket)
+    assert claimed is not None
+    assert claimed.user_id == 7
+    assert claimed.client_id == NATIVE_CLIENT_ID
+
+
+def test_password_reset_revokes_api_keys(client, make_user, db):
+    """Recovering an account must evict what the attacker minted while holding it.
+
+    Sessions were already revoked; API keys outlive them (expiry is optional),
+    so leaving them active meant a reset accomplished nothing against an
+    attacker who made one.
+    """
+    import jafaal.api_keys.crud as api_keys_crud
+    import jafaal.api_keys.schema as api_keys_schema
+    import jafaal.password_reset_tokens.utils as reset_utils
+    from jafaal._internal.password_hasher import get_password_hasher
+    from jafaal._internal.token_manager import get_token_manager
+    from jafaal.identity_service import DefaultIdentityService
+
+    user = make_user(username="resetter", password=PASSWORD)
+    jafaal.configure_api_key_scopes([scopes.PROFILE])
+    row, _raw = api_keys_crud.create_api_key(
+        user.id,
+        api_keys_schema.UsersApiKeyCreate(name="attacker key", scopes=[scopes.PROFILE]),
+        db,
+    )
+    db.commit()
+    assert row.is_active is True
+
+    token, _exp = reset_utils.create_password_reset_token(user.id, db)
+    db.commit()
+    reset_utils.use_password_reset_token(
+        token,
+        "An3wStr0ngPassphrase!",
+        DefaultIdentityService(db, get_token_manager(), get_password_hasher()),
+        db,
+    )
+
+    db.expire_all()
+    assert api_keys_crud.get_api_key_by_id(row.id, user.id, db).is_active is False
+
+
+def test_signup_answers_identically_for_an_existing_account(client, make_user):
+    """Sign-up must not be an account-existence oracle (OWASP ASVS V2.2.1)."""
+    make_user(username="taken", email="taken@test.dev", password=PASSWORD)
+
+    fresh = client.post(
+        "/api/v1/auth/sign-up",
+        json={"username": "brandnew", "email": "brandnew@test.dev", "password": "An3wStr0ngPassphrase!"},
+    )
+    duplicate = client.post(
+        "/api/v1/auth/sign-up",
+        json={"username": "taken", "email": "taken@test.dev", "password": "An3wStr0ngPassphrase!"},
+    )
+
+    assert duplicate.status_code == fresh.status_code
+    assert duplicate.json() == fresh.json()
+
+
+def test_rotation_keeps_the_session_device_recorded_at_login(client, make_user, db):
+    """Refresh carries no new authentication, so it must not relabel the device.
+
+    Otherwise a stolen token replayed from another network silently rewrites the
+    session's fingerprint — destroying the forensic record and showing the
+    attacker's browser in the user's own session list.
+    """
+    from jafaal.sessions.models import UsersSessions
+
+    make_user(username="devicer", password=PASSWORD)
+    client.post(
+        "/api/v1/auth/login",
+        data={"username": "devicer", "password": PASSWORD, "client_id": WEB_CLIENT_ID},
+        headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Safari/605.1.15"},
+    )
+    original = db.query(UsersSessions).one()
+    original_browser = original.browser
+    original_ip = original.ip_address
+    original_rotations = original.rotation_count
+
+    # Refresh from a very different client.
+    assert (
+        client.post(
+            "/api/v1/auth/refresh",
+            headers={"User-Agent": "curl/8.4.0"},
+        ).status_code
+        == 200
+    )
+
+    db.expire_all()
+    rotated = db.query(UsersSessions).one()
+    assert rotated.rotation_count == original_rotations + 1
+    assert rotated.browser == original_browser
+    assert rotated.ip_address == original_ip
+
+
+# --------------------------------------------------------------------------- #
 # M7 - security-critical events get reserved capacity
 # --------------------------------------------------------------------------- #
 

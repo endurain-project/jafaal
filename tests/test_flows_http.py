@@ -204,7 +204,7 @@ def test_signup_email_verification_flow(client, event_sink):
         token = event_sink.events[0].token
 
         # Account is inactive until verified → login is forbidden.
-        assert _login(client, "ver", "Str0ng!Pass").status_code == 403
+        assert _login(client, "ver", "Str0ng!Pass").status_code == 401
 
         confirm = client.post("/api/v1/auth/sign-up/confirm", json={"token": token})
         assert confirm.status_code == 200

@@ -395,7 +395,6 @@ def test_rotation_claim_has_exactly_one_winner_under_real_concurrency(concurrent
         with concurrent_db.session() as session, jafaal_orm.unit_of_work(session):
             row = sessions_crud.get_session_by_id("race-rotate", session)
             updated = session_utils.edit_session_object(
-                _request(),
                 f"new-digest-{index}",
                 session_utils.session_expires_at(created_at, datetime.now(UTC)),
                 row,

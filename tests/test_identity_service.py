@@ -106,7 +106,9 @@ def test_resolve_from_access_token(db, make_user):
 def test_resolve_from_access_token_inactive_user(db, make_user):
     user = make_user(username="inactive", is_active=False)
     _, token = get_token_manager().create_token("s", user, TokenType.ACCESS)
-    with pytest.raises(exc.AuthorizationError):
+    # A deactivated account makes the credential unusable, so this is a 401
+    # invalid_token — not a 403, which would confirm the token is otherwise good.
+    with pytest.raises(exc.InactiveAccountError):
         _svc(db).resolve_from_access_token(token)
 
 

@@ -194,7 +194,7 @@ _UUID_E2E = textwrap.dedent(
     from jafaal._internal.security_stores import PendingMFALogin
 
     pending = PendingMFALogin()
-    ticket = pending.add_pending_login("alice", uid)
+    ticket = pending.add_pending_login("alice", uid, "web")
     fetched = pending.get_pending_login(ticket)
     assert fetched is not None
     assert isinstance(fetched.user_id, uuid.UUID) and fetched.user_id == uid, (fetched, type(fetched.user_id))

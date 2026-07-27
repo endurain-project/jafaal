@@ -265,7 +265,6 @@ def create_session_object(
 
 
 def edit_session_object(
-    request: Request,
     hashed_refresh_token: str,
     refresh_token_exp: datetime,
     session: jafaal_sessions_models.UsersSessions,
@@ -274,8 +273,10 @@ def edit_session_object(
     """
     Create updated session object with new token and metadata.
 
+    Takes no ``Request``: everything that identifies the *device* is fixed at
+    login and deliberately not refreshed here (see the field comments below).
+
     Args:
-        request: The incoming HTTP request object.
         hashed_refresh_token: Hashed refresh token.
         refresh_token_exp: Refresh token expiration datetime.
         session: The existing session object to update.
@@ -284,9 +285,6 @@ def edit_session_object(
     Returns:
         Updated session object with device and token details.
     """
-    user_agent = get_user_agent(request)
-    device_info = parse_user_agent(user_agent)
-
     now = datetime.now(UTC)
     new_rotation_count = session.rotation_count + 1
 
@@ -294,12 +292,18 @@ def edit_session_object(
         id=session.id,
         user_id=session.user_id,
         refresh_token=hashed_refresh_token,
-        ip_address=network.get_ip_address(request),
-        device_type=device_info.device_type.value,
-        operating_system=device_info.operating_system,
-        operating_system_version=device_info.operating_system_version,
-        browser=device_info.browser,
-        browser_version=device_info.browser_version,
+        # Device identity is recorded at login and never rewritten. Refresh
+        # carries no new authentication, so whoever presents the token would
+        # otherwise overwrite the fingerprint: a stolen token replayed from
+        # another network silently relabels the session as the attacker's
+        # device, destroying the forensic record and making the user's own
+        # session list show the attacker's browser as theirs.
+        ip_address=session.ip_address,
+        device_type=session.device_type,
+        operating_system=session.operating_system,
+        operating_system_version=session.operating_system_version,
+        browser=session.browser,
+        browser_version=session.browser_version,
         created_at=session.created_at,
         last_activity_at=now,
         expires_at=refresh_token_exp,
@@ -361,7 +365,6 @@ def create_session(
 
 def rotate_session(
     session: jafaal_sessions_models.UsersSessions,
-    request: Request,
     new_refresh_token: str,
     db: Session,
     new_csrf_token: str | None = None,
@@ -375,7 +378,6 @@ def rotate_session(
 
     Args:
         session: Current user session object to rotate.
-        request: Incoming request containing session context.
         new_refresh_token: New refresh token to set.
         db: Database session for committing changes.
         new_csrf_token: Plain CSRF token to hash and store.
@@ -397,7 +399,6 @@ def rotate_session(
 
     # Build the replacement row.
     updated_session = edit_session_object(
-        request,
         hash_refresh_token(new_refresh_token),
         exp,
         session,

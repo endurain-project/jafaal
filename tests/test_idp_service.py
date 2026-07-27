@@ -9,6 +9,7 @@ the HTTP-mocking tests (it has its own dedicated tests) so they stay hermetic.
 import asyncio
 import base64
 import hashlib
+import json
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlparse
@@ -47,6 +48,10 @@ class _FakeResponse:
         self._data = data
         self.status_code = status_code
         self.text = "error-body"
+        # Bodies are read through read_json_capped, which measures the encoded
+        # content against the configured size cap.
+        self.content = json.dumps(data).encode() if data is not None else b"null"
+        self.headers = {"content-length": str(len(self.content))}
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -368,9 +373,26 @@ def test_verify_id_token_expired():
     svc = IdentityProviderService()
     key, jwks = _rsa_jwks()
     svc.discovery._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
-    token = jwt.encode({"alg": "RS256", "kid": "test-key-1"}, _id_token_claims(exp_delta=-10), key)
+    # Comfortably past the clock-skew leeway, so this is a genuine expiry
+    # rather than a token the tolerance is meant to accept.
+    token = jwt.encode({"alg": "RS256", "kid": "test-key-1"}, _id_token_claims(exp_delta=-3600), key)
     with pytest.raises(exc.TokenExpiredError):
         asyncio.run(svc.discovery.verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
+
+
+def test_verify_id_token_tolerates_a_provider_clock_slightly_ahead():
+    # These clocks belong to someone else: joserfc rejects an ``iat`` even one
+    # second in the future, so without leeway a provider running marginally
+    # fast fails every login (OIDC Core §3.1.3.7 (10) anticipates the skew).
+    svc = IdentityProviderService()
+    key, jwks = _rsa_jwks()
+    svc.discovery._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
+    claims = _id_token_claims()
+    claims["iat"] = int(datetime.now(UTC).timestamp()) + 30
+    token = jwt.encode({"alg": "RS256", "kid": "test-key-1"}, claims, key)
+
+    verified = asyncio.run(svc.discovery.verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
+    assert verified["sub"] == claims["sub"]
 
 
 def test_verify_id_token_wrong_issuer():

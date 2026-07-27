@@ -160,8 +160,7 @@ got in and what they changed once there. The slugs are declared on
 | Credentials | `password.changed`, `password.reset_requested`, `password.reset_completed`, `signup.confirmed` |
 | Tokens & sessions | `token.refreshed`, `token.revoked`, `token.reuse_grace`, `token.theft_detected`, `session.revoked` |
 | API keys | `api_key.created`, `api_key.revoked`, `api_key.deleted`, `api_key.auth_success`, `api_key.auth_failure` |
-| Identity providers | `idp.link_added`, `idp.link_removed`, `idp.email_linked`, `idp.email_link_refused`, `idp.discovery_failed`, `oauth_state.replay_rejected` |
-| Authorization | `scope.denied` |
+| Identity providers | `idp.link_added`, `idp.link_removed`, `idp.email_linked`, `idp.email_link_refused`, `idp.discovery_failed`, `oauth_state.replay_rejected` || Authorization | `scope.denied` |
 
 State-changing events an account owner would want to know about
 (`mfa.disabled`, `password.changed` by an admin, `api_key.deleted`,
@@ -173,7 +172,8 @@ filter still surfaces them.
     [`AuthEventSink`][jafaal.AuthEventSink] also receives best-effort
     **security notifications** it can turn into user-facing alerts:
     `on_new_device_login`, `on_account_locked`,
-    `on_refresh_token_theft_detected`, and `on_idp_account_linked`. They are
+    `on_refresh_token_theft_detected`, `on_idp_account_linked`, and
+    `on_authenticator_changed` (any factor added or removed). They are
     fire-and-forget and forward-compatible — a sink that does not implement a
     method simply skips it.
 

@@ -129,14 +129,18 @@ def test_login_ip_locks_after_ip_threshold():
     assert store.get_ip_lockout_time(ip) is not None
 
 
-def test_login_ip_reset_clears_lock():
+def test_login_ip_counter_survives_a_successful_login():
+    # The per-IP tier is the only bound on the targeted-lockout DoS the username
+    # tier enables. If a success from the address cleared it, an attacker with
+    # any one valid account could spray 49 failures, log in, and repeat forever.
+    # It decays on its own TTL window instead.
     store = FailedLoginAttempts()
     ip = "203.0.113.9"
     for _ in range(50):
         store.record_ip_failure(ip)
     assert store.is_ip_locked_out(ip) is True
     store.reset_ip_attempts(ip)
-    assert store.is_ip_locked_out(ip) is False
+    assert store.is_ip_locked_out(ip) is True
 
 
 def test_login_ip_and_username_lockouts_are_independent():
@@ -183,7 +187,7 @@ def test_login_ip_lockout_can_be_disabled():
 
 def test_pending_mfa_add_get_claim():
     store = PendingMFALogin()
-    ticket = store.add_pending_login("alice", 42)
+    ticket = store.add_pending_login("alice", 42, "web")
     assert store.has_pending_login(ticket) is True
     pending = store.get_pending_login(ticket)
     assert pending is not None
@@ -199,7 +203,7 @@ def test_pending_mfa_ticket_is_unguessable_and_unique():
     # The ticket is what proves the password factor was satisfied *by this
     # caller*, so it must be high-entropy and never derived from the username.
     store = PendingMFALogin()
-    tickets = {store.add_pending_login("alice", 42) for _ in range(5)}
+    tickets = {store.add_pending_login("alice", 42, "web") for _ in range(5)}
     assert len(tickets) == 5
     for ticket in tickets:
         assert len(ticket) >= 32
@@ -210,7 +214,7 @@ def test_pending_mfa_is_not_addressable_by_username():
     # The core property: knowing the username must not let a caller resolve
     # (and therefore complete) somebody else's pending login.
     store = PendingMFALogin()
-    store.add_pending_login("alice", 42)
+    store.add_pending_login("alice", 42, "web")
     assert store.get_pending_login("alice") is None
     assert store.claim_pending_login("alice") is None
 
@@ -223,7 +227,7 @@ def test_pending_mfa_coerces_to_host_pk_type():
     UUID side).
     """
     store = PendingMFALogin()
-    ticket = store.add_pending_login("alice", 42)
+    ticket = store.add_pending_login("alice", 42, "web")
     got = store.get_pending_login(ticket)
     assert got is not None and got.user_id == 42
     assert isinstance(got.user_id, int)
@@ -249,9 +253,9 @@ def test_pending_mfa_evicts_corrupt_entry():
 
 def test_pending_mfa_clear_for_user():
     store = PendingMFALogin()
-    store.add_pending_login("alice", 1)
-    store.add_pending_login("bob", 1)
-    carol = store.add_pending_login("carol", 2)
+    store.add_pending_login("alice", 1, "web")
+    store.add_pending_login("bob", 1, "web")
+    carol = store.add_pending_login("carol", 2, "web")
     assert store.clear_for_user(1) == 2
     remaining = store.get_pending_login(carol)
     assert remaining is not None and remaining.user_id == 2

@@ -563,7 +563,7 @@ class DefaultIdentityService:
         if not isinstance(sid, str):
             raise jafaal_exceptions.InvalidTokenError("Invalid token: 'sid' claim must be a string")
 
-        user = jafaal_user_guards.get_user_by_id_or_404(user_id, self._db)
+        user = jafaal_user_guards.resolve_credential_user(user_id, self._db)
         jafaal_user_guards.check_user_is_active(user)
 
         settings = jafaal_settings.get_settings()
@@ -682,7 +682,7 @@ class DefaultIdentityService:
             )
             raise jafaal_exceptions.InvalidApiKeyError("Invalid API key")
 
-        user = jafaal_user_guards.get_user_by_id_or_404(db_key.user_id, self._db)
+        user = jafaal_user_guards.resolve_credential_user(db_key.user_id, self._db)
         jafaal_user_guards.check_user_is_active(user)
 
         if not db_key.is_active:
@@ -766,7 +766,7 @@ class DefaultIdentityService:
         if db_session is None:
             raise jafaal_exceptions.SessionExpiredError("Session not found or expired")
 
-        user = jafaal_user_guards.get_user_by_id_or_404(db_session.user_id, self._db)
+        user = jafaal_user_guards.resolve_credential_user(db_session.user_id, self._db)
         jafaal_user_guards.check_user_is_active(user)
 
         return self._build_principal(

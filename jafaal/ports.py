@@ -337,6 +337,27 @@ class IdpAccountLinked:
     email: str
 
 
+@dataclass(frozen=True)
+class AuthenticatorChanged:
+    """An authentication factor was added to or removed from an account.
+
+    Covers TOTP enable/disable, backup-code regeneration, and passkey
+    registration/deletion. Binding or unbinding an authenticator changes *how
+    the account can be signed into*, so the owner has to hear about it out of
+    band — an attacker who enrols their own factor (or strips the victim's)
+    otherwise does so in total silence. ``remaining_factors`` lets a host warn
+    loudly when an account is left with none.
+    """
+
+    user_id: Any
+    username: str
+    #: ``"totp"``, ``"backup_codes"``, or ``"passkey"``.
+    factor: str
+    #: ``"added"`` or ``"removed"``.
+    change: str
+    remaining_factors: int | None = None
+
+
 class AuthEventSink(Protocol):
     """Host-owned delivery of JAFAAL's outbound notifications.
 
@@ -369,6 +390,8 @@ class AuthEventSink(Protocol):
 
     async def on_idp_account_linked(self, event: IdpAccountLinked) -> None: ...
 
+    async def on_authenticator_changed(self, event: AuthenticatorChanged) -> None: ...
+
 
 class NullAuthEventSink:
     """Default no-op sink — a host that skips these flows implements nothing."""
@@ -395,6 +418,9 @@ class NullAuthEventSink:
         return None
 
     async def on_idp_account_linked(self, event: IdpAccountLinked) -> None:
+        return None
+
+    async def on_authenticator_changed(self, event: AuthenticatorChanged) -> None:
         return None
 
 
@@ -601,6 +627,7 @@ CRITICAL_EVENT_METHODS: frozenset[str] = frozenset(
         "on_account_locked",
         "on_refresh_token_theft_detected",
         "on_idp_account_linked",
+        "on_authenticator_changed",
     }
 )
 """Events whose loss is itself a security incident.
@@ -811,6 +838,7 @@ __all__ = [
     "MAX_INFLIGHT_EVENTS",
     "AccountLocked",
     "AuthEventSink",
+    "AuthenticatorChanged",
     "EmailVerificationRequested",
     "IdpAccountLinked",
     "IdpIdentity",

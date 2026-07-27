@@ -77,6 +77,12 @@ def get_backup_code_status(
     )
 
 
+def _username_for(user_id: UserId, db: Session) -> str:
+    """Best-effort username for a notification payload."""
+    user = jafaal_ports.get_user_repository().get_by_id(user_id, db)
+    return user.username if user is not None else str(user_id)
+
+
 def setup_mfa(
     token_user_id: UserId,
     db: Session,
@@ -127,6 +133,15 @@ def enable_mfa(
         mfa_secret_store.delete_secret(token_user_id)
         logger.info(f"User {token_user_id} enabled MFA (step-up verified)")
         jafaal_audit.record(jafaal_audit.Event.MFA_ENABLED, user_id=token_user_id, method="totp")
+        jafaal_ports.dispatch_event(
+            "on_authenticator_changed",
+            jafaal_ports.AuthenticatorChanged(
+                user_id=token_user_id,
+                username=_username_for(token_user_id, db),
+                factor="totp",
+                change="added",
+            ),
+        )
         return {
             "message": "MFA enabled successfully",
             "backup_codes": backup_codes,
@@ -162,6 +177,15 @@ def disable_mfa(
         jafaal_audit.Event.MFA_DISABLED,
         level=logging.WARNING,
         user_id=token_user_id,
+    )
+    jafaal_ports.dispatch_event(
+        "on_authenticator_changed",
+        jafaal_ports.AuthenticatorChanged(
+            user_id=token_user_id,
+            username=_username_for(token_user_id, db),
+            factor="totp",
+            change="removed",
+        ),
     )
     return {"message": "MFA disabled successfully"}
 
@@ -228,6 +252,16 @@ def generate_backup_codes(
         jafaal_audit.Event.MFA_BACKUP_CODES_GENERATED,
         user_id=token_user_id,
         count=len(codes),
+    )
+    jafaal_ports.dispatch_event(
+        "on_authenticator_changed",
+        jafaal_ports.AuthenticatorChanged(
+            user_id=token_user_id,
+            username=user.username,
+            factor="backup_codes",
+            change="added",
+            remaining_factors=len(codes),
+        ),
     )
 
     return mfa_backup_codes_schema.MFABackupCodesResponse(

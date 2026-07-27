@@ -72,6 +72,7 @@ from .exceptions import (
     ConflictError,
     IdentityProviderError,
     IdentityProviderTimeoutError,
+    InactiveAccountError,
     InternalError,
     InvalidApiKeyError,
     InvalidCredentialsError,
@@ -109,6 +110,7 @@ from .orm import (
 )
 from .ports import (
     AccountLocked,
+    AuthenticatorChanged,
     AuthEventSink,
     EmailVerificationRequested,
     IdpAccountLinked,
@@ -307,6 +309,7 @@ __all__ = [
     "PasswordBreachChecker",
     "PasswordPolicy",
     "PasswordResetRequested",
+    "AuthenticatorChanged",
     "IdpAccountLinked",
     "RefreshTokenTheftDetected",
     "ScopeResolver",
@@ -335,6 +338,7 @@ __all__ = [
     "IdentityProviderError",
     "IdentityProviderTimeoutError",
     "InternalError",
+    "InactiveAccountError",
     "InvalidApiKeyError",
     "InvalidCredentialsError",
     "InvalidMFACodeError",

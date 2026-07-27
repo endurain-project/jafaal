@@ -112,6 +112,8 @@ class Event:
 
     # --- account lifecycle ---
     SIGNUP_CONFIRMED: Final = "signup.confirmed"
+    SIGNUP_CREATED: Final = "signup.created"
+    SIGNUP_DUPLICATE: Final = "signup.duplicate"
 
     # --- tokens & sessions ---
     AUTHORIZATION_CODE_REDEEMED: Final = "authorization_code.redeemed"
@@ -119,6 +121,7 @@ class Event:
     TOKEN_THEFT_DETECTED: Final = "token.theft_detected"
     TOKEN_REFRESHED: Final = "token.refreshed"
     TOKEN_REVOKED: Final = "token.revoked"
+    TOKEN_REVOKE_INEFFECTIVE: Final = "token.revoke_ineffective"
     SESSION_REVOKED: Final = "session.revoked"
 
     # --- API keys ---

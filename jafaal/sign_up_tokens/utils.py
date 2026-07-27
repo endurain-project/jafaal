@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import jafaal._internal.user_guards as jafaal_user_guards
@@ -66,7 +67,7 @@ def register_local_user(
     signup_config: jafaal_ports.SignupConfig,
     identity_service: "LocalCredentialStore",
     db: Session,
-) -> jafaal_ports.UserProtocol:
+) -> jafaal_ports.UserProtocol | None:
     """Create a local (password) account during sign-up.
 
     Validates and hashes the password with the regular-tier policy, asks the
@@ -81,24 +82,60 @@ def register_local_user(
         db: Active SQLAlchemy session.
 
     Returns:
-        The newly created user.
+        The newly created user, or ``None`` when the username or email is
+        already taken. The caller must answer identically either way — see
+        below.
+
+    Note:
+        A duplicate returns ``None`` rather than raising, because sign-up is an
+        **unauthenticated** endpoint: any response that distinguishes "created"
+        from "already exists" is an account-existence oracle, and the previous
+        behaviour let the database's unique constraint surface as a different
+        status entirely. The password is validated and hashed *before* the
+        existence check so both paths pay the same (deliberately slow) Argon2
+        cost and the branch is not visible in response time either.
     """
     hashed_password = jafaal_password_policy.validate_and_hash_for_user(
         identity_service,
         is_superuser=False,
         password=request.password,
     )
+
+    repo = jafaal_ports.get_user_repository()
+    if repo.get_by_username(request.username, db) is not None or repo.get_by_email(request.email, db) is not None:
+        logger.info("Sign-up requested for an already-registered username/email; answering generically")
+        jafaal_audit.record(
+            jafaal_audit.Event.SIGNUP_DUPLICATE,
+            outcome=jafaal_audit.Outcome.BLOCKED,
+            level=logging.WARNING,
+        )
+        return None
+
     # A new sign-up is immediately active + verified only when neither email
     # verification nor admin approval is required.
     is_usable = not (signup_config.require_email_verification or signup_config.require_admin_approval)
-    user = jafaal_ports.get_user_repository().create_local_user(
-        request.username,
-        request.email,
-        db,
-        is_active=is_usable,
-        is_verified=is_usable,
-    )
+    try:
+        user = repo.create_local_user(
+            request.username,
+            request.email,
+            db,
+            is_active=is_usable,
+            is_verified=is_usable,
+        )
+    except IntegrityError:
+        # Lost a race with a concurrent sign-up for the same identifiers. Same
+        # answer as the pre-check, so the race is not observable either.
+        db.rollback()
+        logger.info("Sign-up lost a uniqueness race; answering generically")
+        jafaal_audit.record(
+            jafaal_audit.Event.SIGNUP_DUPLICATE,
+            outcome=jafaal_audit.Outcome.BLOCKED,
+            level=logging.WARNING,
+        )
+        return None
+
     identity_service.set_local_password_hash(user.id, hashed_password)
+    jafaal_audit.record(jafaal_audit.Event.SIGNUP_CREATED, user_id=user.id)
     return user
 
 

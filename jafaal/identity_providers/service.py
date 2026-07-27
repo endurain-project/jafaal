@@ -877,7 +877,9 @@ class IdentityProviderService:
                         headers={"Authorization": f"Bearer {access_token}"},
                     )
                     response.raise_for_status()
-                    userinfo_claims = response.json()
+                    userinfo_claims = await idp_discovery.read_json_capped(
+                        response, source="Identity provider userinfo"
+                    )
                     logger.debug("Successfully retrieved userinfo from endpoint")
                 else:
                     logger.warning("No access token available for userinfo request")

@@ -61,16 +61,22 @@ async def signup(
     if not signup_config.enabled:
         raise jafaal_exceptions.AuthorizationError("User sign-up is not enabled on this server")
 
-    # Create the user (host provisions its own row + defaults via UserRepository)
+    # Create the user (host provisions its own row + defaults via UserRepository).
+    # Returns None when the username/email is already registered.
     created_user = sign_up_tokens_utils.register_local_user(user, signup_config, identity_service, db)
 
-    # Return appropriate response based on the sign-up configuration
+    # The response is built from configuration alone, never from whether the
+    # account was actually created: an unauthenticated caller must not be able
+    # to tell "registered" from "already exists" (OWASP ASVS V2.2.1). The
+    # verification email is the only real difference, and it is only ever sent
+    # to a genuinely new account.
     message = "User created successfully."
     email_verification_required: bool | None = None
     admin_approval_required: bool | None = None
 
     if signup_config.require_email_verification:
-        await sign_up_tokens_utils.request_email_verification(created_user, db)
+        if created_user is not None:
+            await sign_up_tokens_utils.request_email_verification(created_user, db)
         message += " Email sent with verification instructions."
         email_verification_required = True
     if signup_config.require_admin_approval:

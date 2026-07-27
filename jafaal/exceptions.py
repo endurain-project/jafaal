@@ -17,6 +17,17 @@ Contract:
 from __future__ import annotations
 
 
+def _quote_safe(value: str) -> str:
+    """Return ``value`` usable inside a quoted ``WWW-Authenticate`` parameter.
+
+    RFC 7235 quoted-strings cannot contain a bare double quote or backslash, and
+    a header cannot carry a newline. Rather than escape, the offending
+    characters are dropped: the challenge is a hint for a client, and a mangled
+    header is worse than a slightly shortened message.
+    """
+    return value.replace("\\", "").replace('"', "").replace("\r", " ").replace("\n", " ")
+
+
 class JafaalError(Exception):
     """Base class for all JAFAAL domain errors."""
 
@@ -38,12 +49,39 @@ class JafaalError(Exception):
 
 
 class AuthenticationError(JafaalError):
-    """The caller could not be authenticated (401)."""
+    """The caller could not be authenticated (401).
+
+    Carries an RFC 6750 §3 ``WWW-Authenticate`` challenge. The base case — no
+    credential was supplied — is a bare ``Bearer``, because §3 says the
+    ``error`` parameter MUST NOT be sent when the request contained no
+    authentication information. Subclasses that represent a *presented but
+    unusable* credential set :attr:`bearer_error` (almost always
+    ``invalid_token``, per §3.1), which is what lets a client tell "log in" from
+    "refresh and retry" without parsing prose.
+    """
 
     code = "authentication_error"
     status_code = 401
     default_detail = "Authentication required."
-    headers = {"WWW-Authenticate": "Bearer"}
+
+    #: RFC 6750 §3.1 error code for the challenge, or ``None`` for a bare
+    #: ``Bearer`` (no credential was presented, so there is nothing wrong with).
+    bearer_error: str | None = None
+
+    #: Auth scheme named in the challenge. Overridden by API-key errors.
+    auth_scheme: str = "Bearer"
+
+    def __init__(self, detail: str | None = None, *, headers: dict[str, str] | None = None) -> None:
+        super().__init__(detail, headers=headers)
+        if headers is None:
+            self.headers = self._challenge()
+
+    def _challenge(self) -> dict[str, str]:
+        """Build the ``WWW-Authenticate`` challenge for this failure."""
+        challenge = self.auth_scheme
+        if self.bearer_error:
+            challenge += f' error="{self.bearer_error}", error_description="{_quote_safe(self.detail)}"'
+        return {"WWW-Authenticate": challenge}
 
 
 class AuthorizationError(JafaalError):
@@ -167,6 +205,7 @@ class TokenExpiredError(AuthenticationError):
 
     code = "token_expired"
     default_detail = "The token has expired."
+    bearer_error = "invalid_token"
 
 
 class InvalidTokenError(AuthenticationError):
@@ -174,6 +213,7 @@ class InvalidTokenError(AuthenticationError):
 
     code = "invalid_token"
     default_detail = "The token is invalid."
+    bearer_error = "invalid_token"
 
 
 class SessionExpiredError(AuthenticationError):
@@ -181,6 +221,23 @@ class SessionExpiredError(AuthenticationError):
 
     code = "session_expired"
     default_detail = "The session has expired. Please log in again."
+    bearer_error = "invalid_token"
+
+
+class InactiveAccountError(AuthenticationError):
+    """The credential is well-formed but its account can no longer be used.
+
+    A deactivated (or deleted) account is a **credential-validation** failure,
+    not an authorization one: RFC 6750 §3.1 puts "the access token is
+    revoked… or otherwise invalid" under ``invalid_token`` with a 401. Answering
+    403 would tell a bearer that its token is still good and only the permission
+    is missing, and answering 404 would make the resource server's account state
+    observable to whoever holds a stale token.
+    """
+
+    code = "inactive_account"
+    default_detail = "This account is not active."
+    bearer_error = "invalid_token"
 
 
 class InvalidApiKeyError(AuthenticationError):
@@ -188,7 +245,9 @@ class InvalidApiKeyError(AuthenticationError):
 
     code = "invalid_api_key"
     default_detail = "The API key is invalid."
-    headers = {"WWW-Authenticate": "ApiKey"}
+    # Not an IANA-registered auth scheme, but neither is the X-API-Key header it
+    # answers; naming it keeps the challenge honest about what to retry with.
+    auth_scheme = "ApiKey"
 
 
 class StaleRefreshTokenError(AuthenticationError):
@@ -201,6 +260,7 @@ class StaleRefreshTokenError(AuthenticationError):
 
     code = "stale_refresh_token"
     default_detail = "The refresh token is no longer valid. Please log in again."
+    bearer_error = "invalid_token"
     clear_refresh_cookie = True
 
 
@@ -394,6 +454,7 @@ __all__ = [
     "ConflictError",
     "IdentityProviderError",
     "IdentityProviderTimeoutError",
+    "InactiveAccountError",
     "InternalError",
     "InvalidApiKeyError",
     "InvalidClientError",

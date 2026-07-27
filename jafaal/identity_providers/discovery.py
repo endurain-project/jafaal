@@ -50,6 +50,52 @@ def _idp_require_https() -> bool:
     return jafaal_settings.get_settings().sso.idp_require_https
 
 
+def _id_token_leeway_seconds() -> int:
+    """Clock-skew tolerance applied to an IdP ID token's time claims."""
+    return jafaal_settings.get_settings().sso.id_token_leeway_seconds
+
+
+def _max_response_bytes() -> int:
+    """Maximum body accepted from an identity provider."""
+    return jafaal_settings.get_settings().sso.max_response_bytes
+
+
+async def read_json_capped(response: httpx.Response, *, source: str) -> Any:
+    """Parse ``response`` as JSON, refusing a body over the configured cap.
+
+    Discovery, JWKS and userinfo responses are all parsed straight into memory.
+    A hostile, compromised, or simply broken provider can return a body of any
+    size, and the JWKS one is *cached* — so the growth persists rather than
+    being collected. Timeouts bound how long we wait, not how much we accept;
+    this bounds the latter.
+
+    Args:
+        response: The (already awaited) HTTP response.
+        source: Human-readable description used in the error/log.
+
+    Returns:
+        The parsed JSON body.
+
+    Raises:
+        IdentityProviderError: If the body exceeds the cap.
+    """
+    limit = _max_response_bytes()
+
+    # Trust Content-Length only to reject early; a lying or absent header is
+    # caught by the measured length below.
+    declared = response.headers.get("content-length")
+    if declared is not None and declared.isdigit() and int(declared) > limit:
+        logger.error(f"{source} declared {declared} bytes, over the {limit}-byte cap")
+        raise jafaal_exceptions.IdentityProviderError(f"{source} returned an oversized response.")
+
+    body = response.content
+    if len(body) > limit:
+        logger.error(f"{source} returned {len(body)} bytes, over the {limit}-byte cap")
+        raise jafaal_exceptions.IdentityProviderError(f"{source} returned an oversized response.")
+
+    return json.loads(body)
+
+
 def _assert_discovered_issuer_matches(idp: idp_models.IdentityProvider, config: dict[str, Any]) -> None:
     """Assert the discovery document's ``issuer`` is the one we asked for.
 
@@ -218,7 +264,7 @@ class OidcDiscovery:
         except Exception as err:  # pragma: no cover - shutdown must never raise
             logger.warning(f"Error closing the IdP HTTP client: {type(err).__name__}", exc_info=err)
 
-    async def fetch_jwks(self, jwks_uri: str) -> dict[str, Any]:
+    async def fetch_jwks(self, jwks_uri: str, *, force_refresh: bool = False) -> dict[str, Any]:
         """
         Fetches the JSON Web Key Set (JWKS) from the identity provider.
 
@@ -254,7 +300,7 @@ class OidcDiscovery:
         """
         # Check cache first
         now = datetime.now(UTC)
-        if jwks_uri in self._jwks_cache:
+        if not force_refresh and jwks_uri in self._jwks_cache:
             cached_data = self._jwks_cache[jwks_uri]
             cached_at = cached_data.get("cached_at")
             if cached_at and (now - cached_at) < self._cache_ttl:
@@ -278,7 +324,7 @@ class OidcDiscovery:
             response = await client.get(jwks_uri)
             response.raise_for_status()
 
-            jwks = response.json()
+            jwks = await read_json_capped(response, source="Identity provider JWKS")
 
             # Validate JWKS structure
             if not isinstance(jwks, dict) or "keys" not in jwks:
@@ -408,6 +454,28 @@ class OidcDiscovery:
             # a weakening: the signature must still verify against one of the
             # IdP's published keys under the same pinned algorithm allow-list.
             candidate_keys = id_token_verify.select_jwks_keys(jwks, kid)
+
+            # A ``kid`` we have never seen almost always means the provider
+            # rotated its signing keys since the set was cached (up to an hour
+            # ago). Retrying against the stale set would fail every login for
+            # that provider until the TTL lapsed, so re-fetch once, bypassing
+            # the cache. Bounded to a single extra request per verification, and
+            # only on a genuine miss, so it cannot be used to drive traffic at
+            # the provider.
+            #
+            # Best-effort: if the refresh fails we fall back to the keys we
+            # already have. ``kid`` is a hint, so a set that would have verified
+            # the signature anyway must not be discarded because the network
+            # blipped.
+            if kid and not any(entry.get("kid") == kid for entry in jwks.get("keys", []) if isinstance(entry, dict)):
+                logger.info(f"ID token kid={kid} is not in the cached JWKS; re-fetching (likely key rotation)")
+                try:
+                    refreshed = await self.fetch_jwks(jwks_uri, force_refresh=True)
+                except jafaal_exceptions.JafaalError as err:
+                    logger.warning(f"JWKS re-fetch for kid={kid} failed; using the cached key set: {err}")
+                else:
+                    candidate_keys = id_token_verify.select_jwks_keys(refreshed, kid) or candidate_keys
+
             if not candidate_keys:
                 logger.warning(f"No usable key found in JWKS for kid={kid}")
                 raise jafaal_exceptions.InvalidTokenError("ID token signed with unknown key")
@@ -422,8 +490,16 @@ class OidcDiscovery:
             claims = decoded.claims
 
             # Step 5a: Validate claims (iss, aud, exp, iat)
-            # This is done separately after decoding in joserfc
+            # This is done separately after decoding in joserfc.
+            #
+            # ``leeway`` matters more here than on our own tokens: these clocks
+            # belong to someone else. joserfc's ``validate_iat`` rejects a token
+            # whose ``iat`` is even one second ahead of ours, so without a
+            # tolerance a provider running marginally fast fails every login.
+            # OIDC Core §3.1.3.7 (10) explicitly anticipates an implementer
+            # skew allowance.
             claims_request = jwt.JWTClaimsRegistry(
+                leeway=_id_token_leeway_seconds(),
                 iss={"essential": True, "value": expected_issuer},
                 aud={"essential": True, "value": expected_audience},
                 exp={"essential": True},
@@ -533,7 +609,7 @@ class OidcDiscovery:
             response = await client.get(discovery_url)
 
             response.raise_for_status()
-            config = response.json()
+            config = await read_json_capped(response, source="Identity provider discovery document")
         except httpx.HTTPStatusError as err:
             logger.warning(
                 f"HTTP error fetching OIDC discovery for {idp.name}: {err.response.status_code} - {err.response.text}"

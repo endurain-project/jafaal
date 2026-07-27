@@ -177,10 +177,32 @@ def _revoke_refresh_token(
 
 
 def _revoke_access_token(claims: dict[str, Any]) -> None:
-    """Denylist an access token's ``jti`` when the denylist is enabled."""
-    if not jafaal_settings.get_settings().tokens.denylist_enabled:
-        return
+    """Denylist an access token's ``jti`` when the denylist is enabled.
+
+    With the denylist off there is nothing to revoke against — validation is
+    stateless, so the token stays usable until it expires. RFC 7009 §2.2 reserves
+    its 200 for "revocation successful *or* the client submitted an invalid
+    token", and a valid-but-still-live token is neither; the caller is being told
+    the credential is dead when it is not. The endpoint still answers 200 (the
+    RFC gives it no other code, and the refresh-token path is unaffected), but
+    the no-op is logged and audited so an operator can see that revocation is
+    not actually doing anything.
+    """
     jti = claims.get("jti")
+    if not jafaal_settings.get_settings().tokens.denylist_enabled:
+        logger.warning(
+            "Access-token revocation requested but tokens.denylist_enabled is False: the token stays "
+            "valid until it expires. Enable the denylist to make /revoke effective for access tokens."
+        )
+        jafaal_audit.record(
+            jafaal_audit.Event.TOKEN_REVOKE_INEFFECTIVE,
+            outcome=jafaal_audit.Outcome.FAILURE,
+            level=logging.WARNING,
+            token_type="access",
+            jti=jti if isinstance(jti, str) else None,
+            reason="denylist_disabled",
+        )
+        return
     exp = claims.get("exp")
     if not isinstance(jti, str) or exp is None:
         return

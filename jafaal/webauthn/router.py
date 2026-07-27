@@ -131,6 +131,16 @@ def complete_registration(
         user_id=user.id,
         credential_pk=credential.id,
     )
+    jafaal_ports.dispatch_event(
+        "on_authenticator_changed",
+        jafaal_ports.AuthenticatorChanged(
+            user_id=user.id,
+            username=user.username,
+            factor="passkey",
+            change="added",
+            remaining_factors=len(webauthn_crud.get_credentials_by_user_id(user.id, db)),
+        ),
+    )
     return webauthn_schema.WebAuthnCredentialRead.model_validate(credential)
 
 
@@ -204,6 +214,17 @@ def delete_credential(
         level=logging.WARNING,
         user_id=token_user_id,
         credential_pk=credential_pk,
+    )
+    user = jafaal_user_guards.get_user_by_id_or_404(token_user_id, db)
+    jafaal_ports.dispatch_event(
+        "on_authenticator_changed",
+        jafaal_ports.AuthenticatorChanged(
+            user_id=token_user_id,
+            username=user.username,
+            factor="passkey",
+            change="removed",
+            remaining_factors=len(webauthn_crud.get_credentials_by_user_id(token_user_id, db)),
+        ),
     )
 
 
@@ -301,6 +322,13 @@ def complete_second_factor(
     if claimed is None or claimed.user_id != user_id:
         logger.warning("Pending WebAuthn login for %s was missing or already claimed", username_log_id)
         raise jafaal_exceptions.InvalidRequestError("No pending login found. Please start the login again.")
+
+    # Same client the password step was started for — see the TOTP path.
+    if claimed.client_id != client.client_id:
+        logger.warning("Pending WebAuthn login for %s was claimed by a different client", username_log_id)
+        raise jafaal_exceptions.InvalidRequestError(
+            "This login was started for a different client. Please start the login again."
+        )
 
     user = jafaal_ports.get_user_repository().get_by_id(user_id, db)
     if not user:

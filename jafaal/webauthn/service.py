@@ -269,18 +269,26 @@ def complete_registration(
 def begin_authentication(username: str | None, db: Session) -> tuple[str, dict[str, Any]]:
     """Generate authentication options and store the challenge under a handle.
 
-    When ``username`` is given the options are scoped to that user's passkeys;
-    when it is omitted (or unknown) an empty allow-list yields a usernameless
-    (discoverable-credential) ceremony. An unknown username is treated like the
-    usernameless case so the endpoint never discloses whether an account exists.
+    When ``username`` is given the options are scoped to that user's passkeys.
+    When it is omitted the ceremony is usernameless (discoverable credentials),
+    with no allow-list at all.
+
+    An unknown username — or a known one with no passkeys — gets a **decoy**
+    allow-list instead of an empty one. The shapes have to be indistinguishable:
+    returning credentials for a real account and nothing for an unknown one is a
+    plain account-existence oracle, and it also hands out the real credential
+    IDs, which are stable cross-session identifiers (W3C WebAuthn L2 §14.6.3).
+    The decoys are derived deterministically from the username, so repeated
+    probes for the same name return the same set — a fresh random set each time
+    would be just as telling.
     """
     _require_webauthn()
 
     allow_credentials: list[Any] = []
     if username:
         user = jafaal_ports.get_user_repository().get_by_username(username, db)
-        if user is not None:
-            allow_credentials = _descriptors_for_user(user.id, db)
+        real = _descriptors_for_user(user.id, db) if user is not None else []
+        allow_credentials = real or _decoy_descriptors(username)
 
     options = _webauthn.generate_authentication_options(  # type: ignore[union-attr]
         rp_id=_rp_id(),
@@ -290,6 +298,24 @@ def begin_authentication(username: str | None, db: Session) -> tuple[str, dict[s
     challenge_id = challenge_store.new_challenge_id()
     challenge_store.store_authentication_challenge(challenge_id, options.challenge)
     return challenge_id, _options_to_dict(options)
+
+
+def _decoy_descriptors(username: str) -> list[Any]:
+    """Return stable, fake credential descriptors for ``username``.
+
+    Derived with the server's own keyed hash, so an attacker cannot compute them
+    offline and tell a decoy from a real credential ID. One descriptor is
+    enough to make the response shape match the common case (most accounts have
+    a single passkey) without inviting a "count the credentials" side channel.
+
+    Verification is unaffected: no stored credential can match a decoy id, so a
+    ceremony begun against one simply fails at completion, exactly as it would
+    for an account that does not exist.
+    """
+    digest = jafaal_token_hashing.hmac_sha256(
+        f"webauthn-decoy:{username}", jafaal_token_hashing.KeyPurpose.WEBAUTHN_USER_HANDLE
+    )
+    return [_structs.PublicKeyCredentialDescriptor(id=bytes.fromhex(digest)[:32])]
 
 
 def _verify_assertion(

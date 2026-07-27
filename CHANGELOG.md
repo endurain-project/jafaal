@@ -32,7 +32,11 @@ First release.
   so one address cannot cheaply lock out many accounts. The source IP is taken
   from the forwarded chain resolved right-to-left (the first hop not listed in
   `trusted_proxies`), so a client cannot evade the counter — or forge the IP in
-  audit records — by prepending its own `X-Forwarded-For` value.
+  audit records — by prepending its own `X-Forwarded-For` value. The per-IP
+  counter is **not** cleared by a successful login: authenticating as an account
+  you own says nothing about failures sprayed at other usernames from the same
+  address, and clearing it would make "spray, log in, repeat" defeat the tier
+  outright. It decays on its own window instead.
 - Timing-equalised failure paths, so response time does not reveal whether an
   account exists or is SSO-only. Password length is bounded before any hashing
   work, so an unauthenticated caller cannot force unbounded Argon2 input.
@@ -42,7 +46,15 @@ First release.
   startup warning fires while none is installed: dropping composition rules
   without a blocklist is the wrong half of the guidance.
 - Local sign-up with optional email verification and admin approval, and
-  enumeration-safe password reset.
+  enumeration-safe password reset. Sign-up is enumeration-safe too: an already
+  registered username or email produces the same status and body as a fresh
+  registration, and the password is hashed before the existence check so the
+  branch is not visible in response time either.
+- A password change or reset revokes the account's **API keys** as well as its
+  sessions, and marks outstanding reset tokens used. Self-service password
+  change now revokes other sessions by default — "change my password" is what a
+  user does when they think they are compromised, and leaving the attacker's
+  session live is the one outcome that makes it pointless.
 
 **Tokens and sessions**
 
@@ -102,20 +114,44 @@ First release.
   the MFA challenge — is sent `Cache-Control: no-store` and `Pragma: no-cache`
   (RFC 6749 §5.1), so no intermediary retains a credential.
 - Server-side sessions with an always-enforced absolute lifetime, an optional
-  idle timeout, device metadata, and a CSRF token bound to the session.
-- RFC 7662 token introspection and RFC 7009 revocation.
+  idle timeout, device metadata, and a CSRF token bound to the session. The
+  device fingerprint is recorded at login and never rewritten by a refresh:
+  rotation carries no new authentication, so letting it relabel the session
+  would erase the forensic record and show an attacker's browser as the user's
+  own.
+- RFC 7662 token introspection and RFC 7009 revocation. `auth:introspect` is
+  grantable directly to a service API key (it is outside the catalog tiers, so
+  no user holds it — the host allow-list is its gate) and is advertised in
+  `scopes_supported`. Revoking an access token while the denylist is off is
+  logged and audited rather than silently reported as successful.
+- **RFC 6750 challenges carry their error code.** A 401 for a *presented but
+  unusable* credential sends `Bearer error="invalid_token", error_description=
+  "…"`; a request with no credential at all sends a bare `Bearer`, as §3
+  requires. A deactivated or deleted account is a 401 `invalid_token` too — 403
+  would tell a bearer its token is otherwise fine, and 404 would make account
+  state observable to whoever holds a stale one.
+- Refresh-grant failures answer RFC 6749 §5.2 `400 invalid_grant`, matching the
+  authorization-code path, instead of leaking "revoked" vs "never valid" through
+  a 404.
 
 **Multi-factor**
 
 - TOTP with QR provisioning, single-use backup codes, and single-use enforcement
-  of each matched timestep.
+  of each matched timestep. The pending-MFA ticket is bound to the client the
+  password step was started for, so a login begun for a narrow, body-delivery
+  client cannot be finished as a wide, cookie-delivery one.
 - WebAuthn / passkeys: registration, passwordless authentication, and an
   optional second factor after password login. Binding *and* unbinding a passkey
   require step-up verification (NIST SP 800-63B §6.1.2 / §6.1.4): because a
   passkey logs in on its own, a stolen access token must not be able to register
   one — that would be a permanent credential surviving a password change and
-  bypassing the account's TOTP factor — nor strip the factors already there.
-- Step-up re-authentication for sensitive operations, including delegation to a
+  bypassing the account's TOTP factor — nor strip the factors already there.  Passwordless `authenticate/begin` returns a deterministic **decoy**
+  `allowCredentials` for an unknown or passkey-less username, so the response
+  shape no longer distinguishes accounts or leaks real credential IDs (W3C
+  WebAuthn L2 §14.6.3).
+- Every factor change — TOTP enable/disable, backup-code regeneration, passkey
+  add/delete — emits an `AuthenticatorChanged` notification, so an attacker
+  enrolling their own factor cannot do it in silence.- Step-up re-authentication for sensitive operations, including delegation to a
   linked identity provider for SSO-only accounts.
 
 **Identity providers**
@@ -150,6 +186,16 @@ First release.
   follow redirects, because a 307/308 preserves the method *and* body and would
   replay the client secret to the redirect target, which the address check does
   not cover.
+- Outbound IdP responses (discovery, JWKS, userinfo) are size-capped: a timeout
+  bounds how long JAFAAL waits, not how much it accepts, and the JWKS is cached
+  — so one hostile response would otherwise be a persistent memory cost.
+- ID-token time claims are validated with a configurable clock-skew leeway
+  (`id_token_leeway_seconds`, 60s). These clocks belong to someone else, and a
+  strict zero rejects a token whose `iat` is a single second ahead.
+- An ID token naming a `kid` absent from the cached JWKS triggers one
+  cache-bypassing re-fetch (best-effort, falling back to the cached set), so a
+  provider rotating its signing keys does not break every login until the
+  hour-long TTL lapses.
 
 **Authorization and integration**
 
@@ -174,7 +220,10 @@ First release.
 - A batteries-included adapter for every port: `SqlAlchemyUserRepository`,
   `StaticSettingsProvider`, `LoggingAuthEventSink` / `CompositeAuthEventSink`,
   `HibpBreachChecker` / `BlocklistBreachChecker`, `StateStoreRateLimiter`, and
-  `RedisStateStore`.
+  `RedisStateStore`. The rate limiter uses a **sliding** window (a fixed one
+  lets a client spend its whole budget either side of a bucket boundary, at 2x
+  the nominal rate) and takes `fail_open=False` for deployments that would
+  rather refuse traffic than serve it unthrottled during a store outage.
 - Structured security-audit records on a dedicated `jafaal.audit` logger, ready
   for a SIEM without message-string parsing — covering successful state changes
   (MFA enabled/disabled, password change, credential and IdP-link lifecycle,

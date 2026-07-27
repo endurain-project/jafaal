@@ -492,18 +492,33 @@ class SsoSettings:
         step_up_grant_ttl_seconds: Lifetime of the single-use step-up grant
             minted after a successful IdP re-authentication; the caller must
             retry the sensitive operation within this window.
+        id_token_leeway_seconds: Clock-skew tolerance applied to an IdP ID
+            token's ``exp``/``iat``/``nbf``. These clocks belong to someone
+            else, and a strict ``0`` rejects a token whose ``iat`` is a single
+            second ahead of ours — OIDC Core §3.1.3.7 (10) anticipates an
+            implementer allowance.
+        max_response_bytes: Largest response body accepted from an identity
+            provider (discovery, JWKS, userinfo). Timeouts bound how long JAFAAL
+            waits, not how much it accepts, and the JWKS is cached — so without
+            a cap one hostile response is a persistent memory cost.
     """
 
     idp_require_https: bool = True
     step_up_idp_reauth_enabled: bool = True
     step_up_reauth_max_age_seconds: int = 300
     step_up_grant_ttl_seconds: int = 120
+    id_token_leeway_seconds: int = 60
+    max_response_bytes: int = 1024 * 1024
 
     def __post_init__(self) -> None:
         if self.step_up_reauth_max_age_seconds <= 0:
             raise ValueError("SsoSettings.step_up_reauth_max_age_seconds must be positive")
         if self.step_up_grant_ttl_seconds <= 0:
             raise ValueError("SsoSettings.step_up_grant_ttl_seconds must be positive")
+        if self.id_token_leeway_seconds < 0:
+            raise ValueError("SsoSettings.id_token_leeway_seconds must be non-negative")
+        if self.max_response_bytes <= 0:
+            raise ValueError("SsoSettings.max_response_bytes must be positive")
 
 
 # ===========================================================================

@@ -102,7 +102,12 @@ def get_authorization_server_metadata(*, api_root: str, auth_prefix: str = "/aut
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "response_types_supported": ["code"],
         "response_modes_supported": ["query"],
-        "scopes_supported": sorted(jafaal_scopes.get_scope_catalog().admin),
+        # The catalog tiers, plus the introspection capability. AUTH_INTROSPECT
+        # is deliberately outside the tiers (it is granted to a service API key,
+        # never minted into a user's token), but a client reading this document
+        # still has to be able to learn the scope it must obtain to call the
+        # advertised introspection_endpoint.
+        "scopes_supported": sorted(set(jafaal_scopes.get_scope_catalog().admin) | {jafaal_scopes.AUTH_INTROSPECT}),
         # First-party public clients (RFC 8252): the token endpoint
         # authenticates the *user* and binds the code with PKCE, never a client
         # credential.

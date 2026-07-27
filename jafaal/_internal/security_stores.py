@@ -132,10 +132,17 @@ class PendingLogin:
         user_id: The user who completed the password step.
         username: The username as supplied at login, used for the MFA lockout
             key and for audit records.
+        client_id: The registered client the login was started for. The second
+            factor must be completed against the same client: the client's
+            registration decides token delivery (cookie vs body) and the scope
+            ceiling, so letting the ticket be redeemed by a different one would
+            let a login begun for a narrow, body-delivery client finish as a
+            wide, cookie-delivery one.
     """
 
     user_id: UserId
     username: str
+    client_id: str
 
 
 def _datetime_from_epoch(epoch_seconds: int) -> datetime:
@@ -227,7 +234,7 @@ class PendingMFAStore(Protocol):
     brute force.
     """
 
-    def add_pending_login(self, username: str, user_id: UserId) -> str: ...
+    def add_pending_login(self, username: str, user_id: UserId, client_id: str) -> str: ...
 
     def get_pending_login(self, mfa_token: str) -> PendingLogin | None: ...
 
@@ -498,10 +505,25 @@ class FailedLoginAttempts:
         return self._ip_lockout.record_failed_attempt(ip)
 
     def reset_ip_attempts(self, ip: str) -> None:
-        """Clear the per-IP failure counter after a successful login from the IP."""
-        if not self._ip_lockout_enabled():
-            return
-        self._ip_lockout.reset_attempts(ip)
+        """Deliberately a no-op — see below.
+
+        The per-username counter is reset on a successful login because
+        authenticating *as that user* proves the failures were that user
+        fumbling their own password. No equivalent proof exists per IP: an
+        address is shared by many accounts, so a success from it says nothing
+        about the failures against other usernames.
+
+        Resetting it made the per-IP tier — the only bound on the targeted
+        lockout DoS the username tier enables — trivially defeatable: spray 49
+        failures at victims, log in once to an account you own, repeat, and lock
+        out arbitrarily many accounts from one address. The counter instead
+        decays on its own ``attempts_ttl_seconds`` window, which is what keeps a
+        legitimate NAT gateway from accumulating failures forever.
+
+        Kept as a method (rather than removed) so the call site still reads as
+        "success handling", with the reasoning attached to the behaviour.
+        """
+        return
 
     def clear_all(self) -> None:
         """Clear all failed-login records (per-username and per-IP)."""
@@ -553,9 +575,9 @@ class PendingMFALogin:
         return f"{_key_prefix()}:mfa:pending:{hashing.sha256_hex(mfa_token)}"
 
     @staticmethod
-    def _encode(user_id: UserId, username: str) -> bytes:
+    def _encode(user_id: UserId, username: str, client_id: str) -> bytes:
         """Serialise a pending login for storage."""
-        return json.dumps({"uid": str(user_id), "un": username}).encode()
+        return json.dumps({"uid": str(user_id), "un": username, "cid": client_id}).encode()
 
     @staticmethod
     def _decode(raw: bytes) -> PendingLogin | None:
@@ -565,16 +587,18 @@ class PendingMFALogin:
             # The id is stored in its string form and coerced back to the host
             # user table's primary-key type (``int`` or ``uuid.UUID``) on read,
             # so the store works for both integer- and UUID-keyed hosts.
-            return PendingLogin(coerce_user_id(payload["uid"]), payload["un"])
+            return PendingLogin(coerce_user_id(payload["uid"]), payload["un"], payload["cid"])
         except (TypeError, ValueError, KeyError, AttributeError):
             return None
 
-    def add_pending_login(self, username: str, user_id: UserId) -> str:
+    def add_pending_login(self, username: str, user_id: UserId, client_id: str) -> str:
         """Record a pending MFA login and return its opaque ticket.
 
         Args:
             username: The username that just passed the password step.
             user_id: The user the pending login belongs to.
+            client_id: The registered client the login was started for; the
+                second factor must be completed against the same one.
 
         Returns:
             The ``mfa_token`` to hand to the caller; it must be presented to
@@ -584,7 +608,7 @@ class PendingMFALogin:
         try:
             self._get_state().set(
                 self._pending_key(mfa_token),
-                self._encode(user_id, username),
+                self._encode(user_id, username, client_id),
                 ttl_seconds=self.PENDING_MFA_TTL_SECONDS,
             )
         except StateStoreUnavailableError as err:

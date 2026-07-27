@@ -10,8 +10,10 @@ from sqlalchemy.orm import Session
 import jafaal._internal.security_stores as jafaal_security_stores
 import jafaal._internal.services.step_up_service as step_up_service
 import jafaal._internal.user_guards as jafaal_user_guards
+import jafaal.api_keys.crud as jafaal_api_keys_crud
 import jafaal.audit as jafaal_audit
 import jafaal.password_policy as jafaal_password_policy
+import jafaal.password_reset_tokens.crud as password_reset_tokens_crud
 import jafaal.ports as jafaal_ports
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.schema as jafaal_sessions_schema
@@ -98,7 +100,7 @@ def change_own_password(
     identity_service: LocalCredentialStore,
     step_up_store: jafaal_security_stores.StepUpStore,
     db: Session,
-    revoke_other_sessions: bool = False,
+    revoke_other_sessions: bool = True,
     current_session_id: str | None = None,
 ) -> None:
     """
@@ -112,9 +114,12 @@ def change_own_password(
         identity_service: Identity service dependency.
         step_up_store: Step-up lockout store.
         db: SQLAlchemy session.
-        revoke_other_sessions: When True, delete all of the user's
-            other sessions (keeping ``current_session_id``) so a
-            password change can evict a suspected attacker.
+        revoke_other_sessions: Delete all of the user's other sessions (keeping
+            ``current_session_id``). Defaults to ``True``: "change my password"
+            is what a user does when they think they are compromised, and
+            leaving the attacker's session live is the one outcome that makes
+            the action pointless. Pass ``False`` for a routine rotation where
+            staying signed in elsewhere is wanted.
         current_session_id: Session ID of the caller, preserved when
             ``revoke_other_sessions`` is True so the caller is not
             logged out.
@@ -142,6 +147,14 @@ def change_own_password(
     )
     identity_service.set_local_password_hash(user_id, hashed_password)
     jafaal_security_stores.clear_pending_mfa_for_user(user_id)
+
+    # Outstanding reset tokens are credentials for this account too: one phished
+    # before the change would otherwise stay redeemable for the rest of its TTL.
+    password_reset_tokens_crud.mark_user_password_reset_tokens_used(user_id, db)
+
+    # API keys outlive sessions (expiry is optional), so a password change that
+    # leaves them active does not evict an attacker who minted one.
+    jafaal_api_keys_crud.revoke_all_api_keys_for_user(user_id, db, reason="password_change")
 
     if revoke_other_sessions:
         revoked = jafaal_sessions_crud.delete_sessions_by_user(
@@ -193,6 +206,8 @@ def change_managed_user_password(
     identity_service.set_local_password_hash(user_id, hashed_password)
     jafaal_sessions_crud.delete_sessions_by_user(user_id, db)
     jafaal_security_stores.clear_pending_mfa_for_user(user_id)
+    password_reset_tokens_crud.mark_user_password_reset_tokens_used(user_id, db)
+    jafaal_api_keys_crud.revoke_all_api_keys_for_user(user_id, db, reason="admin_password_change")
     jafaal_audit.record(
         jafaal_audit.Event.PASSWORD_CHANGED,
         level=logging.WARNING,

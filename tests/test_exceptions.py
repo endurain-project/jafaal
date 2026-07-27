@@ -54,16 +54,44 @@ def test_status_code_and_slug(cls, status, code):
     assert e.detail, "each error has a non-empty default detail"
 
 
-def test_all_401s_advertise_bearer():
+def test_401s_without_a_presented_credential_send_a_bare_bearer_challenge():
+    # RFC 6750 §3: the ``error`` parameter MUST NOT be sent when the request
+    # carried no authentication information — there is nothing wrong with a
+    # credential that was never presented.
+    for cls in (exc.AuthenticationError, exc.InvalidCredentialsError):
+        assert cls().headers == {"WWW-Authenticate": "Bearer"}
+
+
+def test_401s_for_an_unusable_credential_advertise_invalid_token():
+    # RFC 6750 §3.1: a token that is expired, malformed, or revoked is
+    # ``invalid_token``, and §3 wants a description so a client can tell
+    # "refresh and retry" from "log in again" without parsing prose.
     for cls in (
-        exc.AuthenticationError,
-        exc.InvalidCredentialsError,
         exc.TokenExpiredError,
         exc.InvalidTokenError,
         exc.SessionExpiredError,
         exc.StaleRefreshTokenError,
+        exc.InactiveAccountError,
     ):
-        assert cls().headers == {"WWW-Authenticate": "Bearer"}
+        challenge = cls().headers["WWW-Authenticate"]
+        assert challenge.startswith('Bearer error="invalid_token"')
+        assert 'error_description="' in challenge
+
+
+def test_challenge_description_cannot_break_the_header():
+    # A detail carrying a quote or newline must not produce a malformed header.
+    challenge = exc.InvalidTokenError('bad "token"\r\nInjected: x').headers["WWW-Authenticate"]
+    assert "\r" not in challenge
+    assert "\n" not in challenge
+    assert challenge.count('"') % 2 == 0
+
+
+def test_an_inactive_account_is_a_401_not_a_403_or_404():
+    # A deactivated/deleted account is a credential-validation failure: 403
+    # would tell a bearer its token is still good, and 404 would make account
+    # state observable to whoever holds a stale token.
+    assert exc.InactiveAccountError.status_code == 401
+    assert issubclass(exc.InactiveAccountError, exc.AuthenticationError)
 
 
 def test_invalid_api_key_advertises_apikey():

@@ -3,8 +3,10 @@
 import logging
 import uuid
 from datetime import UTC, datetime
+from typing import Any, cast
 
-from sqlalchemy import select, update
+from sqlalchemy import CursorResult, select, update
+from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
 import jafaal.api_keys.models as api_keys_models
@@ -225,6 +227,60 @@ def rekey_api_key_digest(
     )
     db.execute(stmt)
     db.flush()
+
+
+@db_errors.handle_db_errors
+def revoke_all_api_keys_for_user(
+    user_id: UserId,
+    db: Session,
+    *,
+    reason: str,
+) -> int:
+    """
+    Revoke every active API key belonging to a user.
+
+    Called when the account's credentials change (password reset or change), so
+    that recovering an account also evicts whatever the attacker minted while
+    they held it. Sessions are already revoked on those paths; an API key is the
+    longer-lived credential — its ``expires_at`` is optional — so leaving keys
+    behind means the reset accomplishes nothing against an attacker who made one.
+
+    Soft-delete, matching :func:`revoke_api_key`: rows are retained for audit.
+
+    Args:
+        user_id: The owner whose keys are revoked.
+        db: SQLAlchemy database session.
+        reason: Audit reason (e.g. ``"password_reset"``).
+
+    Returns:
+        Number of keys revoked.
+
+    Raises:
+        InternalError: If a database error occurs.
+    """
+    stmt = (
+        sa_update(api_keys_models.UsersApiKeys)
+        .where(
+            api_keys_models.UsersApiKeys.user_id == user_id,
+            api_keys_models.UsersApiKeys.is_active.is_(True),
+        )
+        .values(is_active=False)
+    )
+    result = cast(CursorResult[Any], db.execute(stmt))
+    db.flush()
+    revoked = result.rowcount
+
+    if revoked:
+        logger.info(f"Revoked {revoked} API key(s) for user {user_id} ({reason})")
+        jafaal_audit.record(
+            jafaal_audit.Event.API_KEY_REVOKED,
+            level=logging.WARNING,
+            user_id=user_id,
+            scope="all",
+            revoked=revoked,
+            reason=reason,
+        )
+    return revoked
 
 
 @db_errors.handle_db_errors
