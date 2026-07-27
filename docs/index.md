@@ -108,8 +108,10 @@ from jafaal.adapters import SqlAlchemyUserRepository, StaticSettingsProvider
 # 1. Configure the library (you build settings; JAFAAL reads no env itself).
 jafaal.configure(
     jafaal.AuthSettings(
-        secret_key="<32+ byte JWT signing secret>",
-        fernet_key=Fernet.generate_key().decode(),
+        secrets=jafaal.Secrets(
+            secret_key="<32+ byte JWT signing secret>",
+            fernet_key=Fernet.generate_key().decode(),
+        ),
         base_url="https://app.example.com",
         app_name="Example",
         environment="production",

@@ -2,6 +2,8 @@
 
 import time
 
+from conftest import replace_settings
+
 import jafaal.state_store as state_store_mod
 from jafaal._internal.security_stores import (
     _LOGIN_LOCKOUT_THRESHOLDS,
@@ -158,14 +160,13 @@ def test_clear_all_clears_ip_lockout():
 
 
 def test_login_ip_lockout_can_be_disabled():
-    import dataclasses
 
     import jafaal
 
     store = FailedLoginAttempts()
     ip = "203.0.113.9"
     original = jafaal.get_settings()
-    jafaal.configure(dataclasses.replace(original, login_ip_lockout_enabled=False))
+    jafaal.configure(replace_settings(original, login_ip_lockout_enabled=False))
     try:
         for _ in range(60):
             assert store.record_ip_failure(ip) == 0  # no-op when disabled

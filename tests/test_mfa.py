@@ -1,15 +1,16 @@
 """Tests for MFA: TOTP verification, replay protection, and backup codes."""
 
-import dataclasses
 import threading
 import time
 
 import pyotp
 import pytest
+from conftest import replace_settings
 
 import jafaal
 import jafaal.mfa.crud as mfa_crud
 import jafaal.mfa.service as mfa_service
+import jafaal.orm as jafaal_orm
 from jafaal._core import crypto
 from jafaal._internal.password_hasher import get_password_hasher
 from jafaal._internal.token_manager import get_token_manager
@@ -117,7 +118,7 @@ def test_concurrent_use_of_one_totp_code_has_exactly_one_winner(concurrent_db):
     # stop. The ``concurrent_db`` fixture gives each thread its own real
     # connection, so the verifications genuinely overlap.
     secret = pyotp.random_base32()
-    with concurrent_db.session() as setup:
+    with concurrent_db.session() as setup, jafaal_orm.unit_of_work(setup):
         _enable_mfa(concurrent_db.user_id, setup, secret)
     code = pyotp.TOTP(secret).now()
 
@@ -153,7 +154,7 @@ def test_totp_replay_fail_open_when_configured(db, make_user):
     code = pyotp.TOTP(secret).now()
 
     original = jafaal.get_settings()
-    jafaal.configure(dataclasses.replace(original, mfa_totp_replay_fail_open=True))
+    jafaal.configure(replace_settings(original, totp_replay_fail_open=True))
     jafaal.configure_state_store(_FailingStateStore())
     try:
         assert mfa_service.verify_user_mfa(user.id, code, identity_service, db) is True

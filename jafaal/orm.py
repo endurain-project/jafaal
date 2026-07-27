@@ -45,23 +45,38 @@ Host applications:
        Base.metadata.create_all(engine)  # dev/tests; use jafaal.migrations in prod
 
 JAFAAL never creates the engine itself; the host owns the connection.
+
+**Transaction ownership.** Every JAFAAL function that accepts a ``Session``
+participates in the *caller's* transaction and never commits — the CRUD layer
+only flushes. JAFAAL's own endpoints open exactly one transaction per request via
+:func:`transactional`; a host calling JAFAAL's services directly wraps them in
+:func:`unit_of_work` (or its own ``session.begin()``), so JAFAAL's writes and the
+host's commit or roll back together.
 """
 
 from __future__ import annotations
 
 import importlib
+import logging
 import uuid
-from collections.abc import Generator
+from collections.abc import Callable, Coroutine, Generator
 from contextlib import contextmanager
 from typing import Any
 
+from fastapi import APIRouter, Request, Response
+from fastapi.routing import APIRoute
 from sqlalchemy.orm import DeclarativeBase, Mapper, Session, sessionmaker
 
 from jafaal._core.registry import ConfigSlot
 
+logger = logging.getLogger(__name__)
+
 __all__ = [
     "Base",
+    "TransactionalRoute",
     "UserId",
+    "auth_router",
+    "autonomous_session",
     "coerce_user_id",
     "configure_sessionmaker",
     "get_active_base",
@@ -73,7 +88,9 @@ __all__ = [
     "jafaal_table_names",
     "map_models",
     "mapper_registry",
+    "savepoint",
     "session_scope",
+    "unit_of_work",
     "user_id_python_type",
 ]
 
@@ -222,13 +239,22 @@ def is_sessionmaker_configured() -> bool:
     return _session_factory.is_configured()
 
 
-def get_db() -> Generator[Session]:
+def get_db(request: Request) -> Generator[Session]:
     """FastAPI dependency that yields a request-scoped session.
+
+    The session is yielded with **nothing committed** — JAFAAL's CRUD layer only
+    ever flushes. The commit is issued once per request by
+    :class:`TransactionalRoute` (the route class every JAFAAL router uses), or by
+    the host when it drives JAFAAL's services itself.
+
+    The session is published on ``request.state`` so the route class can find it
+    without every endpoint having to declare it.
 
     Rolls back on any unhandled exception so partial writes are never silently
     committed, then closes the session.
     """
     db = get_sessionmaker()()
+    request.state.jafaal_db = db
     try:
         yield db
     except Exception:
@@ -238,13 +264,180 @@ def get_db() -> Generator[Session]:
         db.close()
 
 
+# ---------------------------------------------------------------------------
+# Unit of work
+#
+# JAFAAL never commits below its own HTTP boundary. Every function that accepts
+# a ``Session`` participates in the *caller's* transaction and only flushes, so
+# a host can compose several JAFAAL operations — and its own writes — into one
+# atomic unit. JAFAAL's own endpoints are that caller for the routes it ships,
+# and open exactly one unit of work per request via :class:`TransactionalRoute`.
+#
+# The commit deliberately lives in the route handler rather than in ``get_db``'s
+# teardown: FastAPI closes ``yield``-dependencies *after* the route handler
+# returns (verified against the pinned FastAPI version by
+# ``tests/test_transactions.py``), which is outside the window where a failing
+# commit could still be turned into a response by the JafaalError edge handler.
+# ---------------------------------------------------------------------------
+
+_UOW_FLAG = "jafaal_unit_of_work"
+
+
+@contextmanager
+def unit_of_work(db: Session) -> Generator[Session]:
+    """Commit ``db`` on clean exit, roll it back on failure.
+
+    The supported way for a **host** to compose JAFAAL calls with its own writes::
+
+        with jafaal.unit_of_work(db):
+            user = repo.create_local_user(...)
+            identity_service.set_local_password_hash(user.id, hashed)
+            db.add(MyProfile(user_id=user.id))
+        # one commit; any failure rolls back all three
+
+    Re-entrant: when a unit of work is already open on this session, the inner
+    block joins it and the *outermost* scope decides the outcome. That is what
+    makes "JAFAAL never commits under you" hold even when a JAFAAL service calls
+    another internally.
+
+    Args:
+        db: The session to own for the duration of the block.
+
+    Yields:
+        The same session, for convenience.
+
+    Raises:
+        Exception: Whatever the wrapped block raised, after rolling back.
+    """
+    if db.info.get(_UOW_FLAG):
+        yield db
+        return
+    db.info[_UOW_FLAG] = True
+    try:
+        yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.info.pop(_UOW_FLAG, None)
+
+
+class TransactionalRoute(APIRoute):
+    """Route class that commits JAFAAL's request-scoped session exactly once.
+
+    Every JAFAAL router is built with ``APIRouter(route_class=TransactionalRoute)``
+    rather than decorating each endpoint, so a *new* endpoint cannot forget to
+    commit — the failure mode of per-endpoint decoration, and one that shows up
+    as silently discarded writes rather than an error.
+
+    It wraps the whole endpoint invocation, so it runs while the ``get_db``
+    dependency is still open and while a raised exception can still be mapped to
+    a response by the registered handlers. A read-only request commits an empty
+    transaction, which simply releases the connection's read snapshot.
+    """
+
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        original_handler = super().get_route_handler()
+
+        async def transactional_handler(request: Request) -> Response:
+            try:
+                response = await original_handler(request)
+            except Exception:
+                _rollback_request_session(request)
+                raise
+            db = getattr(request.state, "jafaal_db", None)
+            if db is not None:
+                # Outside the try above on purpose: a failing commit must surface
+                # as an error response, not be masked by the rollback path.
+                db.commit()
+            return response
+
+        return transactional_handler
+
+
+def _rollback_request_session(request: Request) -> None:
+    """Roll back the request's JAFAAL session, if one was opened."""
+    db = getattr(request.state, "jafaal_db", None)
+    if db is None:
+        return
+    try:
+        db.rollback()
+    except Exception as err:  # pragma: no cover - defensive
+        logger.error(f"Rollback failed for the request session: {type(err).__name__}", exc_info=err)
+
+
+def auth_router() -> APIRouter:
+    """Return an ``APIRouter`` wired to :class:`TransactionalRoute`.
+
+    Used by every JAFAAL router module so the transaction policy is applied in
+    one place instead of being restated per module.
+    """
+    return APIRouter(route_class=TransactionalRoute)
+
+
+@contextmanager
+def autonomous_session() -> Generator[Session]:
+    """A separate session that commits independently of the caller's transaction.
+
+    The deliberate exception to "the caller owns the transaction", for writes
+    whose durability must not depend on the surrounding request succeeding.
+    There is exactly one such case in JAFAAL today: claiming a single-use OAuth
+    state. Replay protection has to *stick* — if the claim were rolled back when
+    the callback later fails, an attacker could deliberately fail the flow to
+    release the state and replay the authorization code.
+
+    Committing it separately also keeps the caller's transaction (and its pooled
+    connection) from being held open across the several outbound HTTP calls the
+    SSO callback then makes.
+
+    Yields:
+        A fresh session, committed on clean exit and rolled back on failure.
+    """
+    db = get_sessionmaker()()
+    try:
+        with unit_of_work(db):
+            yield db
+    finally:
+        db.close()
+
+
+@contextmanager
+def savepoint(db: Session) -> Generator[Session]:
+    """Run a block inside a SAVEPOINT so a failed flush stays recoverable.
+
+    A statement that fails mid-transaction (a UNIQUE violation on flush, say)
+    leaves SQLAlchemy's transaction in a pending-rollback state: every later
+    statement on that session raises until someone unwinds it. Because JAFAAL
+    runs inside the *caller's* transaction it must not unwind the whole thing —
+    that would discard the host's pending work too — so a CRUD helper that wants
+    to *catch* a constraint violation and translate it (e.g. into a 409) brackets
+    the flush in a savepoint and rolls back only that.
+
+    Delegates to ``Session.begin_nested()`` used as a context manager, which is
+    the only form that works: unwinding the savepoint by hand
+    (``nested.rollback()`` in an ``except``) leaves the *parent* transaction
+    holding the captured flush exception, so the caller's later ``commit()``
+    still raises ``PendingRollbackError``. SQLAlchemy's own ``__exit__`` clears
+    it. ``tests/test_transactions.py`` pins this behaviour.
+
+    Args:
+        db: The active session.
+
+    Yields:
+        The same session, for convenience.
+    """
+    with db.begin_nested():
+        yield db
+
+
 @contextmanager
 def session_scope() -> Generator[Session]:
     """Context manager yielding a session for non-request (background) work.
 
-    Replaces the former ``with session_scope() as db:`` usage in maintenance
-    tasks. The caller is responsible for committing; the session is closed on
-    exit (rolling back any pending transaction).
+    Used by the maintenance tasks. The caller is responsible for committing
+    (typically via :func:`unit_of_work`); the session is closed on exit, rolling
+    back any pending transaction.
     """
     db = get_sessionmaker()()
     try:

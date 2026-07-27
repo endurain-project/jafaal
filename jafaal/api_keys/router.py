@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import Depends, status
 from sqlalchemy.orm import Session
 
 import jafaal._internal.internal_dependencies as jafaal_internal_dependencies
@@ -14,10 +14,11 @@ import jafaal.api_keys.utils as api_keys_utils
 import jafaal.dependencies as jafaal_dependencies
 import jafaal.identity_service as jafaal_identity_service
 import jafaal.orm as jafaal_orm
+import jafaal.rate_limit as jafaal_rate_limit
 from jafaal.principal import Principal
 
 # Define the API router
-router = APIRouter()
+router = jafaal_orm.auth_router()
 
 
 @router.get(
@@ -51,6 +52,7 @@ def get_user_api_keys(
     response_model=api_keys_schema.UsersApiKeyCreated,
     status_code=status.HTTP_201_CREATED,
 )
+@jafaal_rate_limit.limit(jafaal_rate_limit.SENSITIVE)
 def create_user_api_key(
     data: api_keys_schema.UsersApiKeyCreate,
     principal: Annotated[
@@ -134,6 +136,7 @@ def create_user_api_key(
     "/{api_key_id}/revoke",
     status_code=status.HTTP_204_NO_CONTENT,
 )
+@jafaal_rate_limit.limit(jafaal_rate_limit.WRITE)
 def revoke_user_api_key(
     api_key_id: str,
     token_user_id: Annotated[
@@ -167,6 +170,7 @@ def revoke_user_api_key(
     "/{api_key_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
+@jafaal_rate_limit.limit(jafaal_rate_limit.WRITE)
 def delete_user_api_key(
     api_key_id: str,
     token_user_id: Annotated[

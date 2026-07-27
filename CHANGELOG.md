@@ -5,13 +5,13 @@ All notable changes to JAFAAL are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-While the major version is `0`, a minor bump (`0.x`) may contain breaking
-changes. Those are listed first in their release, each with the migration step
-and a note of any credential the change invalidates. JAFAAL does not carry
-compatibility shims for its own earlier formats during the `0.x` series: a
-breaking change is a clean break.
+What counts as a breaking change — and what does not — is defined in
+[API stability](docs/api-stability.md). In short: the `jafaal` namespace, the
+exception `code` slugs, the HTTP surface, the token/cookie wire formats, and the
+`jafaal.audit` event slugs are covered by SemVer; anything under `_core` /
+`_internal`, log message text, and default security parameters are not.
 
-## [0.1.0]
+## [1.0.0]
 
 First release.
 

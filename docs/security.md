@@ -71,7 +71,7 @@ protections and the deployment steps you are responsible for.
   throughout). The claim is a single compare-and-set in the state store, so two
   concurrent verifications of the same code cannot both succeed. On a state-store
   outage this fails **closed** by default (configurable via
-  `mfa_totp_replay_fail_open`).
+  `totp_replay_fail_open`).
 
 ### Network & abuse
 
@@ -201,7 +201,7 @@ Also make sure to:
 - Set `trusted_proxies` to your actual proxy addresses when running behind a
   reverse proxy, so client IPs (which key the lockout counters) cannot be
   spoofed.
-- Keep `allow_api_key_query_param` disabled unless you specifically need it.
+- Keep `allow_query_param` disabled unless you specifically need it.
 - Keep the API-key scope allow-list (`configure_api_key_scopes`) as small as the
   integrations genuinely require. A key can additionally never carry a scope the
   account minting it does not itself hold, so allow-listing an admin scope does
@@ -215,10 +215,10 @@ Also make sure to:
   Domain). The prefix is applied only in a deployed environment (browsers reject
   `__Secure-`/`__Host-` cookies sent without `Secure`, which would break local
   http development).
-- **`jwt_leeway_seconds`** — small clock-skew tolerance (e.g. `30`) applied to
+- **`leeway_seconds`** — small clock-skew tolerance (e.g. `30`) applied to
   the `exp`/`nbf` claims of JAFAAL's own JWTs, to avoid spurious 401s across
   slightly-skewed nodes. Defaults to `0` (strict); keep it small.
-- **`mfa_totp_replay_fail_open`** — leave `False` (default) so TOTP replay
+- **`totp_replay_fail_open`** — leave `False` (default) so TOTP replay
   protection fails closed on a state-store outage; set `True` only if you prefer
   MFA availability over the single-use guarantee during an outage.
 
@@ -238,7 +238,7 @@ validation applied at sign-up and password change:
 - **`"strict"`** — additionally requires upper/lower/digit/special. Available for
   hosts bound by legacy composition requirements.
 
-Passwords are never truncated, and `password_max_length` (default 128, minimum
+Passwords are never truncated, and `max_length` (default 128, minimum
 64) bounds input before hashing so long passphrases are supported. Note the
 legacy bcrypt verifier silently truncates at 72 bytes; Argon2 (used for all new
 hashes) does not.
@@ -246,7 +246,7 @@ hashes) does not.
 ## Response headers for SSO redirect pages
 
 JAFAAL issues browser redirects for the SSO callback (e.g. to
-`sso_login_result_path` / `sso_error_path` with a `session_id` or error query
+`login_result_path` / `error_path` with a `session_id` or error query
 parameter). JAFAAL validates and constrains these redirect targets (relative
 paths or configured custom schemes only — no open redirects), but **setting
 transport and content-security headers is the host's responsibility**. On the

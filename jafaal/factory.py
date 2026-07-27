@@ -89,7 +89,7 @@ def _warn_on_insecure_defaults() -> None:
             "Per-account progressive lockout still applies."
         )
 
-    if deployed and tuple(jafaal_settings.get_settings().trusted_proxies) == ("*",):
+    if deployed and tuple(jafaal_settings.get_settings().network.trusted_proxies) == ("*",):
         logger.warning(
             "JAFAAL trusted_proxies is set to ('*',) in a deployed environment: every peer is trusted, so "
             "any client can spoof its source IP via X-Forwarded-For / X-Real-IP (poisoning session-IP audit "
@@ -121,9 +121,9 @@ def _warn_on_router_prefix_mismatch(prefixes: RouterPrefixes) -> None:
             f"prefix {expected_login_suffix!r}; Swagger's 'Authorize' password flow will POST to the wrong "
             "URL. Keep login_token_url in lockstep with RouterPrefixes.auth."
         )
-    if not settings.refresh_cookie_path.endswith(prefixes.auth):
+    if not settings.sessions.refresh_cookie_path.endswith(prefixes.auth):
         logger.warning(
-            f"AuthSettings.refresh_cookie_path={settings.refresh_cookie_path!r} does not end with the auth "
+            f"AuthSettings.refresh_cookie_path={settings.sessions.refresh_cookie_path!r} does not end with the auth "
             f"router prefix {prefixes.auth!r}; the refresh cookie will be scoped to a path that the /refresh "
             "and /logout endpoints are not served under, so web sessions will silently fail to refresh. Keep "
             "refresh_cookie_path in lockstep with RouterPrefixes.auth."
@@ -324,3 +324,36 @@ def create_auth_router(
     aggregate.include_router(jwks_router)
     aggregate.include_router(create_metadata_router(prefixes.auth))
     return aggregate
+
+
+async def shutdown(*, drain_events_timeout: float = 5.0) -> None:
+    """Release JAFAAL's process-wide resources. Call from the ASGI lifespan.
+
+    JAFAAL holds three things that outlive a request and are not garbage: the
+    pooled HTTP client used for outbound OIDC calls (keep-alive sockets to every
+    configured identity provider), the optional background maintenance thread,
+    and any in-flight :class:`~jafaal.ports.AuthEventSink` deliveries. Without an
+    explicit shutdown those leak on reload, keep a process alive longer than it
+    should, and drop notifications that were mid-flight::
+
+        @contextlib.asynccontextmanager
+        async def lifespan(app: FastAPI):
+            jafaal.maintenance.start_background_scheduler()
+            yield
+            await jafaal.shutdown()
+
+    Never raises: shutdown must not be able to fail a clean stop.
+
+    Args:
+        drain_events_timeout: Seconds to wait for pending event deliveries.
+    """
+    import jafaal.maintenance as jafaal_maintenance
+    from jafaal.identity_providers.service import idp_service
+
+    jafaal_maintenance.stop_background_scheduler()
+    try:
+        await idp_service.aclose()
+    except Exception as err:  # pragma: no cover - defensive
+        logger.warning(f"Error closing the identity-provider HTTP client: {type(err).__name__}", exc_info=err)
+    if not jafaal_ports.wait_for_pending_events(drain_events_timeout):
+        logger.warning(f"JAFAAL shut down with AuthEventSink deliveries still in flight after {drain_events_timeout}s")

@@ -345,6 +345,61 @@ class NullAuthEventSink:
         return None
 
 
+# ===========================================================================
+# Scope-resolution boundary
+# ===========================================================================
+
+
+@runtime_checkable
+class ScopeResolver(Protocol):
+    """Host-owned mapping from a user to the scopes their tokens carry.
+
+    JAFAAL's default (:class:`TieredScopeResolver`) is deliberately simple: two
+    tiers, keyed on ``is_superuser``. That covers the common case and nothing
+    else — it cannot express "this user is a billing admin", per-organisation
+    roles, or any grant that is not a boolean on the user row. Authorisation
+    models are application domain, not authentication plumbing, so the mapping is
+    a port: implement it and JAFAAL stamps whatever scopes you return into the
+    tokens it mints.
+
+    The resolver runs at token issuance (login, refresh, SSO/PKCE exchange), and
+    again per request when
+    :attr:`~jafaal.settings.AuthSettings.reauthorize_scopes_per_request` is set —
+    where the result is *intersected* with the token's existing scopes, so
+    re-resolution can only ever narrow a live token's authority, never widen it.
+
+    Keep it fast and side-effect free; it is on the login path. It is called with
+    the user alone — a resolver that needs more (roles from another table, say)
+    should read them through its own session or cache rather than expect one to
+    be passed in, since JAFAAL calls it from several transaction contexts.
+    """
+
+    def scopes_for(self, user: UserProtocol) -> tuple[str, ...]:
+        """Return the scopes to stamp into ``user``'s tokens."""
+        ...
+
+
+class TieredScopeResolver:
+    """Default resolver: the :class:`~jafaal.scopes.ScopeCatalog`'s two tiers.
+
+    Returns the catalog's ``admin`` tuple for a superuser and ``regular``
+    otherwise — the behaviour JAFAAL has always had, now expressed as a
+    swappable adapter rather than a hardcoded branch inside the token minter.
+    """
+
+    def scopes_for(self, user: UserProtocol) -> tuple[str, ...]:
+        """Return the catalog tier matching the user's superuser flag."""
+        import jafaal.scopes as jafaal_scopes
+
+        catalog = jafaal_scopes.get_scope_catalog()
+        return catalog.admin if user.is_superuser else catalog.regular
+
+
+# ===========================================================================
+# Password-breach boundary
+# ===========================================================================
+
+
 @runtime_checkable
 class PasswordBreachChecker(Protocol):
     """Host-owned check for whether a password appears in a breach corpus/blocklist.
@@ -387,6 +442,7 @@ _settings_provider: ConfigSlot[SettingsProvider] = ConfigSlot(
 )
 _event_sink: ConfigSlot[AuthEventSink] = ConfigSlot(default_factory=NullAuthEventSink)
 _password_breach_checker: ConfigSlot[PasswordBreachChecker] = ConfigSlot(default_factory=NullPasswordBreachChecker)
+_scope_resolver: ConfigSlot[ScopeResolver] = ConfigSlot(default_factory=TieredScopeResolver)
 
 
 def configure_user_repository(repository: UserRepository) -> None:
@@ -445,6 +501,23 @@ def configure_password_breach_checker(checker: PasswordBreachChecker) -> None:
 def get_password_breach_checker() -> PasswordBreachChecker:
     """Return the installed :class:`PasswordBreachChecker` (no-op by default)."""
     return _password_breach_checker.get()
+
+
+def configure_scope_resolver(resolver: ScopeResolver) -> None:
+    """Install the host's :class:`ScopeResolver`.
+
+    Call once at startup, before tokens are issued. Defaults to
+    :class:`TieredScopeResolver` (the ``is_superuser`` two-tier mapping).
+
+    Args:
+        resolver: The host's scope-resolution adapter.
+    """
+    _scope_resolver.configure(resolver)
+
+
+def get_scope_resolver() -> ScopeResolver:
+    """Return the installed :class:`ScopeResolver` (:class:`TieredScopeResolver` by default)."""
+    return _scope_resolver.get()
 
 
 def _log_event_failure(method_name: str, err: BaseException) -> None:
@@ -670,6 +743,7 @@ def reset_ports() -> None:
     _settings_provider.reset()
     _event_sink.reset()
     _password_breach_checker.reset()
+    _scope_resolver.reset()
 
 
 __all__ = [
@@ -688,20 +762,24 @@ __all__ = [
     "PasswordPolicy",
     "PasswordResetRequested",
     "RefreshTokenTheftDetected",
+    "ScopeResolver",
     "SettingsProvider",
     "SignupApproved",
     "SignupConfig",
     "SignupPendingAdminApproval",
+    "TieredScopeResolver",
     "UserProtocol",
     "UserRepository",
     "adispatch_event",
     "configure_event_sink",
     "configure_password_breach_checker",
+    "configure_scope_resolver",
     "configure_settings_provider",
     "configure_user_repository",
     "dispatch_event",
     "get_event_sink",
     "get_password_breach_checker",
+    "get_scope_resolver",
     "get_settings_provider",
     "get_user_repository",
     "is_settings_provider_configured",

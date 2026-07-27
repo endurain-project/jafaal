@@ -132,6 +132,7 @@ class Event:
     IDP_LINK_REMOVED: Final = "idp.link_removed"
     IDP_DISCOVERY_FAILED: Final = "idp.discovery_failed"
     OAUTH_STATE_REPLAY_REJECTED: Final = "oauth_state.replay_rejected"
+    OAUTH_STATE_IP_MISMATCH: Final = "oauth_state.ip_mismatch"
 
     # --- authorization ---
     SCOPE_DENIED: Final = "scope.denied"
@@ -155,7 +156,7 @@ def _audit_pii_enabled() -> bool:
     audit behaviour is unchanged for callers that emit events before/without
     installing :class:`~jafaal.settings.AuthSettings` (e.g. unit tests).
     """
-    return not jafaal_settings.is_configured() or jafaal_settings.get_settings().audit_include_pii
+    return not jafaal_settings.is_configured() or jafaal_settings.get_settings().audit.include_pii
 
 
 def _scrub_pii(fields: dict[str, Any]) -> dict[str, Any]:

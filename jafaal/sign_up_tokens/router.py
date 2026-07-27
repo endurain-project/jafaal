@@ -3,7 +3,6 @@
 from typing import Annotated
 
 from fastapi import (
-    APIRouter,
     Depends,
     Request,
 )
@@ -20,7 +19,7 @@ import jafaal.sign_up_tokens.schema as sign_up_tokens_schema
 import jafaal.sign_up_tokens.utils as sign_up_tokens_utils
 
 # Define the API router
-router = APIRouter()
+router = jafaal_orm.auth_router()
 
 
 @router.post(

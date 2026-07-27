@@ -89,7 +89,8 @@ install hint (a `MissingDependencyError`) rather than an obscure error.
 ### 1. Configure the library
 
 JAFAAL never reads environment variables itself — you build the settings and
-inject them once at startup.
+inject them once at startup. Configuration is grouped by concern, so you only
+read the groups you actually use.
 
 ```python
 import jafaal
@@ -97,11 +98,17 @@ from cryptography.fernet import Fernet
 
 jafaal.configure(
     jafaal.AuthSettings(
-        secret_key="<32+ byte JWT signing secret>",
-        fernet_key=Fernet.generate_key().decode(),  # at-rest token encryption
+        secrets=jafaal.Secrets(
+            secret_key="<32+ byte JWT signing secret>",
+            fernet_key=Fernet.generate_key().decode(),  # at-rest token encryption
+        ),
         base_url="https://app.example.com",
-        app_name="Example",                          # shown in authenticator apps
-        environment="production",                    # drives the cookie Secure flag
+        app_name="Example",              # shown in authenticator apps
+        environment="production",        # drives the cookie Secure flag
+        # Every other group has working defaults; override only what you need:
+        # tokens=jafaal.TokenSettings(access_token_expire_minutes=10),
+        # sessions=jafaal.SessionSettings(idle_timeout_enabled=True),
+        # webauthn=jafaal.WebAuthnSettings(second_factor_enabled=True),
     )
 )
 ```
@@ -191,13 +198,27 @@ Notifications (password-reset / sign-up emails, admin pings) are optional — JA
 emits events to an `AuthEventSink`; install one with `jafaal.configure_event_sink(...)`
 to deliver them, or skip it and those flows simply mint tokens without sending mail.
 
-### 4. Mount the router
+### 4. Mount the router, and run maintenance
 
 ```python
+import contextlib
+
 from fastapi import FastAPI
 import jafaal
 
-app = FastAPI()
+
+@contextlib.asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Sweeps consumed OAuth states, rotated refresh tokens and expired
+    # reset/sign-up tokens. Without it those tables grow without bound.
+    # Already have a scheduler? Call jafaal.maintenance.run_due_tasks() from it.
+    jafaal.maintenance.start_background_scheduler()
+    yield
+    # Closes the pooled OIDC HTTP client, stops the sweeper, drains events.
+    await jafaal.shutdown()
+
+
+app = FastAPI(lifespan=lifespan)
 # Registers the JafaalError→HTTP handler and aggregates every sub-router.
 app.include_router(jafaal.create_auth_router(app=app), prefix="/api/v1")
 ```
@@ -205,7 +226,23 @@ app.include_router(jafaal.create_auth_router(app=app), prefix="/api/v1")
 That's it — you now have `/api/v1/auth/login`, `/refresh`, `/logout`, session
 management, MFA, API keys, SSO, sign-up and password-reset endpoints.
 
-### 5. Optional configuration
+### 5. Transactions: you own the unit of work
+
+Every JAFAAL function that takes a `Session` participates in **your**
+transaction and never commits — the CRUD layer only flushes. JAFAAL's own
+endpoints commit exactly once per request; when *you* drive JAFAAL's services,
+you decide the boundary:
+
+```python
+with jafaal.unit_of_work(db):
+    user = repo.create_local_user("ada", "ada@example.com", db,
+                                  is_active=True, is_verified=False)
+    identity_service.set_local_password_hash(user.id, hashed)
+    db.add(MyProfile(user_id=user.id))
+# one commit — any failure rolls back all three
+```
+
+### 6. Optional configuration
 
 ```python
 from jafaal import DEFAULT_SCOPE_CATALOG, configure_scopes, configure_api_key_scopes
@@ -219,6 +256,10 @@ configure_scopes(DEFAULT_SCOPE_CATALOG.extend(
 
 # Opt each scope an API key may carry in explicitly (empty by default):
 configure_api_key_scopes(["reports:read"])
+
+# Richer authorisation than the built-in is_superuser two tiers? Implement the
+# ScopeResolver port and JAFAAL stamps whatever you return into its tokens:
+# jafaal.configure_scope_resolver(MyRoleBasedResolver())
 
 # jafaal.configure_rate_limiter(...)  # inject a real limiter (e.g. slowapi)
 # jafaal.configure_state_store(...)   # inject Redis for multi-worker lockout state

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -70,7 +71,7 @@ def _oauth_client_cls() -> Any:
 
 def _idp_require_https() -> bool:
     """Whether identity-provider endpoints must use https (``idp_require_https``)."""
-    return jafaal_settings.get_settings().idp_require_https
+    return jafaal_settings.get_settings().sso.idp_require_https
 
 
 def _generate_pkce_verifier() -> str:
@@ -240,6 +241,41 @@ def _decode_with_any_key(id_token: str, keys: list[RSAKey | ECKey | OctKey]) -> 
     raise last_error if last_error is not None else BadSignatureError()
 
 
+def _assert_userinfo_subject_matches(
+    userinfo_claims: dict[str, Any],
+    id_token_claims: dict[str, Any],
+) -> None:
+    """Assert the userinfo response describes the ID token's subject.
+
+    OIDC Core 1.0 §5.3.2: *"The sub Claim in the UserInfo Response MUST be
+    verified to exactly match the sub Claim in the ID Token; if they do not
+    match, the UserInfo Response values MUST NOT be used."*
+
+    Merely letting the ID token's ``sub`` win a dict merge is not enough: the
+    remaining userinfo claims — above all ``email`` and ``email_verified`` —
+    would still be carried into :meth:`IdentityProviderService._find_or_create_user`,
+    where a verified email links the session to an *existing* local account. A
+    userinfo endpoint that is compromised, confused (an IdP mix-up), or simply
+    buggy could therefore graft a victim's email onto an attacker's subject.
+
+    Args:
+        userinfo_claims: The raw userinfo-endpoint response.
+        id_token_claims: The claims of the already-verified ID token.
+
+    Raises:
+        InvalidTokenError: If the userinfo response carries no ``sub``, or one
+            that differs from the ID token's.
+    """
+    id_token_subject = id_token_claims.get("sub")
+    userinfo_subject = userinfo_claims.get("sub")
+    if not isinstance(userinfo_subject, str) or not userinfo_subject:
+        logger.warning("Userinfo response carries no 'sub' claim; refusing to merge it with the ID token")
+        raise jafaal_exceptions.InvalidTokenError("Userinfo response is missing the 'sub' claim")
+    if not isinstance(id_token_subject, str) or not hmac.compare_digest(userinfo_subject, id_token_subject):
+        logger.warning("Userinfo 'sub' does not match the ID token 'sub'; refusing to use the userinfo response")
+        raise jafaal_exceptions.InvalidTokenError("Userinfo subject does not match the ID token subject")
+
+
 class TokenAction(Enum):
     """
     Actions to take for an IdP token based on policy evaluation.
@@ -266,6 +302,9 @@ class IdentityProviderService:
         self._jwks_cache: dict[str, dict[str, Any]] = {}  # Cache JWKS by issuer URL
         self._cache_ttl = timedelta(hours=1)
         self._http_client: httpx.AsyncClient | None = None
+        # Loop the cached client's connection pool is bound to (see
+        # _get_http_client): an AsyncClient cannot be shared across loops.
+        self._http_client_loop: asyncio.AbstractEventLoop | None = None
 
     def _prune_expired_caches(self) -> None:
         """
@@ -304,30 +343,73 @@ class IdentityProviderService:
         (:func:`jafaal._core.network.ssrf_request_hook`) so a 3xx pointing at a
         private/internal address cannot bypass the SSRF guard.
 
+        The client is cached per event loop. ``httpx.AsyncClient`` binds its
+        connection pool to the loop that created it, so a cached client reused
+        from a *different* loop — a reload-restarted uvicorn worker, a test
+        runner that creates a loop per test, a host that runs a second
+        ``asyncio.run`` — raises ``Event loop is closed`` or silently leaks the
+        old pool. Re-creating on a loop change keeps at most one live client per
+        loop and lets the stale one be reclaimed.
+
+        A client that was assigned from outside (no recorded creation loop) is
+        returned untouched: its lifecycle belongs to whoever supplied it.
+
         Returns:
             httpx.AsyncClient: The HTTP client instance for asynchronous requests.
         """
-        if self._http_client is None:
-            self._http_client = httpx.AsyncClient(
-                timeout=10.0,
-                follow_redirects=True,
-                # Pin every connection (and each redirect hop) to a validated
-                # public IP so the address dialed is the one the SSRF policy
-                # checked — closing the DNS-rebinding TOCTOU. The request hook
-                # below remains as an early, per-hop URL check (defense in depth).
-                transport=network.build_ssrf_guard_transport(
-                    limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
-                ),
-                # Re-run the SSRF guard on every request, including each redirect
-                # hop, so ``follow_redirects=True`` cannot be abused to reach an
-                # internal address via a 3xx from an otherwise-public endpoint.
-                event_hooks={"request": [network.ssrf_request_hook]},
-                headers={
-                    "User-Agent": jafaal_settings.get_settings().user_agent,
-                    "Accept": "application/json",
-                },
-            )
+        running_loop = asyncio.get_running_loop()
+        if self._http_client is not None and self._http_client_loop in (None, running_loop):
+            return self._http_client
+
+        if self._http_client is not None:
+            # Bound to a loop we are no longer on: drop the reference rather
+            # than awaiting aclose() (which would touch the other loop).
+            logger.debug("Rebuilding the IdP HTTP client: the event loop changed")
+
+        self._http_client = httpx.AsyncClient(
+            timeout=10.0,
+            follow_redirects=True,
+            # Pin every connection (and each redirect hop) to a validated
+            # public IP so the address dialed is the one the SSRF policy
+            # checked — closing the DNS-rebinding TOCTOU. The request hook
+            # below remains as an early, per-hop URL check (defense in depth).
+            transport=network.build_ssrf_guard_transport(
+                limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
+            ),
+            # Re-run the SSRF guard on every request, including each redirect
+            # hop, so ``follow_redirects=True`` cannot be abused to reach an
+            # internal address via a 3xx from an otherwise-public endpoint.
+            event_hooks={"request": [network.ssrf_request_hook]},
+            headers={
+                "User-Agent": jafaal_settings.get_settings().network.user_agent,
+                "Accept": "application/json",
+            },
+        )
+        self._http_client_loop = running_loop
         return self._http_client
+
+    async def aclose(self) -> None:
+        """Close the pooled HTTP client and drop the cached discovery/JWKS data.
+
+        Call from the host's ASGI lifespan shutdown (see
+        :func:`jafaal.shutdown`). Without it the keep-alive connections to every
+        configured identity provider stay open until interpreter exit, which
+        shows up as leaked sockets in tests and in reload-driven development.
+
+        Safe to call repeatedly, and safe to call when no client was ever built.
+        """
+        client = self._http_client
+        self._http_client = None
+        self._http_client_loop = None
+        self._discovery_cache.clear()
+        self._cache_expiry.clear()
+        self._jwks_cache.clear()
+        if client is None or client.is_closed:
+            return
+        try:
+            await client.aclose()
+        except Exception as err:  # pragma: no cover - shutdown must never raise
+            logger.warning(f"Error closing the IdP HTTP client: {type(err).__name__}", exc_info=err)
 
     async def _fetch_jwks(self, jwks_uri: str) -> dict[str, Any]:
         """
@@ -1390,7 +1472,7 @@ class IdentityProviderService:
 
         settings = jafaal_settings.get_settings()
         jafaal_security_stores.grant_step_up_reauth(
-            user_id, idp_id=idp.id, ttl_seconds=settings.step_up_grant_ttl_seconds
+            user_id, idp_id=idp.id, ttl_seconds=settings.sso.step_up_grant_ttl_seconds
         )
         logger.info(f"User {user_id} completed IdP step-up re-authentication via {idp.name}")
         return {"user": user, "userinfo": claims, "mode": "stepup"}
@@ -1417,7 +1499,7 @@ class IdentityProviderService:
                 "The identity provider did not assert a fresh authentication time; step-up could not be verified."
             )
         age = datetime.now(UTC).timestamp() - float(auth_time)
-        if age < -_REAUTH_CLOCK_SKEW_LEEWAY_SECONDS or age > settings.step_up_reauth_max_age_seconds:
+        if age < -_REAUTH_CLOCK_SKEW_LEEWAY_SECONDS or age > settings.sso.step_up_reauth_max_age_seconds:
             raise jafaal_exceptions.AuthenticationError(
                 "Your identity-provider sign-in was not recent enough for this action. Please try again."
             )
@@ -1523,6 +1605,15 @@ class IdentityProviderService:
                 # If we got userinfo from endpoint, merge with ID token claims
                 # ID token claims take precedence for standard claims (sub, iss, aud)
                 if userinfo_claims:
+                    # OIDC Core 1.0 §5.3.2: the userinfo ``sub`` MUST be verified
+                    # to exactly match the ID token ``sub``, and on a mismatch the
+                    # userinfo values MUST NOT be used. Overriding ``sub`` from the
+                    # ID token is not sufficient — the *rest* of the userinfo body
+                    # (notably ``email`` / ``email_verified``) would still be
+                    # merged in and then drive email-based account linking in
+                    # ``_find_or_create_user``, so a userinfo response describing a
+                    # different principal becomes an account-takeover path.
+                    _assert_userinfo_subject_matches(userinfo_claims, id_token_claims)
                     # Merge: userinfo endpoint data + ID token verified claims
                     # ID token claims override for security-critical fields
                     merged_claims = {**userinfo_claims, **id_token_claims}
@@ -1807,7 +1898,13 @@ class IdentityProviderService:
         if not idp.auto_create_users:
             raise jafaal_exceptions.AuthorizationError("User account creation is disabled for this identity provider")
 
-        user = await self._create_user_from_idp(idp, subject, mapped_data, db)
+        user = await self._create_user_from_idp(
+            idp,
+            subject,
+            mapped_data,
+            db,
+            email_verified=self._is_email_verified(userinfo),
+        )
 
         return user
 
@@ -1817,6 +1914,8 @@ class IdentityProviderService:
         subject: str,
         mapped_data: dict[str, Any],
         db: Session,
+        *,
+        email_verified: bool,
     ) -> jafaal_ports.UserProtocol:
         """
         Create a new user from identity-provider claims via the host's UserRepository.
@@ -1824,14 +1923,22 @@ class IdentityProviderService:
         JAFAAL resolves a unique username and hands the host a minimal
         :class:`~jafaal.ports.IdpIdentity`; the host provisions its own user row
         (profile shape and defaults are the host's concern). SSO accounts have no
-        local password credential, and the email is treated as verified (we trust
-        the IdP). The IdP link is then recorded.
+        local password credential.
+
+        ``email_verified`` carries the provider's own assertion through verbatim
+        rather than being hardcoded to ``True``. Hardcoding it would let a first
+        SSO sign-in at a permissive provider provision an account holding an
+        address the provider never verified — squatting the address that the
+        address's real owner would later be refused (the linking path in
+        :meth:`_find_or_create_user` correctly fails closed on an unverified
+        email, so the squatted account can never be reclaimed through SSO).
 
         Args:
             idp (idp_models.IdentityProvider): The identity provider instance.
             subject (str): The unique subject identifier from the IdP.
             mapped_data (Dict[str, Any]): User data mapped from the IdP (username, email, name, ...).
             db (Session): The database session.
+            email_verified: Whether the provider asserted the email as verified.
 
         Returns:
             The newly created user.
@@ -1853,7 +1960,7 @@ class IdentityProviderService:
             subject=subject,
             idp_id=idp.id,
             email=mapped_data.get("email") or f"{username}@sso.local",
-            email_verified=True,
+            email_verified=email_verified,
             suggested_username=username,
             display_name=mapped_data.get("name", username),
             claims=mapped_data,

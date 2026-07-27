@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import dataclasses
 from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
+from conftest import replace_settings
 from cryptography.fernet import Fernet
 from starlette.requests import Request
 
@@ -87,11 +87,11 @@ def test_fernet_decrypts_data_written_with_previous_key():
     original = jafaal.get_settings()
     try:
         # Encrypt while ``key_old`` is the primary key.
-        jafaal.configure(dataclasses.replace(original, fernet_key=key_old, fernet_key_fallbacks=()))
+        jafaal.configure(replace_settings(original, fernet_key=key_old, fernet_key_fallbacks=()))
         ciphertext = crypto.encrypt_token_fernet("s3cret")
 
         # Rotate: ``key_new`` primary, ``key_old`` kept as a decrypt fallback.
-        jafaal.configure(dataclasses.replace(original, fernet_key=key_new, fernet_key_fallbacks=(key_old,)))
+        jafaal.configure(replace_settings(original, fernet_key=key_new, fernet_key_fallbacks=(key_old,)))
         assert crypto.decrypt_token_fernet(ciphertext) == "s3cret"
 
         # New writes use the new key and still round-trip.
@@ -106,11 +106,11 @@ def test_fernet_ciphertext_unreadable_once_old_key_fully_dropped():
     key_new = Fernet.generate_key().decode()
     original = jafaal.get_settings()
     try:
-        jafaal.configure(dataclasses.replace(original, fernet_key=key_old, fernet_key_fallbacks=()))
+        jafaal.configure(replace_settings(original, fernet_key=key_old, fernet_key_fallbacks=()))
         ciphertext = crypto.encrypt_token_fernet("s3cret")
         # Rotation finished: old key removed entirely → old ciphertext no longer
         # decryptable (surfaced as a 500 InternalError).
-        jafaal.configure(dataclasses.replace(original, fernet_key=key_new, fernet_key_fallbacks=()))
+        jafaal.configure(replace_settings(original, fernet_key=key_new, fernet_key_fallbacks=()))
         with pytest.raises(exc.InternalError):
             crypto.decrypt_token_fernet(ciphertext)
     finally:
@@ -132,7 +132,7 @@ def test_fernet_ciphertext_unreadable_once_old_key_fully_dropped():
 def _rotated(primary, fallbacks=()):
     """Reconfigure with a different ``secret_key`` for the duration of the block."""
     original = jafaal.get_settings()
-    jafaal.configure(dataclasses.replace(original, secret_key=primary, secret_key_fallbacks=tuple(fallbacks)))
+    jafaal.configure(replace_settings(original, secret_key=primary, secret_key_fallbacks=tuple(fallbacks)))
     try:
         yield
     finally:
@@ -260,7 +260,7 @@ def test_api_key_issued_before_rotation_still_authenticates_and_is_rekeyed(db, m
 
 def test_invalid_fernet_fallback_rejected():
     with pytest.raises(ValueError, match="fernet_key_fallbacks"):
-        jafaal.AuthSettings(
+        jafaal.Secrets(
             secret_key="s" * 32,
             fernet_key=Fernet.generate_key().decode(),
             fernet_key_fallbacks=("not-a-valid-fernet-key",),
@@ -269,7 +269,7 @@ def test_invalid_fernet_fallback_rejected():
 
 def test_short_secret_key_fallback_rejected():
     with pytest.raises(ValueError, match="secret_key_fallbacks"):
-        jafaal.AuthSettings(
+        jafaal.Secrets(
             secret_key="s" * 32,
             fernet_key=Fernet.generate_key().decode(),
             secret_key_fallbacks=("too-short",),

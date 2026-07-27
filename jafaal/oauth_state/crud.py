@@ -137,14 +137,18 @@ def create_oauth_state(
         state_id: The state parameter (secrets.token_urlsafe(32)).
         nonce: OIDC nonce for ID token validation.
         client_type: Client type (web or mobile).
-        ip_address: Client IP address for validation.
+        ip_address: Client IP address at initiation. Recorded as a *detection*
+            signal only — the callback compares it and audits a mismatch rather
+            than rejecting, because the browser leg of an SSO round trip
+            legitimately changes address (mobile hand-off, IPv6 privacy
+            rotation, proxy egress). Replay is prevented by the single-use
+            claim, the nonce, and the PKCE binding.
         idp_id: Identity provider ID (may be null if mobile logic).
         redirect_path: Frontend path after login.
         code_challenge: PKCE challenge (required for mobile).
         code_challenge_method: PKCE method (S256).
         user_id: User ID for link mode.
         purpose: Flow purpose (``login``, ``link``, or ``stepup``).
-
     Returns:
         The persisted OAuthState instance.
 
@@ -169,7 +173,7 @@ def create_oauth_state(
     )
 
     db.add(oauth_state)
-    db.commit()
+    db.flush()
     db.refresh(oauth_state)
 
     logger.debug(f"OAuth state created: {state_id[:8]}... for IdP {idp_id}, client_type={client_type}")
@@ -201,7 +205,7 @@ def set_upstream_code_verifier(state_id: str, encrypted_verifier: str | None, db
         .execution_options(synchronize_session=False)
     )
     db.execute(stmt)
-    db.commit()
+    db.flush()
 
 
 @db_errors.handle_db_errors
@@ -239,7 +243,7 @@ def mark_oauth_state_used(state_id: str, db: Session) -> bool:
         .execution_options(synchronize_session=False)
     )
     result = cast(CursorResult[Any], db.execute(stmt))
-    db.commit()
+    db.flush()
 
     claimed = result.rowcount == 1
     if claimed:
@@ -265,7 +269,7 @@ def delete_oauth_state(oauth_state_id: str, db: Session) -> int:
     """
     stmt = sa_delete(oauth_state_models.OAuthState).where(oauth_state_models.OAuthState.id == oauth_state_id)
     result = cast(CursorResult[Any], db.execute(stmt))
-    db.commit()
+    db.flush()
     return result.rowcount
 
 
@@ -286,7 +290,7 @@ def delete_expired_oauth_states(db: Session) -> int:
     """
     stmt = sa_delete(oauth_state_models.OAuthState).where(oauth_state_models.OAuthState.expires_at < datetime.now(UTC))
     result = cast(CursorResult[Any], db.execute(stmt))
-    db.commit()
+    db.flush()
 
     deleted_count = result.rowcount
     if deleted_count > 0:

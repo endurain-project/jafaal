@@ -1,10 +1,10 @@
 """Tests for the SSRF guard and proxy-aware client IP extraction."""
 
-import dataclasses
 import ipaddress
 from contextlib import contextmanager
 
 import pytest
+from conftest import replace_settings
 from starlette.requests import Request
 
 import jafaal
@@ -15,7 +15,7 @@ import jafaal.exceptions as exc
 @contextmanager
 def _settings(**overrides):
     original = jafaal.get_settings()
-    jafaal.configure(dataclasses.replace(original, **overrides))
+    jafaal.configure(replace_settings(original, **overrides))
     try:
         yield
     finally:

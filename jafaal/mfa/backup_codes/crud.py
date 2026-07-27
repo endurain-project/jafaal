@@ -111,7 +111,7 @@ def create_backup_codes(
         )
         plaintext_codes.append(code)
 
-    db.commit()
+    db.flush()
 
     logger.info(f"Created backup codes for user ID {user_id}")
 
@@ -141,7 +141,7 @@ def mark_backup_code_as_used(code_id: int, user_id: UserId, db: Session) -> None
 
     db_code.used = True
     db_code.used_at = datetime.now(UTC)
-    db.commit()
+    db.flush()
     db.refresh(db_code)
 
     logger.info(f"Marked backup code as used for user ID {user_id}")
@@ -163,7 +163,7 @@ def delete_user_backup_codes(user_id: UserId, db: Session) -> int:
     """
     stmt = delete(mfa_backup_codes_models.MFABackupCode).where(mfa_backup_codes_models.MFABackupCode.user_id == user_id)
     result = cast(CursorResult[Any], db.execute(stmt))
-    db.commit()
+    db.flush()
 
     num_deleted = result.rowcount or 0
     logger.info(f"Deleted {num_deleted} backup codes for user ID: {user_id}")

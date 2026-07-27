@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import dataclasses
 import logging
+
+from conftest import replace_settings
 
 import jafaal
 import jafaal.audit as audit
@@ -52,7 +53,7 @@ def test_record_drops_none_and_reserved_fields(caplog):
 
 def test_audit_scrubs_pii_when_disabled(caplog):
     original = jafaal.get_settings()
-    jafaal.configure(dataclasses.replace(original, audit_include_pii=False))
+    jafaal.configure(replace_settings(original, include_pii=False))
     try:
         with caplog.at_level(logging.INFO, logger=audit.AUDIT_LOGGER_NAME):
             audit.record(

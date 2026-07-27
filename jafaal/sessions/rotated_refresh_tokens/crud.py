@@ -64,7 +64,7 @@ def create_rotated_token(
     )
 
     db.add(db_rotated_token)
-    db.commit()
+    db.flush()
     db.refresh(db_rotated_token)
 
     return db_rotated_token
@@ -89,7 +89,7 @@ def delete_expired_tokens(cutoff_time: datetime, db: Session) -> int:
         rotated_token_models.RotatedRefreshToken.expires_at < cutoff_time
     )
     result = cast(CursorResult[Any], db.execute(stmt))
-    db.commit()
+    db.flush()
     return result.rowcount
 
 
@@ -112,5 +112,5 @@ def delete_by_family(token_family_id: str, db: Session) -> int:
         rotated_token_models.RotatedRefreshToken.token_family_id == token_family_id
     )
     result = cast(CursorResult[Any], db.execute(stmt))
-    db.commit()
+    db.flush()
     return result.rowcount

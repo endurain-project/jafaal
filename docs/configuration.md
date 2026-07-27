@@ -16,11 +16,43 @@ from cryptography.fernet import Fernet
 
 jafaal.configure(
     jafaal.AuthSettings(
-        secret_key="<32+ byte JWT signing secret>",  # HS256 signing key
-        fernet_key=Fernet.generate_key().decode(),   # at-rest token encryption
+        secrets=jafaal.Secrets(
+            secret_key="<32+ byte JWT signing secret>",  # HS256 signing key
+            fernet_key=Fernet.generate_key().decode(),   # at-rest token encryption
+        ),
         base_url="https://app.example.com",
-        app_name="Example",                           # MFA issuer shown in authenticators
-        environment="production",                     # drives the cookie Secure flag
+        app_name="Example",           # MFA issuer shown in authenticators
+        environment="production",     # drives the cookie Secure flag
+    )
+)
+```
+
+Configuration is **grouped by concern** rather than being one flat list of
+options, so you read (and document) only the parts you use. Every group has
+working defaults; only `secrets` is required.
+
+| Group | Covers |
+|---|---|
+| `secrets` | Signing/encryption keys and their rotation fallbacks |
+| `tokens` | Algorithm, lifetimes, `iss`/`aud`/`client_id`, skew, revocation toggles |
+| `sessions` | Idle/absolute timeout, refresh-cookie name/path/prefix, trusted origins |
+| `passwords` | Argon2 cost, maximum accepted length |
+| `mfa` | TOTP replay policy |
+| `webauthn` | Passkey RP identity and ceremony policy |
+| `sso` | Redirects, IdP transport policy, step-up |
+| `network` | Trusted proxies, SSRF allow-list, outbound user agent |
+| `rate_limits` | Request budgets consumed by your `RateLimiter` |
+| `api_keys` | Key prefix, query-string transport toggle |
+| `audit` | PII policy for the `jafaal.audit` stream |
+
+```python
+jafaal.configure(
+    jafaal.AuthSettings(
+        secrets=jafaal.Secrets(secret_key=..., fernet_key=...),
+        base_url="https://app.example.com",
+        tokens=jafaal.TokenSettings(access_token_expire_minutes=10, leeway_seconds=30),
+        sessions=jafaal.SessionSettings(idle_timeout_enabled=True, refresh_cookie_prefix="__Secure-"),
+        network=jafaal.NetworkSettings(trusted_proxies=("10.0.0.0/8",)),
     )
 )
 ```
@@ -39,40 +71,40 @@ the settings and invalidates settings-derived caches (e.g. the token manager).
 | `fernet_key_fallbacks` | `()` | Extra Fernet keys accepted only when *decrypting* at-rest tokens (rotation overlap). |
 | `access_token_expire_minutes` | `15` | Access-token lifetime. |
 | `refresh_token_expire_days` | `7` | Refresh-token lifetime. |
-| `jwt_leeway_seconds` | `0` | Clock-skew tolerance (seconds) for JWT `exp`/`nbf`; `0` is strict, keep any value small. |
+| `leeway_seconds` | `0` | Clock-skew tolerance (seconds) for JWT `exp`/`nbf`; `0` is strict, keep any value small. |
 | `algorithm` | `"HS256"` | JWT signing algorithm: `HS256` (symmetric) or an asymmetric RSA/EC algorithm (see [below](#asymmetric-signing-jwks)). |
 | `client_id` | `""` | Value of the RFC 9068 `client_id` claim; defaults to the resolved audience. |
 | `private_key` | `""` | PEM private key for asymmetric signing (required when `algorithm` is asymmetric). |
 | `private_key_fallbacks` | `()` | Verify-only PEM keys kept in the published JWKS during a signing-key rotation. |
-| `session_idle_timeout_hours` | `1` | Idle-session timeout (when enabled). |
-| `session_absolute_timeout_hours` | `24` | Absolute session lifetime. |
+| `idle_timeout_hours` | `1` | Idle-session timeout (when enabled). |
+| `absolute_timeout_hours` | `24` | Absolute session lifetime. |
 | `base_url` | `""` | Public base URL; default JWT issuer/audience and SSO redirect base. |
 | `csrf_trusted_origins` | `()` | Origins allowed to drive the web refresh flow; defaults to the `base_url` origin. **Set this when the frontend is served from a different origin than the API.** |
 | `environment` | `"production"` | One of `production`, `demo`, `staging`, `development`, `local`, `test`, `testing`. The first three are treated as **deployed**; anything else is rejected at construction. |
 | `refresh_cookie_prefix` | `""` | Optional `__Secure-`/`__Host-` refresh-cookie name prefix, applied only when deployed (`__Host-` requires `refresh_cookie_path="/"`). |
-| `allow_api_key_query_param` | `False` | Whether API keys may be sent via `?api_key=` (header only by default). |
+| `allow_query_param` | `False` | Whether API keys may be sent via `?api_key=` (header only by default). |
 | `allow_in_memory_state_store_when_deployed` | `False` | Permit the in-memory state store in a deployed environment (single-worker only; otherwise `create_auth_router()` raises at startup). |
 | `allow_no_rate_limit_when_deployed` | `False` | Permit a deployed environment with no enforcing rate limiter (otherwise `create_auth_router()`/`verify_configuration()` raise at startup). |
-| `access_token_denylist_enabled` | `False` | Record & check revoked access-token `jti`s so `/revoke` kills an access token immediately (one state-store lookup per request). |
+| `denylist_enabled` | `False` | Record & check revoked access-token `jti`s so `/revoke` kills an access token immediately (one state-store lookup per request). |
 | `reauthorize_scopes_per_request` | `False` | Intersect an access token's scopes with the tier its account currently holds, so a demotion applies immediately instead of at token expiry. Strictly narrowing; adds no query. |
 | `argon2_time_cost` | `3` | Argon2 time cost (iterations) for password hashing. |
 | `argon2_memory_cost` | `65536` | Argon2 memory cost, in KiB. |
 | `argon2_parallelism` | `4` | Argon2 parallelism (lanes). |
-| `password_max_length` | `128` | Maximum accepted password length (minimum 64), enforced before hashing. |
-| `mfa_totp_replay_fail_open` | `False` | On a state-store outage, accept a TOTP code without replay protection instead of failing closed (503). |
-| `webauthn_rp_id` | `""` | WebAuthn Relying Party ID (registrable domain, no scheme/port); defaults to the `base_url` host. |
-| `webauthn_rp_name` | `""` | Human-readable RP name shown by the authenticator; defaults to `app_name`. |
-| `webauthn_origins` | `()` | Exact origins (scheme+host+port) a passkey ceremony may complete from; defaults to the `base_url` origin. |
-| `webauthn_user_verification` | `"preferred"` | User-verification requirement (`required`/`preferred`/`discouraged`). |
-| `webauthn_attestation` | `"none"` | Attestation conveyance requested at registration (`none`/`direct`). |
-| `webauthn_second_factor_enabled` | `False` | Require a registered passkey as a second factor after password login. |
-| `webauthn_challenge_ttl_seconds` | `300` | Lifetime of a WebAuthn challenge held in the state store. |
-| `rate_limit_sensitive` | `"10/minute"` | Budget hint for sensitive endpoints. |
-| `rate_limit_write` | `"30/minute"` | Budget hint for write endpoints. |
+| `max_length` | `128` | Maximum accepted password length (minimum 64), enforced before hashing. |
+| `totp_replay_fail_open` | `False` | On a state-store outage, accept a TOTP code without replay protection instead of failing closed (503). |
+| `rp_id` | `""` | WebAuthn Relying Party ID (registrable domain, no scheme/port); defaults to the `base_url` host. |
+| `rp_name` | `""` | Human-readable RP name shown by the authenticator; defaults to `app_name`. |
+| `origins` | `()` | Exact origins (scheme+host+port) a passkey ceremony may complete from; defaults to the `base_url` origin. |
+| `user_verification` | `"preferred"` | User-verification requirement (`required`/`preferred`/`discouraged`). |
+| `attestation` | `"none"` | Attestation conveyance requested at registration (`none`/`direct`). |
+| `second_factor_enabled` | `False` | Require a registered passkey as a second factor after password login. |
+| `challenge_ttl_seconds` | `300` | Lifetime of a WebAuthn challenge held in the state store. |
+| `sensitive` | `"10/minute"` | Budget hint for sensitive endpoints. |
+| `write` | `"30/minute"` | Budget hint for write endpoints. |
 | `trusted_proxies` | `()` | Peers **and forwarding hops** whose `X-Forwarded-For`/`X-Real-IP` are honoured (empty = trust only the direct peer). |
 | `ssrf_allowed_hosts` | `()` | Hosts/CIDRs exempted from the SSRF private-address guard. |
 | `idp_require_https` | `True` | Require `https` for identity-provider endpoints (authorization, token, userinfo, JWKS, discovery, revocation); set `False` to allow `http://` for local or self-hosted development. |
-| `audit_include_pii` | `True` | Include direct identifiers (username/IP/email) in `jafaal.audit` records; set `False` for PII-minimal retention. |
+| `include_pii` | `True` | Include direct identifiers (username/IP/email) in `jafaal.audit` records; set `False` for PII-minimal retention. |
 
 !!! warning "Behind a proxy"
     `trusted_proxies` defaults to `()` — only the direct TCP peer is trusted, so
@@ -136,10 +168,12 @@ always produced with the primary key; the fallbacks are verify-/decrypt-only.
 ```python
 jafaal.configure(
     jafaal.AuthSettings(
-        secret_key=NEW_SIGNING_KEY,                  # signs all new JWTs
-        secret_key_fallbacks=(OLD_SIGNING_KEY,),     # still verifies tokens signed before rotation
-        fernet_key=NEW_FERNET_KEY,                    # encrypts all new at-rest secrets
-        fernet_key_fallbacks=(OLD_FERNET_KEY,),      # still decrypts data written with the old key
+        secrets=jafaal.Secrets(
+            secret_key=NEW_SIGNING_KEY,                # signs all new JWTs
+            secret_key_fallbacks=(OLD_SIGNING_KEY,),   # still verifies tokens signed before rotation
+            fernet_key=NEW_FERNET_KEY,                 # encrypts all new at-rest secrets
+            fernet_key_fallbacks=(OLD_FERNET_KEY,),    # still decrypts data written with the old key
+        ),
         base_url="https://app.example.com",
         app_name="Example",
     )
@@ -161,11 +195,15 @@ import jafaal
 from cryptography.fernet import Fernet
 
 jafaal.configure(jafaal.AuthSettings(
-    secret_key="<32+ byte secret>",   # STILL required: keys the HMAC hashing of refresh/CSRF tokens
-    fernet_key=Fernet.generate_key().decode(),
+    secrets=jafaal.Secrets(
+        # STILL required: keys the HMAC hashing of refresh/CSRF tokens.
+        secret_key="<32+ byte secret>",
+        fernet_key=Fernet.generate_key().decode(),
+        private_key=open("jwt-signing-key.pem").read(),
+    ),
     base_url="https://app.example.com",
-    algorithm="RS256",                 # or ES256, PS256, RS384/512, ES384/512, PS384/512
-    private_key=open("jwt-signing-key.pem").read(),
+    # or ES256, PS256, RS384/512, ES384/512, PS384/512
+    tokens=jafaal.TokenSettings(algorithm="RS256"),
 ))
 ```
 
@@ -329,7 +367,7 @@ access/refresh tokens, mounted on the auth router:
     - A **refresh token** deletes its session — always effective.
     - An **access token** is denylisted by `jti` **only when**
       `access_token_denylist_enabled=True`; otherwise the short-lived token
-      lapses at expiry. Enable that setting (or `strict_session_binding`) for
+      lapses at expiry. Enable that setting (or `strict_binding`) for
       immediate access-token revocation — each adds one state-store lookup per
       authenticated request.
 
@@ -355,20 +393,21 @@ import jafaal
 
 jafaal.configure(
     jafaal.AuthSettings(
-        secret_key=...,
-        fernet_key=...,
-        base_url="https://app.example",           # webauthn_rp_id/origins default from this
-        # Or set them explicitly (required if base_url is not the passkey origin):
-        # webauthn_rp_id="app.example",           # registrable domain, no scheme/port
-        # webauthn_origins=("https://app.example",),
-        webauthn_user_verification="preferred",   # "required" makes UV (PIN/biometric) a true 2nd factor
-        webauthn_attestation="none",              # "direct" only if you process attestation
-        webauthn_second_factor_enabled=False,     # True → password login also requires a passkey
+        secrets=jafaal.Secrets(secret_key=..., fernet_key=...),
+        base_url="https://app.example",           # rp_id/origins default from this
+        webauthn=jafaal.WebAuthnSettings(
+            # Set explicitly if base_url is not the passkey origin:
+            # rp_id="app.example",                # registrable domain, no scheme/port
+            # origins=("https://app.example",),
+            user_verification="preferred",        # "required" makes UV (PIN/biometric) a true 2nd factor
+            attestation="none",                   # "direct" only if you process attestation
+            second_factor_enabled=False,          # True → password login also requires a passkey
+        ),
     )
 )
 ```
 
-`webauthn_rp_id` and `webauthn_origins` default to the host and origin of
+`rp_id` and `origins` default to the host and origin of
 `base_url`; the endpoints return **503** if neither an explicit value nor a
 usable `base_url` is configured. The companion table `webauthn_credentials` is
 created by `jafaal.map_models` + the packaged migrations (revision
@@ -392,7 +431,7 @@ Mounted by `create_auth_router` (paths relative to your API root):
 The `/authenticate/*` and `/mfa/*` completion endpoints require the
 `X-Client-Type` header (`web`/`mobile`) and return the same token response as
 `/auth/login`. Challenges are single-use and expire after
-`webauthn_challenge_ttl_seconds`.
+`challenge_ttl_seconds`.
 
 ### Second factor
 

@@ -10,12 +10,12 @@ such a change can never be accidental.
 from __future__ import annotations
 
 import base64
-import dataclasses
 import json
 from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
+from conftest import replace_settings
 from joserfc import jwt as joserfc_jwt
 from joserfc.errors import MissingClaimError
 from joserfc.jwk import OctKey
@@ -51,7 +51,7 @@ def _payload(token: str) -> dict:
 def _settings(**overrides):
     """Temporarily reconfigure JAFAAL, yielding a token manager built from it."""
     original = settings_mod.get_settings()
-    settings_mod.configure(dataclasses.replace(original, **overrides))
+    settings_mod.configure(replace_settings(original, **overrides))
     try:
         yield get_token_manager()
     finally:
@@ -186,7 +186,7 @@ def test_a_token_with_no_token_use_claim_is_rejected():
     stripped = joserfc_jwt.encode(
         {"alg": "HS256"},
         claims,
-        OctKey.import_key(settings_mod.get_settings().secret_key),
+        OctKey.import_key(settings_mod.get_settings().secrets.secret_key),
     )
     with pytest.raises(InvalidTokenError) as excinfo:
         tm.validate_token_expiration(stripped, TokenType.ACCESS)

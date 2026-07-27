@@ -20,7 +20,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import Depends, Request, Response, status
 from sqlalchemy.orm import Session
 
 import jafaal._internal.internal_dependencies as jafaal_internal_dependencies
@@ -42,8 +42,8 @@ from jafaal._core import network
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
-public_router = APIRouter()
+router = jafaal_orm.auth_router()
+public_router = jafaal_orm.auth_router()
 
 _TokenResponse = jafaal_schema.TokenResponseWeb | jafaal_schema.TokenResponseMobile
 

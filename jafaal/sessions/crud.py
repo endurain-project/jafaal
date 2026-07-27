@@ -162,7 +162,7 @@ def create_session(
     """
     db_session = jafaal_sessions_models.UsersSessions(**session.model_dump())
     db.add(db_session)
-    db.commit()
+    db.flush()
     db.refresh(db_session)
     return db_session
 
@@ -195,7 +195,7 @@ def set_session_refresh_token_hash(
         raise jafaal_exceptions.NotFoundError(f"Session {session_id} not found")
 
     db_session.refresh_token = hashed_refresh_token
-    db.commit()
+    db.flush()
     db.refresh(db_session)
 
     return db_session
@@ -231,7 +231,7 @@ def mark_tokens_exchanged(session_id: str, db: Session) -> None:
     # Mark tokens as exchanged and clear OAuth state reference
     db_session.tokens_exchanged = True
     db_session.oauth_state_id = None
-    db.commit()
+    db.flush()
 
     # Delete the OAuth state now that tokens are exchanged
     if oauth_state_id_to_delete:
@@ -293,7 +293,7 @@ def claim_session_for_token_exchange(
         )
     )
     result = cast(CursorResult[Any], db.execute(stmt))
-    db.commit()
+    db.flush()
 
     claimed = result.rowcount == 1
     if not claimed:
@@ -305,7 +305,7 @@ def claim_session_for_token_exchange(
     if db_session and db_session.oauth_state_id:
         oauth_state_id_to_delete = db_session.oauth_state_id
         db_session.oauth_state_id = None
-        db.commit()
+        db.flush()
         try:
             oauth_state_crud.delete_oauth_state(oauth_state_id_to_delete, db)
         except Exception as err:
@@ -345,7 +345,7 @@ def edit_session(
     for key, value in session_data.items():
         setattr(db_session, key, value)
 
-    db.commit()
+    db.flush()
     db.refresh(db_session)
 
 
@@ -377,7 +377,7 @@ def update_session_csrf_hash(
         raise jafaal_exceptions.NotFoundError(f"Session {session_id} not found")
 
     db_session.csrf_token_hash = csrf_token_hash
-    db.commit()
+    db.flush()
     db.refresh(db_session)
 
 
@@ -431,7 +431,7 @@ def delete_session(
     if oauth_state_id_to_delete:
         oauth_state_crud.delete_oauth_state(oauth_state_id_to_delete, db)
 
-    db.commit()
+    db.flush()
 
 
 @db_errors.handle_db_errors
@@ -461,7 +461,7 @@ def delete_idle_sessions(
         jafaal_sessions_models.UsersSessions.last_activity_at < cutoff_time
     )
     result = cast(CursorResult[Any], db.execute(stmt))
-    db.commit()
+    db.flush()
     return result.rowcount
 
 
@@ -490,7 +490,7 @@ def delete_sessions_by_family(
         jafaal_sessions_models.UsersSessions.token_family_id == token_family_id
     )
     result = cast(CursorResult[Any], db.execute(stmt))
-    db.commit()
+    db.flush()
     return result.rowcount
 
 
@@ -524,5 +524,5 @@ def delete_sessions_by_user(
         stmt = stmt.where(jafaal_sessions_models.UsersSessions.id != exclude_session_id)
     result = cast(CursorResult[Any], db.execute(stmt))
     if commit:
-        db.commit()
+        db.flush()
     return result.rowcount

@@ -63,7 +63,7 @@ def update_user_mfa(user_id: UserId, db: Session, encrypted_secret: str | None =
         mfa_row.mfa_enabled = mfa_enabled
         mfa_row.mfa_secret = mfa_secret_value
 
-    db.commit()
+    db.flush()
 
 
 @db_errors.handle_db_errors
@@ -92,6 +92,6 @@ def create_users_mfa_row(user_id: UserId, db: Session) -> jafaal_mfa_models.User
         mfa_secret=None,
     )
     db.add(mfa_row)
-    db.commit()
+    db.flush()
     db.refresh(mfa_row)
     return mfa_row

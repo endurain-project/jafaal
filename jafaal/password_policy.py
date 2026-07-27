@@ -38,5 +38,5 @@ def validate_and_hash_for_user(
     """
     policy = jafaal_ports.get_settings_provider().get_password_policy()
     min_length = policy.min_length_for(is_superuser=is_superuser)
-    max_length = jafaal_settings.get_settings().password_max_length
+    max_length = jafaal_settings.get_settings().passwords.max_length
     return identity_service.validate_and_hash_password(password, min_length, policy.password_type, max_length)

@@ -160,7 +160,7 @@ def use_password_reset_token(
         )
         password_reset_tokens_crud.mark_user_password_reset_tokens_used(token_user_id, db)
         jafaal_sessions_crud.delete_sessions_by_user(token_user_id, db, commit=False)
-        db.commit()
+        db.flush()
     except jafaal_exceptions.JafaalError:
         db.rollback()
         raise

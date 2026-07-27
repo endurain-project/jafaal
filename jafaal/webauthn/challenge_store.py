@@ -47,7 +47,7 @@ def _opaque_discriminator(value: str) -> str:
 
 
 def _ttl() -> int:
-    return jafaal_settings.get_settings().webauthn_challenge_ttl_seconds
+    return jafaal_settings.get_settings().webauthn.challenge_ttl_seconds
 
 
 def _store(key: str, challenge: bytes) -> None:

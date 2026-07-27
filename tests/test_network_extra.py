@@ -1,10 +1,10 @@
 """Extra network-guard tests: trusted-proxy CIDRs, SSRF allow-list, hostname refresh."""
 
-import dataclasses
 from contextlib import contextmanager
 
 import httpx
 import pytest
+from conftest import replace_settings
 from starlette.requests import Request
 
 import jafaal
@@ -15,7 +15,7 @@ import jafaal.exceptions as exc
 @contextmanager
 def _settings(**overrides):
     original = jafaal.get_settings()
-    jafaal.configure(dataclasses.replace(original, **overrides))
+    jafaal.configure(replace_settings(original, **overrides))
     try:
         yield
     finally:

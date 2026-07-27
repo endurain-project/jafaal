@@ -128,7 +128,8 @@ def test_mfa_success_is_audited_not_just_failure(client, make_user, audited):
     secret = pyotp.random_base32()
     session = jafaal_orm.get_sessionmaker()()
     try:
-        mfa_crud.update_user_mfa(user.id, session, encrypted_secret=crypto.encrypt_token_fernet(secret))
+        with jafaal_orm.unit_of_work(session):
+            mfa_crud.update_user_mfa(user.id, session, encrypted_secret=crypto.encrypt_token_fernet(secret))
     finally:
         session.close()
 

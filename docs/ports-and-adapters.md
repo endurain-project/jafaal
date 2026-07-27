@@ -196,7 +196,7 @@ jafaal.configure_rate_limiter(StateStoreRateLimiter())
 # ...or: create_auth_router(rate_limiter=StateStoreRateLimiter()).
 ```
 
-Budgets come from settings (`rate_limit_sensitive` / `rate_limit_write`, e.g.
+Budgets come from settings (`sensitive` / `write`, e.g.
 `"10/minute"`), and the client IP is resolved through the proxy-aware
 `trusted_proxies` logic, so set that correctly behind a reverse proxy. Rate
 limiting is defense-in-depth, so the limiter **fails open** (does not block) when

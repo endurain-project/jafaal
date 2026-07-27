@@ -117,8 +117,8 @@ def _subkeys_for(purpose: KeyPurpose) -> tuple[bytes, ...]:
     if cached is None:
         settings = jafaal_settings.get_settings()
         cached = (
-            _derive(settings.secret_key, purpose),
-            *(_derive(fallback, purpose) for fallback in settings.secret_key_fallbacks),
+            _derive(settings.secrets.secret_key, purpose),
+            *(_derive(fallback, purpose) for fallback in settings.secrets.secret_key_fallbacks),
         )
         _subkeys[purpose.value] = cached
     return cached

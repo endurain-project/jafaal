@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy.orm import Session
 
 import jafaal.audit as jafaal_audit
+import jafaal.orm as jafaal_orm
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.rotated_refresh_tokens.crud as rotated_token_crud
 import jafaal.sessions.rotated_refresh_tokens.models as rotated_token_models
@@ -232,13 +233,20 @@ def get_grace_replay_token(raw_token: str, db: Session) -> tuple[str, datetime] 
     return (replacement, timeutils.ensure_aware_utc(rotated_token.replacement_refresh_token_exp))
 
 
-def invalidate_token_family(token_family_id: str, db: Session) -> int:
+def invalidate_token_family(token_family_id: str) -> int:
     """
     Invalidate all sessions in a token family due to reuse detection.
 
+    Runs in its **own** transaction (:func:`jafaal.orm.autonomous_session`),
+    because the caller always raises a 401 immediately afterwards: the request
+    that detects the theft is, by definition, a failing request. Performing the
+    revocation in that request's unit of work would roll it straight back — the
+    stolen token would keep working, the legitimate user's sessions would never
+    be killed, and the theft would be reported to the event sink without
+    anything actually having been revoked.
+
     Args:
         token_family_id: The family ID to invalidate.
-        db: SQLAlchemy database session.
 
     Returns:
         Number of sessions invalidated.
@@ -246,11 +254,12 @@ def invalidate_token_family(token_family_id: str, db: Session) -> int:
     Raises:
         JafaalError: If invalidation fails.
     """
-    # Delete all sessions in the family
-    num_sessions_deleted = jafaal_sessions_crud.delete_sessions_by_family(token_family_id, db)
+    with jafaal_orm.autonomous_session() as db:
+        # Delete all sessions in the family
+        num_sessions_deleted = jafaal_sessions_crud.delete_sessions_by_family(token_family_id, db)
 
-    # Delete all rotated tokens for this family
-    num_tokens_deleted = rotated_token_crud.delete_by_family(token_family_id, db)
+        # Delete all rotated tokens for this family
+        num_tokens_deleted = rotated_token_crud.delete_by_family(token_family_id, db)
 
     logger.error(
         f"Invalidated token family {token_family_id} due to reuse: "

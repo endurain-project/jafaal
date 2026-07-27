@@ -103,7 +103,7 @@ def create_credential(
         created_at=datetime.now(UTC),
     )
     db.add(credential)
-    db.commit()
+    db.flush()
     db.refresh(credential)
     return credential
 
@@ -118,7 +118,7 @@ def update_sign_count(
     credential.sign_count = new_sign_count
     credential.last_used_at = datetime.now(UTC)
     db.add(credential)
-    db.commit()
+    db.flush()
 
 
 @db_errors.handle_db_errors
@@ -128,4 +128,4 @@ def delete_credential(
 ) -> None:
     """Delete a passkey."""
     db.delete(credential)
-    db.commit()
+    db.flush()

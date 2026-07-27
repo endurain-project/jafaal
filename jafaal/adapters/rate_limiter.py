@@ -142,7 +142,9 @@ class StateStoreRateLimiter:
         try:
             settings = jafaal_settings.get_settings()
             raw = (
-                settings.rate_limit_sensitive if category == jafaal_rate_limit.SENSITIVE else settings.rate_limit_write
+                settings.rate_limits.sensitive
+                if category == jafaal_rate_limit.SENSITIVE
+                else settings.rate_limits.write
             )
             limit, window = _parse_budget(raw)
         except (ValueError, RuntimeError) as err:

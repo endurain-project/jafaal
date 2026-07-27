@@ -130,8 +130,10 @@ _UUID_E2E = textwrap.dedent(
 
     jafaal.configure(
         jafaal.AuthSettings(
-            secret_key="s" * 32,
-            fernet_key=Fernet.generate_key().decode(),
+            secrets=jafaal.Secrets(
+                secret_key="s" * 32,
+                fernet_key=Fernet.generate_key().decode(),
+            ),
             base_url="https://app.test",
             environment="test",
         )

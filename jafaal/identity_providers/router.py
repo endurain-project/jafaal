@@ -3,7 +3,7 @@
 from collections.abc import Callable
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request, Security, status
+from fastapi import Depends, Request, Security, status
 from sqlalchemy.orm import Session
 
 import jafaal.dependencies as jafaal_dependencies
@@ -22,7 +22,7 @@ import jafaal.settings as jafaal_settings
 from jafaal._core import network
 
 # Define the API router
-router = APIRouter()
+router = jafaal_orm.auth_router()
 
 
 @router.get(
@@ -209,7 +209,7 @@ async def initiate_step_up_reauth(
             not linked to the caller; 404 if the provider is missing or disabled.
     """
     settings = jafaal_settings.get_settings()
-    if not settings.step_up_idp_reauth_enabled:
+    if not settings.sso.step_up_idp_reauth_enabled:
         raise jafaal_exceptions.InvalidRequestError("Identity-provider step-up re-authentication is disabled.")
 
     idp = idp_crud.get_identity_provider(idp_id, db)
@@ -240,7 +240,7 @@ async def initiate_step_up_reauth(
         oauth_state_id=state_id,
         authorize_extra_params={
             "prompt": "login",
-            "max_age": str(settings.step_up_reauth_max_age_seconds),
+            "max_age": str(settings.sso.step_up_reauth_max_age_seconds),
         },
     )
     return {"authorization_url": authorization_url}

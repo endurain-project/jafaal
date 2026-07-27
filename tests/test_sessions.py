@@ -1,18 +1,19 @@
 """Tests for session utilities, session CRUD, refresh-token rotation, and OAuth state."""
 
-import dataclasses
 import threading
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
+from conftest import replace_settings
 from starlette.requests import Request
 
 import jafaal
 import jafaal.exceptions as exc
 import jafaal.oauth_state.crud as oauth_state_crud
 import jafaal.oauth_state.utils as oauth_state_utils
+import jafaal.orm as jafaal_orm
 import jafaal.sessions.crud as sessions_crud
 import jafaal.sessions.rotated_refresh_tokens.crud as rotated_crud
 import jafaal.sessions.rotated_refresh_tokens.schema as rotated_schema
@@ -27,7 +28,7 @@ from jafaal.identity_service import DefaultIdentityService
 @contextmanager
 def _settings(**overrides):
     original = jafaal.get_settings()
-    jafaal.configure(dataclasses.replace(original, **overrides))
+    jafaal.configure(replace_settings(original, **overrides))
     try:
         yield
     finally:
@@ -69,7 +70,7 @@ def test_validate_session_timeout_noop_when_disabled():
 
 
 def test_validate_session_timeout_idle_expiry():
-    with _settings(session_idle_timeout_enabled=True, session_idle_timeout_hours=1):
+    with _settings(idle_timeout_enabled=True, idle_timeout_hours=1):
         idle = SimpleNamespace(
             last_activity_at=datetime.now(UTC) - timedelta(hours=2),
             created_at=datetime.now(UTC) - timedelta(minutes=10),
@@ -80,9 +81,9 @@ def test_validate_session_timeout_idle_expiry():
 
 def test_validate_session_timeout_absolute_expiry():
     with _settings(
-        session_idle_timeout_enabled=True,
-        session_idle_timeout_hours=100,
-        session_absolute_timeout_hours=1,
+        idle_timeout_enabled=True,
+        idle_timeout_hours=100,
+        absolute_timeout_hours=1,
     ):
         aged = SimpleNamespace(
             last_activity_at=datetime.now(UTC),
@@ -132,7 +133,7 @@ def test_strict_binding_rejects_revoked_session(db, make_user):
     user = make_user()
     session_utils.create_session("sess-b", user, _request(), "rt", db)
     token = _access_token(user, "sess-b")
-    with _settings(strict_session_binding=True):
+    with _settings(strict_binding=True):
         # Valid while the session exists...
         assert _svc(db).resolve_from_access_token(token).user_id == user.id
         # ...and rejected the moment the session is revoked.
@@ -144,7 +145,7 @@ def test_strict_binding_rejects_revoked_session(db, make_user):
 def test_strict_binding_rejects_missing_session(db, make_user):
     user = make_user()
     token = _access_token(user, "never-created")
-    with _settings(strict_session_binding=True), pytest.raises(exc.SessionExpiredError):
+    with _settings(strict_binding=True), pytest.raises(exc.SessionExpiredError):
         _svc(db).resolve_from_access_token(token)
 
 
@@ -154,7 +155,7 @@ def test_strict_binding_rejects_session_owned_by_other_user(db, make_user):
     # The session belongs to `other`, but the token claims `owner` with that sid.
     session_utils.create_session("sess-x", other, _request(), "rt", db)
     token = _access_token(owner, "sess-x")
-    with _settings(strict_session_binding=True), pytest.raises(exc.InvalidTokenError):
+    with _settings(strict_binding=True), pytest.raises(exc.InvalidTokenError):
         _svc(db).resolve_from_access_token(token)
 
 
@@ -168,9 +169,9 @@ def test_strict_binding_enforces_session_timeout(db, make_user):
     db.commit()
     with (
         _settings(
-            strict_session_binding=True,
-            session_idle_timeout_enabled=True,
-            session_idle_timeout_hours=1,
+            strict_binding=True,
+            idle_timeout_enabled=True,
+            idle_timeout_hours=1,
         ),
         pytest.raises(exc.SessionExpiredError),
     ):
@@ -243,7 +244,7 @@ def test_rotated_token_store_and_lookup(db, make_user):
 def test_invalidate_token_family_deletes_sessions(db, make_user):
     user = make_user()
     session_utils.create_session("fam-x", user, _request(), "rt", db)
-    deleted = rotated_utils.invalidate_token_family("fam-x", db)
+    deleted = rotated_utils.invalidate_token_family("fam-x")
     assert deleted >= 1
     assert sessions_crud.get_session_by_id("fam-x", db) is None
 
@@ -340,7 +341,11 @@ def test_token_exchange_claim_has_exactly_one_winner_under_real_concurrency(conc
     # The one-shot PKCE exchange is guarded by a single conditional UPDATE
     # (claim_session_for_token_exchange). Under genuine parallelism exactly one
     # caller may claim it; any other outcome is a double-spend of the code.
-    with concurrent_db.session() as setup:
+    #
+    # Each worker runs in its own unit of work, exactly as a request does now
+    # that JAFAAL's CRUD only flushes: the guarantee has to survive the *commit*
+    # boundary, not merely the flush.
+    with concurrent_db.session() as setup, jafaal_orm.unit_of_work(setup):
         session_utils.create_session(
             "race-exchange",
             SimpleNamespace(id=concurrent_db.user_id),
@@ -350,7 +355,7 @@ def test_token_exchange_claim_has_exactly_one_winner_under_real_concurrency(conc
         )
 
     def _claim(index):
-        with concurrent_db.session() as session:
+        with concurrent_db.session() as session, jafaal_orm.unit_of_work(session):
             return sessions_crud.claim_session_for_token_exchange("race-exchange", f"hash-{index}", session)
 
     outcomes = _run_concurrently(_claim)
@@ -370,7 +375,7 @@ def test_concurrent_rotation_of_one_token_records_a_single_row(concurrent_db):
     # rotation: the unique index on the token hash is what makes the rotation
     # single-use at the database level (no double-spend), so exactly one of the
     # racing writers may commit.
-    with concurrent_db.session() as setup:
+    with concurrent_db.session() as setup, jafaal_orm.unit_of_work(setup):
         session_utils.create_session(
             "race-family",
             SimpleNamespace(id=concurrent_db.user_id),
@@ -381,7 +386,7 @@ def test_concurrent_rotation_of_one_token_records_a_single_row(concurrent_db):
     exp = datetime.now(UTC) + timedelta(days=7)
 
     def _rotate(index):
-        with concurrent_db.session() as session:
+        with concurrent_db.session() as session, jafaal_orm.unit_of_work(session):
             rotated_utils.store_rotated_token(
                 "contended-token",
                 "race-family",
@@ -430,7 +435,7 @@ def test_rotated_token_reuse_after_grace_is_theft(db, make_user):
 def test_validate_session_timeout_on_real_db_row(db, make_user):
     # A freshly created session stores naive datetimes on SQLite; the timeout
     # check must remain tz-safe and not raise for a live session.
-    with _settings(session_idle_timeout_enabled=True, session_idle_timeout_hours=1):
+    with _settings(idle_timeout_enabled=True, idle_timeout_hours=1):
         user = make_user()
         session_utils.create_session("s-live", user, _request(), "rt", db)
         row = sessions_crud.get_session_by_id("s-live", db)

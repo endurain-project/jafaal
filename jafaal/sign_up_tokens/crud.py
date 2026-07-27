@@ -63,7 +63,7 @@ def create_sign_up_token(
         used=token.used,
     )
     db.add(db_token)
-    db.commit()
+    db.flush()
     db.refresh(db_token)
     return db_token
 
@@ -99,7 +99,7 @@ def claim_sign_up_token(token_hash: str, db: Session) -> UserId | None:
         .returning(sign_up_tokens_models.SignUpToken.user_id)
     )
     user_id = db.execute(stmt).scalar_one_or_none()
-    db.commit()
+    db.flush()
     return user_id
 
 
@@ -125,7 +125,7 @@ def mark_sign_up_token_used(token_id: str, db: Session) -> sign_up_tokens_models
 
     if db_token:
         db_token.used = True
-        db.commit()
+        db.flush()
         db.refresh(db_token)
 
     return db_token
@@ -148,5 +148,5 @@ def delete_expired_sign_up_tokens(db: Session) -> int:
         sign_up_tokens_models.SignUpToken.expires_at < datetime.now(UTC)
     )
     result = cast(CursorResult[Any], db.execute(stmt))
-    db.commit()
+    db.flush()
     return result.rowcount

@@ -46,4 +46,5 @@ nav:
   - Security: security.md
   - Threat model: threat-model.md
   - Key rotation: key-rotation.md
+  - API stability: api-stability.md
   - API Reference: api.md

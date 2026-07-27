@@ -1,8 +1,7 @@
 """Tests for PasswordHasher: hashing, verification, policy, and dummy verify."""
 
-import dataclasses
-
 import pytest
+from conftest import replace_settings
 
 import jafaal
 from jafaal._internal.password_hasher import PasswordHasher, get_password_hasher
@@ -14,7 +13,7 @@ def test_get_password_hasher_uses_settings_argon2_cost():
     # hash string encodes the memory/time/parallelism parameters, so we assert
     # they match the configured (distinctive, cheap) values.
     original = jafaal.get_settings()
-    jafaal.configure(dataclasses.replace(original, argon2_memory_cost=8192, argon2_time_cost=1, argon2_parallelism=1))
+    jafaal.configure(replace_settings(original, argon2_memory_cost=8192, argon2_time_cost=1, argon2_parallelism=1))
     try:
         digest = get_password_hasher().hash_password("Str0ng!Pass")
         assert digest.startswith("$argon2")

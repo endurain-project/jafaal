@@ -27,7 +27,6 @@ from joserfc.jwt import Token
 
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.ports as jafaal_ports
-import jafaal.scopes as jafaal_scopes
 import jafaal.settings as jafaal_settings
 from jafaal._core import jwk_keys
 
@@ -486,9 +485,11 @@ class TokenManager:
         Raises:
             ValueError: If required parameters are missing or invalid.
         """
-        # Check user access level and set scope accordingly
-        catalog = jafaal_scopes.get_scope_catalog()
-        scope = catalog.regular if not user.is_superuser else catalog.admin
+        # Scopes come from the host's ScopeResolver port (the built-in default
+        # is the catalog's is_superuser two-tier mapping), so an application
+        # with a richer authorisation model stamps its own grants without
+        # patching the token minter.
+        scope = jafaal_ports.get_scope_resolver().scopes_for(user)
 
         # Set now
         issued_at = datetime.now(UTC)
@@ -573,16 +574,16 @@ def get_token_manager() -> TokenManager:
     if _token_manager is None or _token_manager_generation != generation:
         settings = jafaal_settings.get_settings()
         _token_manager = TokenManager(
-            settings.secret_key,
-            settings.algorithm,
-            access_token_expire_minutes=settings.access_token_expire_minutes,
-            refresh_token_expire_days=settings.refresh_token_expire_days,
+            settings.secrets.secret_key,
+            settings.tokens.algorithm,
+            access_token_expire_minutes=settings.tokens.access_token_expire_minutes,
+            refresh_token_expire_days=settings.tokens.refresh_token_expire_days,
             issuer=settings.resolved_issuer,
             audience=settings.resolved_audience,
-            secret_key_fallbacks=settings.secret_key_fallbacks,
-            private_key=settings.private_key,
-            private_key_fallbacks=settings.private_key_fallbacks,
-            leeway_seconds=settings.jwt_leeway_seconds,
+            secret_key_fallbacks=settings.secrets.secret_key_fallbacks,
+            private_key=settings.secrets.private_key,
+            private_key_fallbacks=settings.secrets.private_key_fallbacks,
+            leeway_seconds=settings.tokens.leeway_seconds,
             client_id=settings.resolved_client_id,
         )
         _token_manager_generation = generation

@@ -1,12 +1,12 @@
 """Tests for identity-provider pure utilities: redirect + PKCE validation."""
 
 import base64
-import dataclasses
 import hashlib
 import secrets
 from contextlib import contextmanager
 
 import pytest
+from conftest import replace_settings
 
 import jafaal
 import jafaal.exceptions as exc
@@ -16,7 +16,7 @@ import jafaal.identity_providers.utils as idp_utils
 @contextmanager
 def _settings(**overrides):
     original = jafaal.get_settings()
-    jafaal.configure(dataclasses.replace(original, **overrides))
+    jafaal.configure(replace_settings(original, **overrides))
     try:
         yield
     finally:

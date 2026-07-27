@@ -93,11 +93,11 @@ def _origins() -> list[str]:
 
 
 def _user_verification() -> Any:
-    return _structs.UserVerificationRequirement(jafaal_settings.get_settings().webauthn_user_verification)
+    return _structs.UserVerificationRequirement(jafaal_settings.get_settings().webauthn.user_verification)
 
 
 def _require_user_verification() -> bool:
-    return jafaal_settings.get_settings().webauthn_user_verification == "required"
+    return jafaal_settings.get_settings().webauthn.user_verification == "required"
 
 
 def _passwordless_user_verification() -> Any:
@@ -114,7 +114,7 @@ def _passwordless_user_verification() -> Any:
 
 
 def _attestation() -> Any:
-    return _structs.AttestationConveyancePreference(jafaal_settings.get_settings().webauthn_attestation)
+    return _structs.AttestationConveyancePreference(jafaal_settings.get_settings().webauthn.attestation)
 
 
 # ---------------------------------------------------------------------------

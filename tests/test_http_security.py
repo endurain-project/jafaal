@@ -4,9 +4,9 @@ API-key authentication over the wire, and lazy rate-limiter binding.
 
 from __future__ import annotations
 
-import dataclasses
 import functools
 
+from conftest import replace_settings
 from fastapi import FastAPI, Response, Security
 from fastapi.testclient import TestClient
 
@@ -56,7 +56,7 @@ def test_login_refresh_cookie_is_httponly_and_samesite_strict(client, make_user)
 def test_refresh_cookie_is_secure_in_a_deployed_environment():
     original = jafaal.get_settings()
     # ``production`` is a deployed environment → the Secure flag must be set.
-    jafaal.configure(dataclasses.replace(original, environment="production"))
+    jafaal.configure(replace_settings(original, environment="production"))
     try:
         response = Response()
         jafaal_utils.set_refresh_token_cookie(response, "tok-value")

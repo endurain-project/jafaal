@@ -129,7 +129,7 @@ def create_api_key(
     raw_key = api_keys_utils.generate_api_key()
     # Key format is "<prefix>_<random>"; the stored key_prefix is the first 8
     # chars of the random part (after the configured prefix + underscore).
-    prefix_len = len(jafaal_settings.get_settings().api_key_prefix) + 1
+    prefix_len = len(jafaal_settings.get_settings().api_keys.prefix) + 1
     key_prefix = raw_key[prefix_len : prefix_len + 8]
     key_hash = api_keys_utils.hash_api_key(raw_key)
     scopes_json = api_keys_utils.scopes_to_json(data.scopes)
@@ -147,7 +147,7 @@ def create_api_key(
         is_active=True,
     )
     db.add(db_api_key)
-    db.commit()
+    db.flush()
     db.refresh(db_api_key)
 
     logger.info(
@@ -193,7 +193,7 @@ def update_last_used(
         raise jafaal_exceptions.NotFoundError(f"API key {api_key_id} not found")
 
     db_api_key.last_used_at = datetime.now(UTC)
-    db.commit()
+    db.flush()
 
 
 @db_errors.handle_db_errors
@@ -224,7 +224,7 @@ def rekey_api_key_digest(
         .values(key_hash=new_key_hash)
     )
     db.execute(stmt)
-    db.commit()
+    db.flush()
 
 
 @db_errors.handle_db_errors
@@ -254,7 +254,7 @@ def revoke_api_key(
         raise jafaal_exceptions.NotFoundError(f"API key {api_key_id} not found for user {user_id}")
 
     db_api_key.is_active = False
-    db.commit()
+    db.flush()
 
     logger.info(
         "API key revoked",
@@ -302,7 +302,7 @@ def delete_api_key(
     # trail keeps on a hard-deleted key.
     key_prefix = db_api_key.key_prefix
     db.delete(db_api_key)
-    db.commit()
+    db.flush()
 
     logger.info(
         "API key deleted",

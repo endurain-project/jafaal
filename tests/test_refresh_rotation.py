@@ -8,10 +8,11 @@ detection with whole-family invalidation, and the web CSRF bootstrap rules.
 
 from __future__ import annotations
 
-import dataclasses
 import hashlib
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+
+from conftest import replace_settings
 
 import jafaal.orm as jafaal_orm
 import jafaal.sessions.utils as session_utils
@@ -46,7 +47,7 @@ def _login_mobile(client, username="alice", password="Str0ng!Pass"):
 def _override_settings(**overrides):
     """Temporarily reconfigure JAFAAL, restoring the suite settings afterwards."""
     original = jafaal_settings.get_settings()
-    jafaal_settings.configure(dataclasses.replace(original, **overrides))
+    jafaal_settings.configure(replace_settings(original, **overrides))
     try:
         yield
     finally:

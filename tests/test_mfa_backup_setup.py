@@ -2,6 +2,7 @@
 
 import pyotp
 import pytest
+from conftest import replace_settings
 
 import jafaal.exceptions as exc
 import jafaal.identity_providers.crud as idp_crud
@@ -229,14 +230,13 @@ def test_step_up_reauth_grant_takes_precedence_over_challenge(db, make_user):
 def test_step_up_reauth_disabled_falls_back_to_fail_closed(db, make_user):
     # When IdP step-up re-auth is disabled, an SSO-only account with a link is
     # NOT challenged — it fails closed (403), the same as one with no link.
-    from dataclasses import replace
 
     import jafaal
 
     user = make_user(password=None)
     _link_idp(db, user)
     original = jafaal.get_settings()
-    jafaal.configure(replace(original, step_up_idp_reauth_enabled=False))
+    jafaal.configure(replace_settings(original, step_up_idp_reauth_enabled=False))
     try:
         with pytest.raises(exc.AuthorizationError):
             verify_step_up_credentials(user.id, None, None, _svc(db), StepUpAttempts(), db)

@@ -55,7 +55,7 @@ def _eligible_reauth_idp_ids(user_id: UserId, db: Session) -> list[int]:
     Returns:
         The enabled, linked identity-provider ids (possibly empty).
     """
-    if not jafaal_settings.get_settings().step_up_idp_reauth_enabled:
+    if not jafaal_settings.get_settings().sso.step_up_idp_reauth_enabled:
         return []
     links = jafaal_identity_links_crud.get_user_identity_providers_by_user_id(user_id, db)
     if not links:

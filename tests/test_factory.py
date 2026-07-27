@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import dataclasses
 import logging
 
 import pytest
+from conftest import replace_settings
 from cryptography.fernet import Fernet
 from fastapi import FastAPI
 
@@ -57,8 +57,10 @@ class _FakeDistributedStore:
 
 def _production_settings():
     return jafaal.AuthSettings(
-        secret_key="s" * 32,
-        fernet_key=Fernet.generate_key().decode(),
+        secrets=jafaal.Secrets(
+            secret_key="s" * 32,
+            fernet_key=Fernet.generate_key().decode(),
+        ),
         base_url="https://app.test",
         app_name="Test",
         environment="production",
@@ -140,7 +142,7 @@ def test_raises_on_in_memory_state_store_when_deployed():
 
 def test_in_memory_state_store_allowed_when_opted_in():
     original = jafaal.get_settings()
-    jafaal.configure(dataclasses.replace(_production_settings(), allow_in_memory_state_store_when_deployed=True))
+    jafaal.configure(replace_settings(_production_settings(), allow_in_memory_state_store_when_deployed=True))
     jafaal.reset_state_store()  # in-memory default
     jafaal.configure_rate_limiter(_DummyLimiter())
     try:
@@ -198,7 +200,7 @@ def test_raises_without_rate_limiter_when_deployed():
 
 def test_no_rate_limiter_allowed_when_opted_in():
     original = jafaal.get_settings()
-    jafaal.configure(dataclasses.replace(_production_settings(), allow_no_rate_limit_when_deployed=True))
+    jafaal.configure(replace_settings(_production_settings(), allow_no_rate_limit_when_deployed=True))
     jafaal.configure_state_store(_FakeDistributedStore())
     jafaal_rate_limit.reset_rate_limiter()  # no-op limiter active
     try:

@@ -1,9 +1,9 @@
 """Tests for the account-security service (password change, session revocation)."""
 
-import dataclasses
 from contextlib import contextmanager
 
 import pytest
+from conftest import replace_settings
 from starlette.requests import Request
 
 import jafaal
@@ -38,7 +38,7 @@ def _request():
 @contextmanager
 def _settings(**overrides):
     original = jafaal.get_settings()
-    jafaal.configure(dataclasses.replace(original, **overrides))
+    jafaal.configure(replace_settings(original, **overrides))
     try:
         yield
     finally:

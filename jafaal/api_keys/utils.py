@@ -52,7 +52,7 @@ def generate_api_key() -> str:
     Returns:
         A new raw API key string.
     """
-    return f"{jafaal_settings.get_settings().api_key_prefix}_{secrets.token_urlsafe(32)}"
+    return f"{jafaal_settings.get_settings().api_keys.prefix}_{secrets.token_urlsafe(32)}"
 
 
 def hash_api_key(raw_key: str) -> str:

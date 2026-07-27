@@ -80,7 +80,7 @@ def upsert_password_hash(
         credential.password_hash = password_hash
 
     if commit:
-        db.commit()
+        db.flush()
 
 
 @db_errors.handle_db_errors
@@ -109,4 +109,4 @@ def delete_credential(
             jafaal_credentials_models.LocalCredential.user_id == user_id,
         )
     )
-    db.commit()
+    db.flush()

@@ -86,7 +86,7 @@ def _resolve_hostname(hostname: str) -> list[str]:
 def _trusted_proxy_hostname_entries() -> list[str]:
     """Return the configured ``trusted_proxies`` entries needing DNS resolution."""
     hostnames: list[str] = []
-    for configured_entry in jafaal_settings.get_settings().trusted_proxies:
+    for configured_entry in jafaal_settings.get_settings().network.trusted_proxies:
         entry = configured_entry.strip()
         if not entry:
             continue
@@ -164,7 +164,7 @@ def _is_trusted_peer(peer_ip: str) -> bool:
     Returns:
         True if the peer is trusted, False otherwise.
     """
-    trusted = jafaal_settings.get_settings().trusted_proxies
+    trusted = jafaal_settings.get_settings().network.trusted_proxies
     if list(trusted) == ["*"]:
         return True
     try:
@@ -354,6 +354,43 @@ def is_off_site_request(request: Request, allowed_origins: tuple[str, ...]) -> b
     return False
 
 
+def reject_off_site_request(request: Request, *, operation: str) -> None:
+    """Refuse a browser request that demonstrably originates off-site.
+
+    The single enforcement point for :func:`is_off_site_request`, used by every
+    endpoint that reads **or writes** the refresh cookie: ``/auth/login``,
+    ``/auth/mfa/verify``, ``/auth/refresh``, and the SSO/PKCE token exchange.
+
+    Applying it on the *write* side matters as much as on the read side. A
+    cross-site attacker who can make the victim's browser complete a login
+    against attacker-controlled credentials plants an ``HttpOnly`` session the
+    victim then unknowingly uses (login CSRF / session fixation). JAFAAL's
+    mandatory ``X-Client-Type`` header already forces a CORS preflight and so
+    blocks the simple form-POST version of that attack, but relying on it makes
+    a header's *ergonomics* load-bearing for a *security* property — one
+    "make X-Client-Type optional" change away from silently regressing.
+
+    Both signals read are forbidden header names, so page script cannot forge or
+    strip them.
+
+    Args:
+        request: The incoming HTTP request.
+        operation: Human-readable name of the flow, used in the log line and the
+            error detail (e.g. ``"Login"``).
+
+    Raises:
+        AuthorizationError: 403 when the request is off-site.
+    """
+    trusted = jafaal_settings.get_settings().resolved_csrf_trusted_origins
+    if not is_off_site_request(request, trusted):
+        return
+    logger.warning(f"Rejected off-site {operation.lower()} request")
+    raise jafaal_exceptions.AuthorizationError(
+        f"{operation} requests must originate from a trusted origin",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
 # Schemes JAFAAL is willing to dial. Anything else (file://, gopher://, ftp://,
 # data://, javascript:) is rejected outright.
 _ALLOWED_OUTBOUND_SCHEMES: frozenset[str] = frozenset({"http", "https"})
@@ -397,7 +434,7 @@ def _load_ssrf_allowlist() -> tuple[
     """Split ``ssrf_allowed_hosts`` into hostnames and IP networks."""
     hosts: set[str] = set()
     networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
-    for entry in jafaal_settings.get_settings().ssrf_allowed_hosts:
+    for entry in jafaal_settings.get_settings().network.ssrf_allowed_hosts:
         try:
             networks.append(ipaddress.ip_network(entry, strict=False))
         except ValueError:

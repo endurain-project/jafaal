@@ -8,7 +8,6 @@ the HTTP-mocking tests (it has its own dedicated tests) so they stay hermetic.
 
 import asyncio
 import base64
-import dataclasses
 import hashlib
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -16,6 +15,7 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
+from conftest import replace_settings
 from joserfc import jwt
 from joserfc.jwk import OctKey, RSAKey
 from starlette.requests import Request
@@ -152,7 +152,7 @@ def _no_ssrf(monkeypatch):
 @contextmanager
 def _settings(**overrides):
     original = jafaal.get_settings()
-    jafaal.configure(dataclasses.replace(original, **overrides))
+    jafaal.configure(replace_settings(original, **overrides))
     try:
         yield
     finally:

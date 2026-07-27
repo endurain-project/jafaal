@@ -59,7 +59,7 @@ def authenticate_user(
     # unauthenticated caller could otherwise post a multi-megabyte "password" on
     # every request. Checked before the user lookup result is used so the
     # rejection costs the same whether or not the account exists.
-    if len(password) > jafaal_settings.get_settings().password_max_length:
+    if len(password) > jafaal_settings.get_settings().passwords.max_length:
         raise jafaal_exceptions.InvalidCredentialsError("Unable to authenticate with provided credentials")
 
     # Check if the user exists and if the password is correct
@@ -200,9 +200,9 @@ def set_refresh_token_cookie(
     response.set_cookie(
         key=settings.effective_refresh_cookie_name,
         value=refresh_token,
-        expires=datetime.now(UTC) + timedelta(days=settings.refresh_token_expire_days),
+        expires=datetime.now(UTC) + timedelta(days=settings.tokens.refresh_token_expire_days),
         httponly=True,
-        path=settings.refresh_cookie_path,
+        path=settings.sessions.refresh_cookie_path,
         secure=_is_secure_cookie_environment(),
         samesite="strict",
     )
@@ -223,7 +223,7 @@ def clear_refresh_token_cookies(response: Response) -> None:
     settings = jafaal_settings.get_settings()
     response.delete_cookie(
         key=settings.effective_refresh_cookie_name,
-        path=settings.refresh_cookie_path,
+        path=settings.sessions.refresh_cookie_path,
         secure=_is_secure_cookie_environment(),
         httponly=True,
         samesite="strict",

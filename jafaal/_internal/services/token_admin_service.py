@@ -178,7 +178,7 @@ def _revoke_refresh_token(
 
 def _revoke_access_token(claims: dict[str, Any]) -> None:
     """Denylist an access token's ``jti`` when the denylist is enabled."""
-    if not jafaal_settings.get_settings().access_token_denylist_enabled:
+    if not jafaal_settings.get_settings().tokens.denylist_enabled:
         return
     jti = claims.get("jti")
     exp = claims.get("exp")

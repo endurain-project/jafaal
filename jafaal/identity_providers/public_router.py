@@ -6,7 +6,7 @@ from typing import Annotated, cast
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Query, Request, Response, status
+from fastapi import Depends, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
@@ -20,6 +20,7 @@ import jafaal.identity_providers.schema as idp_schema
 import jafaal.identity_providers.service as idp_service
 import jafaal.identity_providers.utils as idp_utils
 import jafaal.oauth_state.crud as oauth_state_crud
+import jafaal.oauth_state.models as oauth_state_models
 import jafaal.oauth_state.utils as oauth_state_utils
 import jafaal.orm as jafaal_orm
 import jafaal.ports as jafaal_ports
@@ -33,7 +34,7 @@ from jafaal._core import network
 logger = logging.getLogger(__name__)
 
 # Define the API router
-router = APIRouter()
+router = jafaal_orm.auth_router()
 
 
 def _append_query_params(url: str, params: dict[str, str]) -> str:
@@ -44,9 +45,51 @@ def _append_query_params(url: str, params: dict[str, str]) -> str:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 
-def _build_link_result_url(redirect_path: str | None, idp_name: str | None, *, success: bool) -> str:
+def _audit_state_ip_mismatch(
+    oauth_state: oauth_state_models.OAuthState,
+    idp_slug: str,
+    request: Request,
+) -> None:
+    """Audit a callback arriving from a different IP than the one that started it.
+
+    The client IP recorded when the authorization request was minted is a
+    *detection* signal, not an access control: the browser leg of an SSO round
+    trip legitimately changes address (mobile hand-off between cellular and
+    Wi-Fi, IPv6 privacy-address rotation, a CDN or corporate proxy picking a
+    different egress). Rejecting on mismatch would lock out real users far more
+    often than it would stop an attacker — who is already blocked by the state's
+    single-use claim, the OIDC ``nonce``, and the upstream PKCE binding.
+
+    So the mismatch is recorded on the audit stream instead, where a SIEM can
+    correlate it with the other signals (a state minted in one country and
+    redeemed in another within seconds is worth an alert; a phone changing
+    networks is not).
+
+    Args:
+        oauth_state: The state row being consumed.
+        idp_slug: Provider slug, for the audit record.
+        request: The incoming callback request.
     """
-    Build the post-link redirect that carries the result to the originating client.
+    recorded_ip = oauth_state.ip_address
+    if not recorded_ip:
+        return
+    callback_ip = network.get_ip_address(request)
+    if callback_ip is None or callback_ip == recorded_ip:
+        return
+    logger.info(f"OAuth callback source IP differs from the address that initiated the flow (idp={idp_slug})")
+    jafaal_audit.record(
+        jafaal_audit.Event.OAUTH_STATE_IP_MISMATCH,
+        outcome=jafaal_audit.Outcome.SUCCESS,
+        level=logging.INFO,
+        idp=idp_slug,
+        ip=callback_ip,
+        initiated_ip=recorded_ip,
+        purpose=oauth_state.purpose,
+    )
+
+
+def _build_link_result_url(redirect_path: str | None, idp_name: str | None, *, success: bool) -> str:
+    """Build the post-link redirect that carries the result to the originating client.
 
     Honors a caller-supplied return path captured at link initiation (validated
     there against open redirects): a relative path is resolved against the
@@ -68,7 +111,7 @@ def _build_link_result_url(redirect_path: str | None, idp_name: str | None, *, s
     if redirect_path and idp_utils.is_custom_scheme_redirect(redirect_path):
         return _append_query_params(redirect_path, params)
     settings = jafaal_settings.get_settings()
-    base = redirect_path or settings.sso_link_result_path
+    base = redirect_path or settings.sso.link_result_path
     return f"{settings.base_url}{_append_query_params(base, params)}"
 
 
@@ -287,13 +330,26 @@ async def handle_callback(
             )
             raise jafaal_exceptions.InvalidRequestError("Invalid or expired OAuth state")
 
+        _audit_state_ip_mismatch(oauth_state, idp.slug, request)
+
         # Mark state as used atomically (prevents replay attacks).
         # Two concurrent callbacks can both reach this point with the same
         # `oauth_state` row in memory; only the caller whose conditional UPDATE
         # actually flips `used=False -> True` is allowed to continue. Losing
         # races (replays, double-submits) abort here with a generic 400 so we
         # do not leak whether the state existed but was already consumed.
-        if not oauth_state_crud.mark_oauth_state_used(state, db):
+        #
+        # Claimed on its own session so the claim commits immediately, for two
+        # reasons. It must be durable independently of the rest of this request:
+        # otherwise an attacker who can make the callback fail after this point
+        # would release the state and be free to replay the authorization code.
+        # And the request transaction must not stay open across the several
+        # outbound HTTP calls handle_callback then makes (discovery, token
+        # exchange, JWKS, userinfo), which would pin a pooled connection — and
+        # this row's lock — for their combined timeout.
+        with jafaal_orm.autonomous_session() as claim_db:
+            claimed = oauth_state_crud.mark_oauth_state_used(state, claim_db)
+        if not claimed:
             logger.warning(f"OAuth state replay/race rejected: {state[:8]}...")
             jafaal_audit.record(
                 jafaal_audit.Event.OAUTH_STATE_REPLAY_REJECTED,
@@ -320,7 +376,9 @@ async def handle_callback(
         # then retries the sensitive operation, which consumes the grant.
         if result.get("mode") == "stepup":
             settings = jafaal_settings.get_settings()
-            redirect_url = f"{settings.base_url}{settings.sso_link_result_path}?step_up=success"
+            redirect_url = (
+                f"{settings.base_url}{_append_query_params(settings.sso.link_result_path, {'step_up': 'success'})}"
+            )
             logger.info(f"IdP step-up re-authentication successful for user {user.username} via {idp.name}")
             return RedirectResponse(
                 url=redirect_url,
@@ -359,20 +417,26 @@ async def handle_callback(
             oauth_state_id=oauth_state.id,
         )
 
-        # Redirect to frontend with session_id for token exchange
+        # Redirect to frontend with session_id for token exchange.
+        #
+        # Every value goes through _append_query_params (which percent-encodes),
+        # never string concatenation: ``redirect_path`` is caller-supplied and
+        # only validated as "a relative path with no traversal", so a value like
+        # ``/dashboard&session_id=<attacker>`` would otherwise inject extra
+        # parameters into the URL the frontend parses.
         settings = jafaal_settings.get_settings()
-        frontend_url = settings.base_url
-        redirect_url = f"{frontend_url}{settings.sso_login_result_path}?sso=success&session_id={session_id}"
+        params = {"sso": "success", "session_id": session_id}
 
         redirect_path = result.get("redirect_path")
         if redirect_path:
-            redirect_url += f"&redirect={redirect_path}"
+            params["redirect"] = redirect_path
             # Signal the frontend that this is a custom-scheme redirect.
             # The frontend will skip its own token exchange and instead
             # pass the session_id to the mobile app via the custom scheme.
-            is_custom_scheme = "://" in redirect_path and not redirect_path.startswith("http")
-            if is_custom_scheme:
-                redirect_url += "&external_redirect=true"
+            if idp_utils.is_custom_scheme_redirect(redirect_path):
+                params["external_redirect"] = "true"
+
+        redirect_url = f"{settings.base_url}{_append_query_params(settings.sso.login_result_path, params)}"
 
         logger.info(f"SSO login successful for user {user.username} via {idp.name} (session_id={session_id})")
 
@@ -393,7 +457,7 @@ async def handle_callback(
             error_url = _build_link_result_url(oauth_state.redirect_path, None, success=False)
         else:
             settings = jafaal_settings.get_settings()
-            error_url = f"{settings.base_url}{settings.sso_error_path}?error=sso_failed"
+            error_url = f"{settings.base_url}{_append_query_params(settings.sso.error_path, {'error': 'sso_failed'})}"
 
         return RedirectResponse(url=error_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
 
@@ -541,6 +605,13 @@ def exchange_tokens_for_session(
         user = cast(jafaal_ports.UserProtocol, session_obj.users)
         # Validate that the user is still active before minting tokens
         jafaal_user_guards.check_user_is_active(user)
+
+        # A web exchange plants an HttpOnly refresh cookie, so it carries the
+        # same off-site rejection as /auth/login and /auth/refresh. Checked only
+        # after the client type is resolved, so a native caller (which sends no
+        # browser fetch metadata) is unaffected.
+        if client_type == "web":
+            network.reject_off_site_request(request, operation="Token exchange")
 
         # Create JWT tokens (now that PKCE is verified)
         (

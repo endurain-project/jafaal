@@ -12,6 +12,7 @@ from sqlalchemy.sql import func
 import jafaal.audit as jafaal_audit
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_providers.links.models as jafaal_identity_links_models
+import jafaal.orm as jafaal_orm
 from jafaal._core import db_errors
 from jafaal.orm import UserId
 
@@ -147,11 +148,14 @@ def create_user_identity_provider(
         idp_subject=idp_subject,
         last_login=func.now(),
     )
-    db.add(db_link)
+    # The flush is bracketed in a savepoint so a UNIQUE violation can be caught
+    # and translated to a 409 without unwinding the caller's transaction (which
+    # would discard the host's pending work along with JAFAAL's).
     try:
-        db.commit()
+        with jafaal_orm.savepoint(db):
+            db.add(db_link)
+            db.flush()
     except IntegrityError as err:
-        db.rollback()
         raise jafaal_exceptions.ConflictError("Identity provider already linked") from err
     db.refresh(db_link)
     # Emitted here rather than at each caller: a new link is a new way into the
@@ -194,7 +198,7 @@ def update_user_identity_provider_last_login(
     )
     if db_link:
         db_link.last_login = datetime.now(UTC)
-        db.commit()
+        db.flush()
         db.refresh(db_link)
     return db_link
 
@@ -235,7 +239,7 @@ def store_user_identity_provider_tokens(
         db_link.idp_refresh_token = encrypted_refresh_token
         db_link.idp_access_token_expires_at = access_token_expires_at
         db_link.idp_refresh_token_updated_at = datetime.now(UTC)
-        db.commit()
+        db.flush()
         db.refresh(db_link)
     return db_link
 
@@ -272,7 +276,7 @@ def clear_user_identity_provider_refresh_token_by_user_id_and_idp_id(
         db_link.idp_refresh_token = None
         db_link.idp_access_token_expires_at = None
         db_link.idp_refresh_token_updated_at = None
-        db.commit()
+        db.flush()
         return True
     return False
 
@@ -324,7 +328,7 @@ def clear_user_identity_provider_refresh_token_if_matches(
         .execution_options(synchronize_session=False)
     )
     result = cast(CursorResult[Any], db.execute(stmt))
-    db.commit()
+    db.flush()
     return (result.rowcount or 0) > 0
 
 
@@ -361,11 +365,11 @@ def delete_user_identity_provider(
         db_link.idp_refresh_token = None
         db_link.idp_access_token_expires_at = None
         db_link.idp_refresh_token_updated_at = None
-        db.commit()
+        db.flush()
 
         # Then delete the link
         db.delete(db_link)
-        db.commit()
+        db.flush()
         return True
     return False
 

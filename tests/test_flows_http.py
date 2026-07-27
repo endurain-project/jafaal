@@ -47,7 +47,8 @@ def _signup(**kwargs):
 def _enable_mfa(user_id, secret):
     session = jafaal_orm.get_sessionmaker()()
     try:
-        mfa_crud.update_user_mfa(user_id, session, encrypted_secret=crypto.encrypt_token_fernet(secret))
+        with jafaal_orm.unit_of_work(session):
+            mfa_crud.update_user_mfa(user_id, session, encrypted_secret=crypto.encrypt_token_fernet(secret))
     finally:
         session.close()
 
@@ -68,20 +69,20 @@ def _auth_headers(client, username, password):
 def _create_linked_idp(user_id, *, slug, link=True):
     session = jafaal_orm.get_sessionmaker()()
     try:
-        idp = idp_crud.create_identity_provider(
-            idp_schema.IdentityProviderCreate(
-                name=f"IdP {slug}",
-                slug=slug,
-                client_id="cid",
-                client_secret="secret",
-                enabled=True,
-                authorization_endpoint="https://idp.example/authorize",
-            ),
-            session,
-        )
-        if link:
-            links_crud.create_user_identity_provider(user_id, idp.id, f"sub-{slug}", session)
-        session.commit()
+        with jafaal_orm.unit_of_work(session):
+            idp = idp_crud.create_identity_provider(
+                idp_schema.IdentityProviderCreate(
+                    name=f"IdP {slug}",
+                    slug=slug,
+                    client_id="cid",
+                    client_secret="secret",
+                    enabled=True,
+                    authorization_endpoint="https://idp.example/authorize",
+                ),
+                session,
+            )
+            if link:
+                links_crud.create_user_identity_provider(user_id, idp.id, f"sub-{slug}", session)
         return idp.id
     finally:
         session.close()

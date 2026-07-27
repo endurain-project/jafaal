@@ -8,12 +8,12 @@ statelessly with the public key only (no shared secret), plus key rotation.
 from __future__ import annotations
 
 import base64
-import dataclasses
 import json
 from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
+from conftest import replace_settings
 from joserfc import jwt
 from joserfc.jwk import ECKey, KeySet, RSAKey
 
@@ -38,7 +38,7 @@ def _keypair(alg):
 @contextmanager
 def _asymmetric(alg, private_key, **extra):
     original = jafaal.get_settings()
-    jafaal.configure(dataclasses.replace(original, algorithm=alg, private_key=private_key, **extra))
+    jafaal.configure(replace_settings(original, algorithm=alg, private_key=private_key, **extra))
     try:
         yield
     finally:

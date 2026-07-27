@@ -170,7 +170,7 @@ def create_identity_provider(idp_data: idp_schema.IdentityProviderCreate, db: Se
     )
 
     db.add(db_idp)
-    db.commit()
+    db.flush()
     db.refresh(db_idp)
 
     logger.info(f"Created identity provider: {db_idp.name} (ID: {db_idp.id})")
@@ -225,7 +225,7 @@ def update_identity_provider(
     for field, value in update_data.items():
         setattr(db_idp, field, value)
 
-    db.commit()
+    db.flush()
     db.refresh(db_idp)
 
     logger.info(f"Updated identity provider: {db_idp.name} (ID: {db_idp.id})")
@@ -259,6 +259,6 @@ def delete_identity_provider(idp_id: int, db: Session) -> None:
         raise jafaal_exceptions.ConflictError("Cannot delete identity provider with linked users")
 
     db.delete(db_idp)
-    db.commit()
+    db.flush()
 
     logger.info(f"Deleted identity provider: {db_idp.name} (ID: {idp_id})")

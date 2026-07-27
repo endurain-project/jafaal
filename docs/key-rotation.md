@@ -35,9 +35,11 @@ days).
 
     ```python
     jafaal.configure(jafaal.AuthSettings(
-        secret_key=NEW_KEY,
-        secret_key_fallbacks=(OLD_KEY,),
-        fernet_key=FERNET_KEY,
+        secrets=jafaal.Secrets(
+            secret_key=NEW_KEY,
+            secret_key_fallbacks=(OLD_KEY,),
+            fernet_key=FERNET_KEY,
+        ),
         # ...rest unchanged...
     ))
     ```
@@ -70,11 +72,13 @@ so old and new tokens both validate during the overlap.
 
     ```python
     jafaal.configure(jafaal.AuthSettings(
-        secret_key=SECRET_KEY,
-        fernet_key=FERNET_KEY,
-        algorithm="RS256",
-        private_key=NEW_PRIVATE_KEY_PEM,
-        private_key_fallbacks=(OLD_PUBLIC_KEY_PEM,),   # verify-only; stays in the JWKS
+        secrets=jafaal.Secrets(
+            secret_key=SECRET_KEY,
+            fernet_key=FERNET_KEY,
+            private_key=NEW_PRIVATE_KEY_PEM,
+            private_key_fallbacks=(OLD_PUBLIC_KEY_PEM,),   # verify-only; stays in the JWKS
+        ),
+        tokens=jafaal.TokenSettings(algorithm="RS256"),
         # ...rest unchanged...
     ))
     ```
@@ -111,9 +115,11 @@ eagerly or let values roll forward naturally as they are rewritten.
 
     ```python
     jafaal.configure(jafaal.AuthSettings(
-        secret_key=SECRET_KEY,
-        fernet_key=NEW_FERNET_KEY,
-        fernet_key_fallbacks=(OLD_FERNET_KEY,),
+        secrets=jafaal.Secrets(
+            secret_key=SECRET_KEY,
+            fernet_key=NEW_FERNET_KEY,
+            fernet_key_fallbacks=(OLD_FERNET_KEY,),
+        ),
         # ...rest unchanged...
     ))
     ```

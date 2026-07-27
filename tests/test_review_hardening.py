@@ -6,11 +6,11 @@ to touch, so a future refactor that keeps the behaviour keeps the test.
 
 from __future__ import annotations
 
-import dataclasses
 import logging
 from contextlib import contextmanager
 
 import pytest
+from conftest import replace_settings
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -28,7 +28,7 @@ PASSWORD = "Str0ng!Pass"
 @contextmanager
 def _settings(**overrides):
     original = jafaal.get_settings()
-    jafaal.configure(dataclasses.replace(original, **overrides))
+    jafaal.configure(replace_settings(original, **overrides))
     try:
         yield
     finally:
@@ -86,7 +86,7 @@ def test_scope_denial_over_http_sends_the_challenge(client, make_user):
 
 def test_over_long_password_is_rejected_without_hashing(client, make_user):
     make_user(username="longpw", password=PASSWORD)
-    over_limit = "x" * (jafaal.get_settings().password_max_length + 1)
+    over_limit = "x" * (jafaal.get_settings().passwords.max_length + 1)
     response = client.post(
         "/api/v1/auth/login",
         data={"username": "longpw", "password": over_limit},
@@ -99,7 +99,7 @@ def test_over_long_password_is_rejected_without_hashing(client, make_user):
 
 
 def test_password_at_the_limit_is_still_accepted(client, make_user):
-    at_limit = "A1!" + "x" * (jafaal.get_settings().password_max_length - 3)
+    at_limit = "A1!" + "x" * (jafaal.get_settings().passwords.max_length - 3)
     make_user(username="limitpw", password=at_limit)
     assert _login(client, "limitpw", at_limit).status_code == 200
 
@@ -269,7 +269,8 @@ def test_mfa_challenge_uses_202_for_web_and_200_for_mobile(client, make_user):
     secret = pyotp.random_base32()
     session = jafaal_orm.get_sessionmaker()()
     try:
-        mfa_crud.update_user_mfa(user.id, session, encrypted_secret=crypto.encrypt_token_fernet(secret))
+        with jafaal_orm.unit_of_work(session):
+            mfa_crud.update_user_mfa(user.id, session, encrypted_secret=crypto.encrypt_token_fernet(secret))
     finally:
         session.close()
 

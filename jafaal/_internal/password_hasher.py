@@ -337,9 +337,9 @@ def get_password_hasher() -> PasswordHasher:
         _settings_password_hasher = PasswordHasher(
             hasher=[
                 Argon2Hasher(
-                    time_cost=settings.argon2_time_cost,
-                    memory_cost=settings.argon2_memory_cost,
-                    parallelism=settings.argon2_parallelism,
+                    time_cost=settings.passwords.argon2_time_cost,
+                    memory_cost=settings.passwords.argon2_memory_cost,
+                    parallelism=settings.passwords.argon2_parallelism,
                 ),
                 BcryptHasher(),
             ]

@@ -158,9 +158,9 @@ def _replay_store_unavailable(err: StateStoreUnavailableError) -> None:
         jafaal_audit.Event.MFA_REPLAY_CHECK_UNAVAILABLE,
         outcome=jafaal_audit.Outcome.FAILURE,
         level=logging.ERROR,
-        fail_open=jafaal_settings.get_settings().mfa_totp_replay_fail_open,
+        fail_open=jafaal_settings.get_settings().mfa.totp_replay_fail_open,
     )
-    if jafaal_settings.get_settings().mfa_totp_replay_fail_open:
+    if jafaal_settings.get_settings().mfa.totp_replay_fail_open:
         logger.warning("TOTP replay protection degraded: state store unavailable (fail-open)", exc_info=err)
         return
     logger.error("TOTP replay protection unavailable: state store down (failing closed)", exc_info=err)

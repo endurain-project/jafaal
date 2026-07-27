@@ -43,7 +43,7 @@ def create_password_reset_token(
 
     # Add the token to the database
     db.add(db_token)
-    db.commit()
+    db.flush()
     db.refresh(db_token)
 
     return db_token
@@ -151,7 +151,7 @@ def mark_password_reset_token_used(
     if db_token:
         # Mark the token as used
         db_token.used = True
-        db.commit()
+        db.flush()
         db.refresh(db_token)
 
     return db_token
@@ -174,5 +174,5 @@ def delete_expired_password_reset_tokens(db: Session) -> int:
         password_reset_tokens_models.PasswordResetToken.expires_at < datetime.now(UTC)
     )
     result = cast(CursorResult[Any], db.execute(stmt))
-    db.commit()
+    db.flush()
     return result.rowcount

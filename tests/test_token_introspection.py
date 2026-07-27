@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import dataclasses
+from conftest import replace_settings
 
 import jafaal
 import jafaal.api_keys.crud as api_keys_crud
@@ -121,7 +121,7 @@ def test_revoke_access_token_without_denylist_is_noop(client, make_user, db):
 
 def test_revoke_access_token_with_denylist_enabled(client, make_user, db):
     original = jafaal.get_settings()
-    jafaal.configure(dataclasses.replace(original, access_token_denylist_enabled=True))
+    jafaal.configure(replace_settings(original, denylist_enabled=True))
     try:
         user = make_user(username="alice")
         access = _login_web(client).json()["access_token"]

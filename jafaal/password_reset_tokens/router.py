@@ -3,7 +3,6 @@
 from typing import Annotated
 
 from fastapi import (
-    APIRouter,
     Depends,
     Request,
     status,
@@ -17,7 +16,7 @@ import jafaal.password_reset_tokens.utils as password_reset_tokens_utils
 import jafaal.rate_limit as jafaal_rate_limit
 
 # Define the API router
-router = APIRouter()
+router = jafaal_orm.auth_router()
 
 
 @router.post(

@@ -35,8 +35,8 @@ def _create_cipher() -> MultiFernet:
     """
     try:
         settings = jafaal_settings.get_settings()
-        keys = [Fernet(settings.fernet_key.encode())]
-        keys.extend(Fernet(fallback.encode()) for fallback in settings.fernet_key_fallbacks)
+        keys = [Fernet(settings.secrets.fernet_key.encode())]
+        keys.extend(Fernet(fallback.encode()) for fallback in settings.secrets.fernet_key_fallbacks)
         return MultiFernet(keys)
     except Exception as err:
         logger.error(f"Error in _create_cipher: {type(err).__name__}", exc_info=err)

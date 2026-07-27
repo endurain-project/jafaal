@@ -29,7 +29,8 @@ def _login(client, username="alice", password="Str0ng!Pass"):
 def _enable_mfa(user_id, secret):
     session = jafaal_orm.get_sessionmaker()()
     try:
-        mfa_crud.update_user_mfa(user_id, session, encrypted_secret=crypto.encrypt_token_fernet(secret))
+        with jafaal_orm.unit_of_work(session):
+            mfa_crud.update_user_mfa(user_id, session, encrypted_secret=crypto.encrypt_token_fernet(secret))
     finally:
         session.close()
 

@@ -4,7 +4,6 @@ import logging
 from typing import Annotated
 
 from fastapi import (
-    APIRouter,
     Depends,
     Query,
     Security,
@@ -16,6 +15,7 @@ import jafaal._internal.user_guards as jafaal_user_guards
 import jafaal.dependencies as jafaal_dependencies
 import jafaal.orm as jafaal_orm
 import jafaal.principal as jafaal_principal
+import jafaal.rate_limit as jafaal_rate_limit
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.schema as jafaal_sessions_schema
 import jafaal.settings as jafaal_settings
@@ -24,7 +24,7 @@ from jafaal.orm import UserId
 logger = logging.getLogger(__name__)
 
 # Define the API router
-router = APIRouter()
+router = jafaal_orm.auth_router()
 
 
 @router.get(
@@ -71,6 +71,7 @@ def read_sessions_user(
     "/{session_id}/user/{user_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
+@jafaal_rate_limit.limit(jafaal_rate_limit.WRITE)
 def delete_session_user(
     session_id: str,
     user_id: UserId,
@@ -108,6 +109,7 @@ def delete_session_user(
     "/user/{user_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
+@jafaal_rate_limit.limit(jafaal_rate_limit.WRITE)
 def delete_sessions_user(
     user_id: UserId,
     _check_scope: Annotated[

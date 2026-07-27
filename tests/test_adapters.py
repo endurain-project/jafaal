@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import dataclasses
 import hashlib
 import logging
 from datetime import UTC, datetime
@@ -32,6 +31,8 @@ try:
     import fakeredis
 except ImportError:  # pragma: no cover
     fakeredis = None  # type: ignore[assignment]
+
+from conftest import replace_settings
 
 from jafaal.adapters import RedisStateStore
 
@@ -476,7 +477,7 @@ class TestStateStoreRateLimiter:
         original = jafaal.get_settings()
         # A wide window keeps every request in one fixed-window bucket for the
         # duration of the test (no minute/hour-boundary flakiness).
-        jafaal.configure(dataclasses.replace(original, rate_limit_sensitive="3/hour"))
+        jafaal.configure(replace_settings(original, sensitive="3/hour"))
         jafaal.configure_rate_limiter(StateStoreRateLimiter())
         try:
             for _ in range(3):
@@ -490,7 +491,7 @@ class TestStateStoreRateLimiter:
 
     def test_separate_ips_have_separate_counters(self):
         original = jafaal.get_settings()
-        jafaal.configure(dataclasses.replace(original, rate_limit_sensitive="1/hour"))
+        jafaal.configure(replace_settings(original, sensitive="1/hour"))
         limiter = StateStoreRateLimiter()
 
         @limiter.limit(rate_limit.SENSITIVE)
@@ -530,7 +531,7 @@ class TestStateStoreRateLimiter:
     def test_fails_open_when_state_store_unavailable(self, client, make_user):
         make_user(username="alice")
         original = jafaal.get_settings()
-        jafaal.configure(dataclasses.replace(original, rate_limit_sensitive="1/hour"))
+        jafaal.configure(replace_settings(original, sensitive="1/hour"))
 
         class _BrokenStore(jafaal.InMemoryStateStore):
             def increment(self, key, ttl_seconds):
@@ -550,7 +551,7 @@ class TestStateStoreRateLimiter:
 
     def test_fails_open_on_malformed_budget(self):
         original = jafaal.get_settings()
-        jafaal.configure(dataclasses.replace(original, rate_limit_sensitive="not-a-budget"))
+        jafaal.configure(replace_settings(original, sensitive="not-a-budget"))
         limiter = StateStoreRateLimiter()
 
         @limiter.limit(rate_limit.SENSITIVE)

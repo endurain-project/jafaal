@@ -1,11 +1,23 @@
 """Consistent SQLAlchemy error handling for CRUD functions.
 
 Provides the ``handle_db_errors`` decorator applied across JAFAAL's CRUD
-helpers. It converts unexpected :class:`~sqlalchemy.exc.SQLAlchemyError`
-into a 500 :class:`~jafaal.exceptions.InternalError` after rolling back the
-session and logging the error class name (never the SQL text, to avoid leaking
-PII or credentials — OWASP A09). ``JafaalError``, ``HTTPException``, and
-``IntegrityError`` are allowed to propagate for caller-specific handling.
+helpers. It converts an unexpected :class:`~sqlalchemy.exc.SQLAlchemyError` into
+a 500 :class:`~jafaal.exceptions.InternalError`, logging only the error class
+name (never the SQL text, to avoid leaking PII or credentials — OWASP A09).
+``JafaalError``, ``HTTPException``, and ``IntegrityError`` are allowed to
+propagate for caller-specific handling.
+
+**It does not roll back.** JAFAAL's CRUD layer runs inside the *caller's*
+transaction (see :func:`jafaal.orm.unit_of_work`), so rolling back here would
+silently discard the host's pending work as well as JAFAAL's — turning a
+recoverable constraint violation into host data loss. Unwinding is the unit of
+work's job: :func:`jafaal.orm.transactional` (JAFAAL's own endpoints) or the
+host's own transaction scope.
+
+A CRUD helper that means to *catch* an ``IntegrityError`` and carry on must
+therefore contain the failed flush in a savepoint — see
+:func:`jafaal.orm.savepoint` — because a failed flush leaves the surrounding
+transaction in a pending-rollback state that no later statement can use.
 """
 
 import inspect
@@ -16,61 +28,22 @@ from typing import Any, NoReturn, overload
 
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-from sqlalchemy.orm import Session
 
 import jafaal.exceptions as jafaal_exceptions
 
 logger = logging.getLogger(__name__)
 
 
-def _find_db_session(*args: Any, **kwargs: Any) -> Session | None:
-    """Find a SQLAlchemy Session instance in function arguments.
-
-    Args:
-        *args: Positional arguments to search.
-        **kwargs: Keyword arguments to search.
-
-    Returns:
-        The first Session instance found, or None.
-    """
-    for value in args:
-        if isinstance(value, Session):
-            return value
-    for value in kwargs.values():
-        if isinstance(value, Session):
-            return value
-    return None
-
-
-def _rollback_session(func_name: str, db_session: Session | None) -> None:
-    """Attempt a rollback on the database session, logging any failure.
-
-    Args:
-        func_name: Name of the calling function (for log context).
-        db_session: Database session to rollback, if any.
-    """
-    if db_session is not None:
-        try:
-            db_session.rollback()
-        except Exception as rollback_err:
-            logger.error(f"Rollback failed in {func_name}: {type(rollback_err).__name__}", exc_info=rollback_err)
-
-
-def _handle_db_error(db_err: SQLAlchemyError, func_name: str, db_session: Session | None) -> NoReturn:
-    """Handle database errors consistently.
-
-    Performs rollback, logs the error securely, and raises InternalError.
+def _handle_db_error(db_err: SQLAlchemyError, func_name: str) -> NoReturn:
+    """Log a database error securely and raise :class:`InternalError`.
 
     Args:
         db_err: The database error that occurred.
         func_name: Name of the function where the error occurred.
-        db_session: Database session to rollback, if any.
 
     Raises:
-        InternalError: Always raises 500 after logging and rollback.
+        InternalError: Always raises 500 after logging.
     """
-    _rollback_session(func_name, db_session)
-
     # Log only the exception class name — SQLAlchemy error strings
     # frequently embed the offending SQL statement and parameter values,
     # which can leak PII / credentials into logs (OWASP A09).
@@ -90,12 +63,12 @@ def handle_db_errors[T, **P](func: Callable[P, T]) -> Callable[P, T]: ...
 def handle_db_errors(func: Callable[..., Any]) -> Callable[..., Any]:
     """Decorator to handle SQLAlchemy database errors consistently.
 
-    Catches SQLAlchemyError exceptions, logs them, and converts to
-    InternalError with 500 status. Allows JafaalError, HTTPException,
-    and IntegrityError to pass through for caller-specific handling.
+    Catches ``SQLAlchemyError``, logs it, and converts it to a 500
+    ``InternalError``. Allows ``JafaalError``, ``HTTPException``, and
+    ``IntegrityError`` to pass through for caller-specific handling.
 
-    Automatically calls rollback on the database session if found
-    in function parameters.
+    Does **not** roll back: the transaction belongs to the caller (see the module
+    docstring).
 
     Supports both synchronous and asynchronous functions.
 
@@ -111,14 +84,10 @@ def handle_db_errors(func: Callable[..., Any]) -> Callable[..., Any]:
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             try:
                 return await func(*args, **kwargs)
-            except (HTTPException, jafaal_exceptions.JafaalError):
-                raise
-            except IntegrityError:
-                _rollback_session(func.__name__, _find_db_session(*args, **kwargs))
+            except (HTTPException, jafaal_exceptions.JafaalError, IntegrityError):
                 raise
             except SQLAlchemyError as db_err:
-                db_session = _find_db_session(*args, **kwargs)
-                _handle_db_error(db_err, func.__name__, db_session)
+                _handle_db_error(db_err, func.__name__)
 
         return async_wrapper
 
@@ -126,13 +95,9 @@ def handle_db_errors(func: Callable[..., Any]) -> Callable[..., Any]:
     def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
         try:
             return func(*args, **kwargs)
-        except (HTTPException, jafaal_exceptions.JafaalError):
-            raise
-        except IntegrityError:
-            _rollback_session(func.__name__, _find_db_session(*args, **kwargs))
+        except (HTTPException, jafaal_exceptions.JafaalError, IntegrityError):
             raise
         except SQLAlchemyError as db_err:
-            db_session = _find_db_session(*args, **kwargs)
-            _handle_db_error(db_err, func.__name__, db_session)
+            _handle_db_error(db_err, func.__name__)
 
     return sync_wrapper

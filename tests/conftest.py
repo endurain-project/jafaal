@@ -15,6 +15,7 @@ leak between tests.
 
 from __future__ import annotations
 
+import dataclasses
 import os
 
 import pytest
@@ -143,6 +144,63 @@ class RecordingEventSink:
 
 
 # --------------------------------------------------------------------------- #
+# Settings override helper
+# --------------------------------------------------------------------------- #
+
+#: Flat field name -> the settings group that owns it.
+#:
+#: Configuration is grouped by concern (``settings.tokens.algorithm``), which is
+#: the right shape for a host but verbose in a test that wants to flip one knob:
+#: ``dataclasses.replace(s, tokens=dataclasses.replace(s.tokens, algorithm=...))``
+#: three times per test buries the intent. ``replace_settings`` below lets a test
+#: name the field and routes it to its group. The real construction API is
+#: exercised directly in ``test_settings.py``.
+_SETTINGS_GROUPS: dict[str, type] = {
+    "secrets": jafaal.Secrets,
+    "tokens": jafaal.TokenSettings,
+    "sessions": jafaal.SessionSettings,
+    "passwords": jafaal.PasswordSettings,
+    "mfa": jafaal.MfaSettings,
+    "webauthn": jafaal.WebAuthnSettings,
+    "sso": jafaal.SsoSettings,
+    "network": jafaal.NetworkSettings,
+    "rate_limits": jafaal.RateLimitSettings,
+    "api_keys": jafaal.ApiKeySettings,
+    "audit": jafaal.AuditSettings,
+}
+
+_SETTINGS_GROUP_OF: dict[str, str] = {
+    field.name: group for group, cls in _SETTINGS_GROUPS.items() for field in dataclasses.fields(cls)
+}
+
+
+def replace_settings(original: jafaal.AuthSettings, **overrides) -> jafaal.AuthSettings:
+    """Return a copy of ``original`` with the named fields overridden.
+
+    Accepts top-level field names (``environment=``) and any grouped field by its
+    own name (``algorithm=``, ``trusted_proxies=``), routing each to the group
+    that declares it. Raises on an unknown name, so a renamed setting fails the
+    test loudly instead of being silently ignored.
+    """
+    grouped: dict[str, dict[str, object]] = {}
+    top_level: dict[str, object] = {}
+    root_fields = {field.name for field in dataclasses.fields(jafaal.AuthSettings)}
+
+    for name, value in overrides.items():
+        if name in root_fields:
+            top_level[name] = value
+        elif name in _SETTINGS_GROUP_OF:
+            grouped.setdefault(_SETTINGS_GROUP_OF[name], {})[name] = value
+        else:
+            raise TypeError(f"unknown AuthSettings field {name!r}")
+
+    for group, fields in grouped.items():
+        current = top_level.get(group, getattr(original, group))
+        top_level[group] = dataclasses.replace(current, **fields)
+    return dataclasses.replace(original, **top_level)
+
+
+# --------------------------------------------------------------------------- #
 # Fixtures
 # --------------------------------------------------------------------------- #
 
@@ -171,8 +229,10 @@ def _configure_jafaal(engine):
     """Configure the library once for the whole test session."""
     jafaal.configure(
         jafaal.AuthSettings(
-            secret_key="s" * 32,
-            fernet_key=Fernet.generate_key().decode(),
+            secrets=jafaal.Secrets(
+                secret_key="s" * 32,
+                fernet_key=Fernet.generate_key().decode(),
+            ),
             base_url="https://app.test",
             app_name="Test",
             # Not a deployed environment → refresh cookies are not ``Secure``,
@@ -257,20 +317,24 @@ def make_user():
 
         session = jafaal_orm.get_sessionmaker()()
         try:
-            user = Users(
-                username=username,
-                email=email or f"{username}@test.dev",
-                is_active=is_active,
-                is_superuser=is_superuser,
-                is_verified=is_verified,
-            )
-            if user_id is not None:
-                user.id = user_id
-            session.add(user)
-            session.commit()
-            session.refresh(user)
-            if password is not None:
-                credentials_crud.upsert_password_hash(user.id, password_hasher.hash_password(password), session)
+            # The suite acts as a host here, so it owns the transaction exactly
+            # as a host does: JAFAAL's CRUD only flushes, and one unit of work
+            # commits the user row and its credential together.
+            with jafaal_orm.unit_of_work(session):
+                user = Users(
+                    username=username,
+                    email=email or f"{username}@test.dev",
+                    is_active=is_active,
+                    is_superuser=is_superuser,
+                    is_verified=is_verified,
+                )
+                if user_id is not None:
+                    user.id = user_id
+                session.add(user)
+                session.flush()
+                session.refresh(user)
+                if password is not None:
+                    credentials_crud.upsert_password_hash(user.id, password_hasher.hash_password(password), session)
             session.expunge(user)
             return user
         finally:

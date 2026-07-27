@@ -1,9 +1,9 @@
 """Tests for the shared token-hashing helpers."""
 
-import dataclasses
 import hashlib
 
 import pytest
+from conftest import replace_settings
 
 import jafaal.settings as settings_mod
 import jafaal.token_hashing as token_hashing
@@ -34,14 +34,14 @@ def test_every_purpose_yields_a_distinct_digest():
 def test_subkey_is_32_bytes_and_not_the_raw_secret(purpose):
     subkey = token_hashing._subkey(purpose)
     assert len(subkey) == 32
-    assert subkey != settings_mod.get_settings().secret_key.encode()
+    assert subkey != settings_mod.get_settings().secrets.secret_key.encode()
 
 
 def test_subkeys_rebuild_after_reconfigure():
     original = settings_mod.get_settings()
     before = token_hashing.hmac_sha256("value", KeyPurpose.CSRF)
     try:
-        settings_mod.configure(dataclasses.replace(original, secret_key="d" * 32))
+        settings_mod.configure(replace_settings(original, secret_key="d" * 32))
         # A rotated signing secret must produce different digests, not stale
         # ones served from the subkey cache.
         assert token_hashing.hmac_sha256("value", KeyPurpose.CSRF) != before

@@ -54,7 +54,6 @@ import jafaal.mfa.crud as jafaal_mfa_crud
 import jafaal.orm as jafaal_orm
 import jafaal.ports as jafaal_ports
 import jafaal.schema as jafaal_schema
-import jafaal.scopes as jafaal_scopes
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.utils as jafaal_sessions_utils
 import jafaal.settings as jafaal_settings
@@ -870,15 +869,15 @@ class DefaultIdentityService:
         settings = jafaal_settings.get_settings()
         # Reject a token whose jti was revoked (RFC 7009), when the opt-in
         # denylist is enabled. A state-store outage fails open (see token_denylist).
-        if settings.access_token_denylist_enabled:
+        if settings.tokens.denylist_enabled:
             jti = claims.get("jti")
             if isinstance(jti, str) and jafaal_token_denylist.is_access_token_denied(jti):
                 raise jafaal_exceptions.InvalidTokenError("Access token has been revoked")
 
-        if settings.strict_session_binding:
+        if settings.sessions.strict_binding:
             self._enforce_session_binding(sid, user_id)
 
-        if settings.reauthorize_scopes_per_request:
+        if settings.tokens.reauthorize_scopes_per_request:
             scope = self._narrow_to_current_entitlement(scope, user)
 
         return self._build_principal(
@@ -898,11 +897,12 @@ class DefaultIdentityService:
         an administrator (or otherwise narrowing their rights) normally has no
         effect until the token expires. With
         :attr:`~jafaal.settings.AuthSettings.reauthorize_scopes_per_request` the
-        token's grant is re-checked against the catalog tier the account holds on
-        this request, so a demotion applies immediately.
+        token's grant is re-checked against what the host's
+        :class:`~jafaal.ports.ScopeResolver` grants the account on this request,
+        so a demotion applies immediately.
 
         The result is an **intersection**, never a union: a token can only ever
-        lose authority here. Re-deriving the tier outright would *grant* scopes a
+        lose authority here. Re-deriving the grant outright would *add* scopes a
         promoted user's older token never carried, which is a privilege change no
         issued credential should silently pick up.
 
@@ -911,10 +911,9 @@ class DefaultIdentityService:
             user: The freshly loaded account.
 
         Returns:
-            The scopes still backed by the account's current tier.
+            The scopes still backed by the account's current entitlement.
         """
-        catalog = jafaal_scopes.get_scope_catalog()
-        entitled = set(catalog.admin if user.is_superuser else catalog.regular)
+        entitled = set(jafaal_ports.get_scope_resolver().scopes_for(user))
         narrowed = [scope for scope in token_scopes if scope in entitled]
         if len(narrowed) != len(token_scopes):
             dropped = sorted(set(token_scopes) - entitled)

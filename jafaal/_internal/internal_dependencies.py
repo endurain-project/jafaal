@@ -777,7 +777,7 @@ async def validate_access_token_or_api_key(
     # --- API key path ---
     settings = jafaal_settings.get_settings()
     raw_key = api_key_header
-    if raw_key is None and api_key_query is not None and settings.allow_api_key_query_param:
+    if raw_key is None and api_key_query is not None and settings.api_keys.allow_query_param:
         logger.warning(
             "API key supplied via query string (?api_key=). "
             "This is a security risk: credentials appear in access logs "

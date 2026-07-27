@@ -20,11 +20,11 @@ import hashlib
 import json
 import struct
 from contextlib import contextmanager
-from dataclasses import replace
 from types import SimpleNamespace
 
 import cbor2
 import pytest
+from conftest import replace_settings
 from cryptography.hazmat.primitives import hashes as crypto_hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
@@ -64,7 +64,7 @@ def _auth_headers(client, username="alice", password="Str0ng!Pass"):
 def override_settings(**overrides):
     """Temporarily replace the installed settings, restoring them afterwards."""
     original = jafaal.get_settings()
-    jafaal.configure(replace(original, **overrides))
+    jafaal.configure(replace_settings(original, **overrides))
     try:
         yield
     finally:
@@ -122,18 +122,19 @@ def _register_credential(user_id, *, raw_id=b"cred-1", sign_count=0, label="My K
     """Persist a passkey directly (bypassing the ceremony) for auth/2FA tests."""
     session = jafaal_orm.get_sessionmaker()()
     try:
-        return webauthn_crud.create_credential(
-            user_id=user_id,
-            credential_id=bytes_to_base64url(raw_id),
-            public_key=base64.b64encode(public_key).decode("ascii"),
-            sign_count=sign_count,
-            transports="internal",
-            aaguid=None,
-            label=label,
-            backup_eligible=True,
-            backup_state=True,
-            db=session,
-        )
+        with jafaal_orm.unit_of_work(session):
+            return webauthn_crud.create_credential(
+                user_id=user_id,
+                credential_id=bytes_to_base64url(raw_id),
+                public_key=base64.b64encode(public_key).decode("ascii"),
+                sign_count=sign_count,
+                transports="internal",
+                aaguid=None,
+                label=label,
+                backup_eligible=True,
+                backup_state=True,
+                db=session,
+            )
     finally:
         session.close()
 
@@ -419,7 +420,7 @@ def test_passwordless_complete_enforces_user_verification(client, make_user, mon
 def test_login_requires_second_factor_when_enabled(client, make_user):
     user = make_user(username="alice")
     _register_credential(user.id, raw_id=b"cred-1")
-    with override_settings(webauthn_second_factor_enabled=True):
+    with override_settings(second_factor_enabled=True):
         resp = _login(client)
     assert resp.status_code == 202
     body = resp.json()
@@ -440,7 +441,7 @@ def test_second_factor_completes_login(client, make_user, mock_verify):
     user = make_user(username="alice")
     _register_credential(user.id, raw_id=b"cred-1")
 
-    with override_settings(webauthn_second_factor_enabled=True):
+    with override_settings(second_factor_enabled=True):
         challenge = _login(client)
         assert challenge.status_code == 202
         mfa_token = challenge.json()["mfa_token"]
@@ -472,7 +473,7 @@ def test_second_factor_uses_configured_user_verification(client, make_user, monk
 
     monkeypatch.setattr(webauthn_service._webauthn, "verify_authentication_response", _capture)
 
-    with override_settings(webauthn_second_factor_enabled=True, webauthn_user_verification="discouraged"):
+    with override_settings(second_factor_enabled=True, user_verification="discouraged"):
         challenge = _login(client)
         assert challenge.status_code == 202
         mfa_token = challenge.json()["mfa_token"]
@@ -495,7 +496,7 @@ def test_second_factor_rejects_foreign_credential(client, make_user):
     _register_credential(alice.id, raw_id=b"alice-key")
     bob_cred = _register_credential(bob.id, raw_id=b"bob-key")
 
-    with override_settings(webauthn_second_factor_enabled=True):
+    with override_settings(second_factor_enabled=True):
         challenge = _login(client, "alice")
         assert challenge.status_code == 202
         mfa_token = challenge.json()["mfa_token"]
@@ -513,7 +514,7 @@ def test_second_factor_rejects_foreign_credential(client, make_user):
 def test_second_factor_complete_without_pending_login_rejected(client, make_user, mock_verify):
     user = make_user(username="alice")
     _register_credential(user.id, raw_id=b"cred-1")
-    with override_settings(webauthn_second_factor_enabled=True):
+    with override_settings(second_factor_enabled=True):
         # No prior password login → no pending second factor.
         client.post(MFA_BEGIN, json={"mfa_token": "not-a-real-ticket"})
         resp = client.post(
@@ -534,7 +535,7 @@ def test_second_factor_rejects_a_passkey_assertion_without_the_ticket(client, ma
     user = make_user(username="alice")
     _register_credential(user.id, raw_id=b"cred-1")
 
-    with override_settings(webauthn_second_factor_enabled=True):
+    with override_settings(second_factor_enabled=True):
         # The victim performs the password step, opening the window.
         assert _login(client).status_code == 202
 
@@ -564,7 +565,7 @@ def test_ceremony_requires_configuration(client, make_user):
     make_user(username="alice")
     # The anonymous passwordless ceremony needs no token, so clearing base_url
     # (and the explicit RP settings) isolates the "WebAuthn not configured" path.
-    with override_settings(base_url="", webauthn_rp_id="", webauthn_origins=()):
+    with override_settings(base_url="", rp_id="", origins=()):
         resp = client.post(AUTH_BEGIN, json={"username": "alice"})
     assert resp.status_code == 503
 
@@ -572,7 +573,7 @@ def test_ceremony_requires_configuration(client, make_user):
 def test_explicit_rp_id_and_origins_are_used(client, make_user):
     make_user(username="alice")
     headers = _auth_headers(client)
-    with override_settings(webauthn_rp_id="passkeys.example", webauthn_origins=("https://passkeys.example",)):
+    with override_settings(rp_id="passkeys.example", origins=("https://passkeys.example",)):
         resp = client.post(REG_BEGIN, headers=headers)
     assert resp.status_code == 200
     assert resp.json()["rp"]["id"] == "passkeys.example"
@@ -591,21 +592,13 @@ def test_missing_dependency_guard(monkeypatch, make_user, db):
 
 
 def test_settings_reject_invalid_user_verification():
-    with pytest.raises(ValueError, match="webauthn_user_verification"):
-        jafaal.AuthSettings(
-            secret_key="s" * 32,
-            fernet_key=_a_fernet_key(),
-            webauthn_user_verification="sometimes",
-        )
+    with pytest.raises(ValueError, match="user_verification"):
+        jafaal.WebAuthnSettings(user_verification="sometimes")
 
 
 def test_settings_reject_invalid_attestation():
-    with pytest.raises(ValueError, match="webauthn_attestation"):
-        jafaal.AuthSettings(
-            secret_key="s" * 32,
-            fernet_key=_a_fernet_key(),
-            webauthn_attestation="indirect",
-        )
+    with pytest.raises(ValueError, match="attestation"):
+        jafaal.WebAuthnSettings(attestation="indirect")
 
 
 def _a_fernet_key() -> str:

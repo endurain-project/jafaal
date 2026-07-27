@@ -50,12 +50,13 @@ def _pkce():
 def _create_idp(slug="oidc", *, enabled=True, **kwargs):
     session = _session()
     try:
-        idp = idp_crud.create_identity_provider(
-            idp_schema.IdentityProviderCreate(
-                name=f"IdP {slug}", slug=slug, client_id="cid", client_secret="secret", enabled=enabled, **kwargs
-            ),
-            session,
-        )
+        with jafaal_orm.unit_of_work(session):
+            idp = idp_crud.create_identity_provider(
+                idp_schema.IdentityProviderCreate(
+                    name=f"IdP {slug}", slug=slug, client_id="cid", client_secret="secret", enabled=enabled, **kwargs
+                ),
+                session,
+            )
         session.expunge(idp)
         return idp
     finally:
@@ -66,17 +67,18 @@ def _create_oauth_state(idp_id, *, client_type="web", user_id=None, code_challen
     session = _session()
     try:
         state_id, nonce = oauth_state_utils.create_state_id_and_nonce()
-        oauth_state_crud.create_oauth_state(
-            db=session,
-            state_id=state_id,
-            nonce=nonce,
-            client_type=client_type,
-            ip_address=None,
-            idp_id=idp_id,
-            user_id=user_id,
-            code_challenge=code_challenge,
-            code_challenge_method="S256" if code_challenge else None,
-        )
+        with jafaal_orm.unit_of_work(session):
+            oauth_state_crud.create_oauth_state(
+                db=session,
+                state_id=state_id,
+                nonce=nonce,
+                client_type=client_type,
+                ip_address=None,
+                idp_id=idp_id,
+                user_id=user_id,
+                code_challenge=code_challenge,
+                code_challenge_method="S256" if code_challenge else None,
+            )
         return state_id
     finally:
         session.close()
@@ -85,7 +87,8 @@ def _create_oauth_state(idp_id, *, client_type="web", user_id=None, code_challen
 def _create_session_linked(user, state_id, session_id="sess-1"):
     session = _session()
     try:
-        session_utils.create_session(session_id, user, _fake_request(), None, session, oauth_state_id=state_id)
+        with jafaal_orm.unit_of_work(session):
+            session_utils.create_session(session_id, user, _fake_request(), None, session, oauth_state_id=state_id)
         return session_id
     finally:
         session.close()

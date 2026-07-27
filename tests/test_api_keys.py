@@ -13,7 +13,7 @@ from jafaal.exceptions import InvalidRequestError
 
 def test_generate_api_key_format():
     key = api_keys_utils.generate_api_key()
-    prefix = settings_mod.get_settings().api_key_prefix
+    prefix = settings_mod.get_settings().api_keys.prefix
     assert key.startswith(f"{prefix}_")
     # prefix + "_" + 43-char base64url token
     assert len(key.split("_", 1)[1]) >= 43

@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import (
-    APIRouter,
+    BackgroundTasks,
     Depends,
     Form,
     Query,
@@ -46,7 +46,7 @@ from jafaal._core import network
 logger = logging.getLogger(__name__)
 
 # Define the API router
-router = APIRouter()
+router = jafaal_orm.auth_router()
 
 
 def _validate_pkce_query_params(
@@ -366,6 +366,13 @@ def login_for_access_token(
         code_challenge_method,
     )
 
+    # A successful web login plants an HttpOnly refresh cookie, so the same
+    # off-site rejection that guards /refresh guards the write side here: it
+    # stops a cross-site page from logging the victim's browser into an
+    # attacker-controlled account (login CSRF / session fixation).
+    if client_type == jafaal_internal_dependencies.ClientType.WEB:
+        network.reject_off_site_request(request, operation="Login")
+
     client_ip = network.get_ip_address(request)
 
     # Per-source-IP backoff: refuse when this IP has sprayed enough failed logins
@@ -420,7 +427,7 @@ def login_for_access_token(
     # The pending login is satisfied by either factor: /auth/mfa/verify (TOTP or
     # backup code) or /auth/webauthn/mfa/* (passkey assertion).
     require_second_factor = mfa_service.is_mfa_enabled_for_user(user.id, db) or (
-        jafaal_settings.get_settings().webauthn_second_factor_enabled
+        jafaal_settings.get_settings().webauthn.second_factor_enabled
         and webauthn_crud.user_has_credentials(user.id, db)
     )
     if require_second_factor:
@@ -529,6 +536,11 @@ def verify_mfa_and_login(
         code_challenge_method,
     )
 
+    # Completing MFA is the second half of the same cookie-issuing login, so it
+    # carries the same off-site rejection as /auth/login.
+    if client_type == jafaal_internal_dependencies.ClientType.WEB:
+        network.reject_off_site_request(request, operation="Login")
+
     # Resolve the pending login from the opaque ticket. Because the ticket is a
     # 256-bit secret handed only to the caller that passed the password step,
     # this lookup is itself an authentication check — an attacker holding a
@@ -628,6 +640,7 @@ def verify_mfa_and_login(
 async def refresh_token(
     response: Response,
     request: Request,
+    background_tasks: BackgroundTasks,
     refresh: Annotated[
         jafaal_internal_dependencies.ValidatedRefreshToken,
         Depends(jafaal_internal_dependencies.get_validated_refresh_token),
@@ -741,12 +754,7 @@ async def refresh_token(
     # The refresh cookie's HttpOnly + SameSite=Strict attributes remain the
     # primary protection; both checks here are defense-in-depth.
     if client_type == "web":
-        if network.is_off_site_request(request, jafaal_settings.get_settings().resolved_csrf_trusted_origins):
-            logger.warning("Rejected off-site refresh request")
-            raise jafaal_exceptions.AuthorizationError(
-                "Refresh requests must originate from a trusted origin",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+        network.reject_off_site_request(request, operation="Refresh")
         if (
             x_csrf_token
             and session.csrf_token_hash is not None
@@ -766,8 +774,11 @@ async def refresh_token(
     is_reused, in_grace = jafaal_sessions_rotated_tokens_utils.check_token_reuse(refresh_token_value, db)
 
     if is_reused and not in_grace:
-        # Token theft detected - invalidate entire family
-        jafaal_sessions_rotated_tokens_utils.invalidate_token_family(session.token_family_id, db)
+        # Token theft detected - invalidate entire family. Runs in its own
+        # transaction because this request ends in a 401: revoking inside the
+        # request's unit of work would be rolled back with it, leaving the
+        # stolen token usable.
+        jafaal_sessions_rotated_tokens_utils.invalidate_token_family(session.token_family_id)
         # Best-effort security notification so the host can alert the user; the
         # 401 below is unaffected by delivery success/failure.
         await jafaal_ports.adispatch_event(
@@ -846,8 +857,12 @@ async def refresh_token(
         new_csrf_token=new_csrf_token,
     )
 
-    # Opportunistically refresh IdP tokens for all linked identity providers
-    await idp_utils.refresh_idp_tokens_if_needed(user.id, db)
+    # Opportunistically refresh IdP tokens for all linked identity providers.
+    # Deferred to a background task on its own session: it performs outbound
+    # HTTP to every linked provider, which must not run inside this request's
+    # transaction (it would hold the rotated session row's lock open across the
+    # network call) nor add the round trip to the client's refresh latency.
+    background_tasks.add_task(idp_utils.refresh_idp_tokens_if_needed, user.id)
 
     jafaal_audit.record(
         jafaal_audit.Event.TOKEN_REFRESHED,
@@ -953,6 +968,7 @@ async def logout(
 
 
 @router.post("/introspect", response_model=jafaal_schema.TokenIntrospectionResponse)
+@jafaal_rate_limit.limit(jafaal_rate_limit.WRITE)
 def introspect_token_endpoint(
     _scopes: Annotated[
         None,

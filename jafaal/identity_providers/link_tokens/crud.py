@@ -57,7 +57,7 @@ def create_idp_link_token(
     """
     db_token = idp_link_token_models.IdpLinkToken(**token_data.model_dump())
     db.add(db_token)
-    db.commit()
+    db.flush()
     db.refresh(db_token)
     return db_token
 
@@ -97,7 +97,7 @@ def mark_token_as_used(token_hash: str, db: Session) -> bool:
         .execution_options(synchronize_session=False)
     )
     result = cast(CursorResult[Any], db.execute(stmt))
-    db.commit()
+    db.flush()
 
     claimed = result.rowcount == 1
     if claimed:
@@ -122,7 +122,7 @@ def delete_expired_tokens(db: Session) -> int:
         idp_link_token_models.IdpLinkToken.expires_at < datetime.now(UTC)
     )
     result = cast(CursorResult[Any], db.execute(stmt))
-    db.commit()
+    db.flush()
 
     deleted_count = result.rowcount
     if deleted_count > 0:

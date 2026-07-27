@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import dataclasses
-
 import pytest
+from conftest import replace_settings
 
 import jafaal
 import jafaal.metadata as metadata
@@ -101,7 +100,7 @@ def test_origin_ignores_a_forged_host_header(client):
 
 def test_origin_falls_back_to_the_request_when_base_url_is_unset(client):
     original = jafaal.get_settings()
-    jafaal.configure(dataclasses.replace(original, base_url="", issuer="https://issuer.test"))
+    jafaal.configure(replace_settings(original, base_url="", issuer="https://issuer.test"))
     try:
         document = client.get(METADATA_URL).json()
         assert document["token_endpoint"] == "http://testserver/api/v1/auth/refresh"

@@ -14,7 +14,7 @@ import jafaal.identity_providers.links.crud as jafaal_identity_links_crud
 import jafaal.identity_providers.schema as idp_schema
 import jafaal.identity_providers.service as idp_service
 import jafaal.settings as jafaal_settings
-from jafaal.orm import UserId
+from jafaal.orm import UserId, session_scope, unit_of_work
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ def validate_redirect_url(redirect: str | None) -> None:
     # Handle custom URI schemes (e.g., gadgetbridge://callback)
     if "://" in value:
         scheme = value.split("://", 1)[0].lower()
-        allowed = jafaal_settings.get_settings().allowed_redirect_schemes
+        allowed = jafaal_settings.get_settings().sso.allowed_redirect_schemes
         if scheme not in allowed:
             raise jafaal_exceptions.InvalidRequestError(
                 f"Redirect scheme '{scheme}' is not allowed. "
@@ -275,7 +275,7 @@ def get_idp_template(template_id: str) -> dict[str, Any] | None:
     return IDP_TEMPLATES.get(template_id)
 
 
-async def refresh_idp_tokens_if_needed(user_id: UserId, db: Session) -> None:
+async def refresh_idp_tokens_if_needed(user_id: UserId) -> None:
     """
     Refreshes identity provider (IdP) tokens for a user if needed based on token expiration policies.
 
@@ -287,9 +287,18 @@ async def refresh_idp_tokens_if_needed(user_id: UserId, db: Session) -> None:
     refresh or clearing are logged but do not raise exceptions, allowing the application
     to continue normal operation even if IdP token management fails.
 
+    **It opens its own session and unit of work.** Refreshing an upstream token
+    means an HTTP round trip to the identity provider (up to a 10-second
+    timeout, once per linked provider). Doing that inside the caller's
+    transaction would hold the caller's row locks — on ``/auth/refresh``, the
+    session row that was just rotated — open across the network call, so a slow
+    or hanging IdP would serialise every concurrent refresh for that session.
+    Its writes are also semantically independent of the caller's: whether an
+    upstream token was renewed has no bearing on whether the login or rotation
+    that triggered the check should stand.
+
     Args:
         user_id (int): The ID of the user whose IdP tokens should be checked and refreshed.
-        db (Session): SQLAlchemy database session for performing database operations.
 
     Returns:
         None: This function performs side effects (token refresh/clearing) but returns nothing.
@@ -303,6 +312,22 @@ async def refresh_idp_tokens_if_needed(user_id: UserId, db: Session) -> None:
         - Token refresh attempts that fail are logged but the user session remains valid.
         - Tokens exceeding maximum age are cleared for security, requiring user re-authentication.
         - Individual IdP operation failures do not prevent checking other IdP links.
+    """
+    try:
+        with session_scope() as db, unit_of_work(db):
+            await _refresh_idp_tokens(user_id, db)
+    except Exception as err:
+        # Catch-all: this is opportunistic background work and must never
+        # surface to the caller (or take down a background task runner).
+        logger.warning(f"IdP token refresh failed for user {user_id}: {err}", exc_info=err)
+
+
+async def _refresh_idp_tokens(user_id: UserId, db: Session) -> None:
+    """Evaluate and apply the token policy for each of ``user_id``'s IdP links.
+
+    Args:
+        user_id: The user whose IdP links are evaluated.
+        db: Session owned by :func:`refresh_idp_tokens_if_needed`.
     """
     try:
         # Get all IdP links for this user
