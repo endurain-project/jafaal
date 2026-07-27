@@ -139,15 +139,55 @@ def verify_refresh_token(candidate: str, stored_hash: str) -> bool:
     return token_hashing.verify_hmac(candidate, token_hashing.KeyPurpose.REFRESH_SESSION, stored_hash)
 
 
+def session_absolute_deadline(created_at: datetime) -> datetime:
+    """Return the hard deadline a session created at ``created_at`` dies at.
+
+    Args:
+        created_at: When the session was first created. Preserved across
+            rotations, so the deadline does not move.
+
+    Returns:
+        ``created_at + absolute_timeout_hours``.
+    """
+    settings = jafaal_settings.get_settings()
+    return timeutils.ensure_aware_utc(created_at) + timedelta(hours=settings.sessions.absolute_timeout_hours)
+
+
+def session_expires_at(created_at: datetime, now: datetime) -> datetime:
+    """Return the ``expires_at`` to persist for a session being created/rotated.
+
+    The refresh token's own lifetime, **capped** at the session's absolute
+    deadline. The cap is what stops rotation from sliding the window forward
+    forever: ``expires_at`` was previously recomputed as
+    ``now + refresh_token_expire_days`` on every rotation, so a client that
+    refreshed even once per token lifetime kept a single login alive
+    indefinitely — the unbounded refresh-token lifetime RFC 9700 §4.14.2 calls
+    out. ``created_at`` is preserved across rotations, so the ceiling is fixed
+    at first login.
+
+    Args:
+        created_at: When the session was first created.
+        now: Current time.
+
+    Returns:
+        The earlier of the refresh-token expiry and the absolute deadline.
+    """
+    settings = jafaal_settings.get_settings()
+    refresh_expiry = now + timedelta(days=settings.tokens.refresh_token_expire_days)
+    return min(refresh_expiry, session_absolute_deadline(created_at))
+
+
 def validate_session_timeout(
     session: jafaal_sessions_models.UsersSessions,
 ) -> None:
     """
     Validate session hasn't exceeded idle or absolute timeout.
 
-    Only enforces when SESSION_IDLE_TIMEOUT_ENABLED=true.
-    Checks idle timeout (last_activity_at) and absolute
-    timeout (created_at).
+    The **absolute** timeout is always enforced: a session's lifetime is bounded
+    by policy, not by configuration. Only the *idle* check is opt-in via
+    ``idle_timeout_enabled`` — it is the one that trades convenience for
+    tightness, whereas an unbounded absolute lifetime is simply a session that
+    never dies.
 
     Args:
         session: The session to validate.
@@ -155,26 +195,22 @@ def validate_session_timeout(
     Raises:
         SessionExpiredError: 401 if the session has timed out.
     """
-    # Skip validation if timeouts are disabled
     settings = jafaal_settings.get_settings()
+    now = datetime.now(UTC)
+
+    # Absolute timeout — always enforced, measured from creation.
+    if now > session_absolute_deadline(session.created_at):
+        raise jafaal_exceptions.SessionExpiredError("Session expired. Please login again for security.")
+
+    # Idle timeout — opt-in.
     if not settings.sessions.idle_timeout_enabled:
         return
 
-    now = datetime.now(UTC)
-
-    # Check idle timeout
     idle_limit = timeutils.ensure_aware_utc(session.last_activity_at) + timedelta(
         hours=settings.sessions.idle_timeout_hours
     )
     if now > idle_limit:
         raise jafaal_exceptions.SessionExpiredError("Session expired due to inactivity")
-
-    # Check absolute timeout
-    absolute_limit = timeutils.ensure_aware_utc(session.created_at) + timedelta(
-        hours=settings.sessions.absolute_timeout_hours
-    )
-    if now > absolute_limit:
-        raise jafaal_exceptions.SessionExpiredError("Session expired. Please login again for security.")
 
 
 def create_session_object(
@@ -300,8 +336,10 @@ def create_session(
     Raises:
         JafaalError: If database error occurs.
     """
-    # Calculate the refresh token expiration date
-    exp = datetime.now(UTC) + timedelta(days=jafaal_settings.get_settings().tokens.refresh_token_expire_days)
+    # Calculate the refresh token expiration date, capped at the session's
+    # absolute deadline (which, for a brand-new session, starts now).
+    now = datetime.now(UTC)
+    exp = session_expires_at(now, now)
 
     # Compute HMAC-SHA256 of the CSRF token if provided
     csrf_hash = _hash_csrf_token(csrf_token) if csrf_token else None
@@ -321,33 +359,43 @@ def create_session(
     jafaal_sessions_crud.create_session(new_session, db)
 
 
-def edit_session(
+def rotate_session(
     session: jafaal_sessions_models.UsersSessions,
     request: Request,
     new_refresh_token: str,
     db: Session,
     new_csrf_token: str | None = None,
-) -> None:
+) -> bool:
     """
-    Update existing user session with new refresh token.
+    Atomically rotate a session onto a new refresh token.
+
+    The write is a compare-and-swap gated on the session still holding the
+    digest it had when the caller verified the presented token, so two requests
+    carrying the same refresh token cannot both rotate it.
 
     Args:
-        session: Current user session object to edit.
+        session: Current user session object to rotate.
         request: Incoming request containing session context.
         new_refresh_token: New refresh token to set.
         db: Database session for committing changes.
         new_csrf_token: Plain CSRF token to hash and store.
 
+    Returns:
+        True if this caller won the rotation, False if another request rotated
+        the session first.
+
     Raises:
         JafaalError: If database error occurs.
     """
-    # Calculate the refresh token expiration date
-    exp = datetime.now(UTC) + timedelta(days=jafaal_settings.get_settings().tokens.refresh_token_expire_days)
+    # The refresh token's lifetime, capped at the session's absolute deadline so
+    # rotating cannot extend the session past it. ``created_at`` is preserved by
+    # edit_session_object, so the ceiling is fixed at first login.
+    exp = session_expires_at(session.created_at, datetime.now(UTC))
 
     # Compute HMAC-SHA256 of the new CSRF token if provided
     csrf_hash = _hash_csrf_token(new_csrf_token) if new_csrf_token else None
 
-    # Update the session.
+    # Build the replacement row.
     updated_session = edit_session_object(
         request,
         hash_refresh_token(new_refresh_token),
@@ -356,8 +404,7 @@ def edit_session(
         csrf_hash,
     )
 
-    # Update the session in the database
-    jafaal_sessions_crud.edit_session(updated_session, db)
+    return jafaal_sessions_crud.claim_session_for_rotation(updated_session, session.refresh_token, db)
 
 
 def update_session_csrf_token(

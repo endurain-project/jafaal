@@ -350,35 +350,58 @@ def claim_session_for_token_exchange(
 
 
 @db_errors.handle_db_errors
-def edit_session(
+def claim_session_for_rotation(
     session: jafaal_sessions_schema.UsersSessionsInternal,
+    expected_refresh_token_hash: str,
     db: Session,
-) -> None:
+) -> bool:
     """
-    Update an existing user session with new field values.
+    Atomically rotate a session, but only if it still holds the old token.
+
+    A single conditional UPDATE gated on ``refresh_token`` still being the
+    digest the caller verified against. This is the compare-and-swap that makes
+    rotation safe under concurrency: the previous read-modify-write let two
+    requests carrying the *same* refresh token both pass the verify step and
+    both write, so the outcome depended on which UPDATE landed last — and the
+    only thing actually stopping a double rotation was the incidental UNIQUE
+    index on ``rotated_refresh_tokens.hashed_token``, which surfaced as an
+    unhandled ``IntegrityError`` (a 500) rather than a defined response.
+
+    Gated on the *stored digest* rather than a digest recomputed from the
+    presented token, because a session written before a ``secret_key`` rotation
+    carries a digest under a fallback subkey — recomputing would never match it
+    and every such session would stop rotating.
 
     Args:
-        session: Session data with fields to update.
+        session: The fully-built replacement row (see
+            :func:`jafaal.sessions.utils.edit_session_object`).
+        expected_refresh_token_hash: The digest the row must still carry for
+            this caller to own the rotation.
         db: SQLAlchemy database session.
 
+    Returns:
+        True if this caller claimed the rotation. False if another request
+        rotated the session first — the presented token is no longer current.
+
     Raises:
-        JafaalError: If session not found (404) or database
-            error occurs (500).
+        JafaalError: 500 if the database operation fails.
     """
-    # Get the session from the database
-    db_session = get_session_by_id(session.id, db)
-
-    # Check if the session exists
-    if not db_session:
-        raise jafaal_exceptions.NotFoundError(f"Session {session.id} not found")
-
-    # Update fields dynamically
-    session_data = session.model_dump(exclude_unset=True)
-    for key, value in session_data.items():
-        setattr(db_session, key, value)
-
+    values = session.model_dump(exclude_unset=True, exclude={"id"})
+    stmt = (
+        sa_update(jafaal_sessions_models.UsersSessions)
+        .where(
+            jafaal_sessions_models.UsersSessions.id == session.id,
+            jafaal_sessions_models.UsersSessions.refresh_token == expected_refresh_token_hash,
+        )
+        .values(**values)
+    )
+    result = cast(CursorResult[Any], db.execute(stmt))
     db.flush()
-    db.refresh(db_session)
+
+    if result.rowcount != 1:
+        logger.warning(f"Refresh rotation lost race for session {session.id[:8]}... (token already rotated)")
+        return False
+    return True
 
 
 @db_errors.handle_db_errors

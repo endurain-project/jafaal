@@ -276,9 +276,19 @@ class SessionSettings:
     """Session lifetime, revocation strictness, and refresh-cookie delivery.
 
     Attributes:
-        idle_timeout_enabled: Whether idle-session expiry is enforced.
+        idle_timeout_enabled: Whether *idle*-session expiry is enforced. The
+            absolute lifetime below is always enforced and does not depend on
+            this flag.
         idle_timeout_hours: Idle-session timeout, in hours.
-        absolute_timeout_hours: Absolute session lifetime, in hours.
+        absolute_timeout_hours: Hard ceiling on how long a session may live,
+            measured from ``created_at`` and **always enforced**. A session's
+            ``expires_at`` is capped at this deadline on every rotation, so
+            refreshing cannot slide the window forward indefinitely — without
+            the cap, a client that refreshes once per ``refresh_token_expire_days``
+            keeps one login alive forever, which is exactly the unbounded
+            refresh-token lifetime RFC 9700 §4.14.2 warns against. Defaults to
+            30 days: long enough not to be user-hostile, finite enough that a
+            stolen session eventually dies on its own.
         strict_binding: When ``True``, every access-token-authenticated request
             verifies the token's ``sid`` session still exists and is valid, so
             logout / single-session revocation is immediate instead of bounded
@@ -303,7 +313,7 @@ class SessionSettings:
 
     idle_timeout_enabled: bool = False
     idle_timeout_hours: int = 1
-    absolute_timeout_hours: int = 24
+    absolute_timeout_hours: int = 720
     strict_binding: bool = False
     refresh_cookie_name: str = "jafaal_refresh_token"
     refresh_cookie_path: str = "/api/v1/auth"
@@ -311,6 +321,13 @@ class SessionSettings:
     csrf_trusted_origins: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        if self.idle_timeout_hours <= 0:
+            raise ValueError("SessionSettings.idle_timeout_hours must be positive")
+        if self.absolute_timeout_hours <= 0:
+            raise ValueError(
+                "SessionSettings.absolute_timeout_hours must be positive: a session's lifetime is "
+                "always bounded, so there is no value meaning 'never expires'."
+            )
         if self.refresh_cookie_prefix not in ("", "__Secure-", "__Host-"):
             raise ValueError(
                 "SessionSettings.refresh_cookie_prefix must be '', '__Secure-', or '__Host-' "

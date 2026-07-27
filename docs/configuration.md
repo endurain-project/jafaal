@@ -188,8 +188,8 @@ the settings and invalidates settings-derived caches (e.g. the token manager).
 | `client_id` | `""` | Value of the RFC 9068 `client_id` claim; defaults to the resolved audience. |
 | `private_key` | `""` | PEM private key for asymmetric signing (required when `algorithm` is asymmetric). |
 | `private_key_fallbacks` | `()` | Verify-only PEM keys kept in the published JWKS during a signing-key rotation. |
-| `idle_timeout_hours` | `1` | Idle-session timeout (when enabled). |
-| `absolute_timeout_hours` | `24` | Absolute session lifetime. |
+| `idle_timeout_hours` | `1` | Idle-session timeout (opt-in via `idle_timeout_enabled`). |
+| `absolute_timeout_hours` | `720` | Hard ceiling on session lifetime, measured from creation. **Always enforced**, and `expires_at` is capped at it on every rotation, so refreshing cannot extend a login indefinitely. |
 | `base_url` | `""` | Public base URL; default JWT issuer/audience and SSO redirect base. |
 | `csrf_trusted_origins` | `()` | Origins allowed to drive the web refresh flow; defaults to the `base_url` origin. **Set this when the frontend is served from a different origin than the API.** |
 | `environment` | `"production"` | One of `production`, `demo`, `staging`, `development`, `local`, `test`, `testing`. The first three are treated as **deployed**; anything else is rejected at construction. |

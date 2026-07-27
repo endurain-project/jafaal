@@ -87,11 +87,22 @@ First release.
   produces exactly one retry, so anything further is reuse of a superseded token
   and invalidates the family too. The claim is an atomic conditional `UPDATE`,
   so concurrent replays cannot both win.
+- Rotation itself is a **compare-and-swap** gated on the session still holding
+  the digest the caller verified against, so two requests carrying the same
+  refresh token cannot both rotate it. The loser gets a defined
+  `stale_refresh_token` response instead of colliding on the rotated-token
+  unique index and surfacing as a 500.
+- **Session lifetime is always bounded.** `absolute_timeout_hours` (30 days by
+  default) is enforced regardless of the opt-in idle timeout, and a session's
+  `expires_at` is capped at that deadline on every rotation. Previously
+  `expires_at` was recomputed as `now + refresh_token_expire_days` each time, so
+  a client refreshing once per token lifetime kept one login alive forever — the
+  unbounded refresh-token lifetime RFC 9700 §4.14.2 warns against.
 - Every response carrying a token — login, `/auth/token`, `/auth/refresh`, and
   the MFA challenge — is sent `Cache-Control: no-store` and `Pragma: no-cache`
   (RFC 6749 §5.1), so no intermediary retains a credential.
-- Server-side sessions with idle and absolute timeouts, device metadata, and a
-  CSRF token bound to the session.
+- Server-side sessions with an always-enforced absolute lifetime, an optional
+  idle timeout, device metadata, and a CSRF token bound to the session.
 - RFC 7662 token introspection and RFC 7009 revocation.
 
 **Multi-factor**

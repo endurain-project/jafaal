@@ -17,6 +17,7 @@ from conftest import NATIVE_CLIENT_ID, WEB_CLIENT_ID, replace_settings
 import jafaal.orm as jafaal_orm
 import jafaal.sessions.utils as session_utils
 import jafaal.settings as jafaal_settings
+from jafaal._core import timeutils
 from jafaal._internal.token_manager import TokenType, get_token_manager
 from jafaal.sessions.models import UsersSessions
 from jafaal.sessions.rotated_refresh_tokens.models import RotatedRefreshToken
@@ -94,6 +95,54 @@ def test_refresh_rotates_the_refresh_cookie(client, make_user):
     rotated = _refresh_cookie(client)
     assert rotated is not None
     assert rotated != original  # the refresh token itself is rotated, not just the access token
+
+
+def test_rotation_does_not_extend_a_session_past_its_absolute_deadline(client, make_user, db):
+    """Refreshing slides ``expires_at`` forward, but never past the hard ceiling.
+
+    Without the cap a client refreshing once per token lifetime keeps a single
+    login alive forever — the unbounded refresh-token lifetime RFC 9700 §4.14.2
+    warns against.
+    """
+    make_user(username="alice")
+    _login(client)
+
+    row = db.query(UsersSessions).one()
+    created_at = row.created_at
+    session_id = row.id
+
+    # A 1-hour ceiling with a 7-day refresh token: the ceiling has to win.
+    with _override_settings(absolute_timeout_hours=1):
+        assert client.post(REFRESH).status_code == 200
+        db.expire_all()
+        rotated = db.query(UsersSessions).filter(UsersSessions.id == session_id).one()
+        deadline = timeutils.ensure_aware_utc(created_at) + timedelta(hours=1)
+        assert timeutils.ensure_aware_utc(rotated.expires_at) == deadline
+
+
+def test_concurrent_refresh_of_one_token_does_not_error(client, make_user):
+    """A duplicated refresh must produce a defined response, never a 500.
+
+    Two requests carrying the same refresh token used to both pass the verify
+    step and race to INSERT the same rotated-token row; the loser tripped the
+    unique index and surfaced as an unhandled IntegrityError.
+    """
+    make_user(username="alice")
+    _login(client)
+    token = _refresh_cookie(client)
+
+    first = client.post(REFRESH)
+    assert first.status_code == 200
+
+    # Re-present the same token twice more: the grace replay serves one, and the
+    # next is refused cleanly rather than blowing up.
+    _set_refresh_cookie(client, token)
+    assert client.post(REFRESH).status_code == 200
+
+    _set_refresh_cookie(client, token)
+    replayed_again = client.post(REFRESH)
+    assert replayed_again.status_code == 401
+    assert replayed_again.status_code != 500
 
 
 def test_refresh_without_cookie_is_unauthorized(client):

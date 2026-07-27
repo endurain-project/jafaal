@@ -134,14 +134,46 @@ def test_absolute_timeout_boundary_is_exclusive(elapsed_seconds, expires):
             session_utils.validate_session_timeout(row)
 
 
-def test_timeouts_are_not_enforced_when_disabled():
+def test_idle_timeout_is_opt_in_but_the_absolute_one_is_not():
+    """Disabling the idle timeout must not leave the session unbounded.
+
+    The idle check trades convenience for tightness, so it is opt-in. An
+    unbounded absolute lifetime is not a trade-off — it is a session that never
+    dies (RFC 9700 §4.14.2), so it is always enforced.
+    """
     start = datetime(2030, 1, 1, 12, 0, 0, tzinfo=UTC)
     row = _session_row(created_at=start, last_activity_at=start)
+
+    # Long idle, well inside the absolute window: idle is off, so this passes.
     with (
-        _settings(idle_timeout_enabled=False, idle_timeout_hours=1, absolute_timeout_hours=1),
-        freeze_time(session_utils, start + timedelta(days=365)),
+        _settings(idle_timeout_enabled=False, idle_timeout_hours=1, absolute_timeout_hours=720),
+        freeze_time(session_utils, start + timedelta(days=10)),
     ):
         session_utils.validate_session_timeout(row)
+
+    # Past the absolute deadline: still rejected, idle flag notwithstanding.
+    with (
+        _settings(idle_timeout_enabled=False, idle_timeout_hours=1, absolute_timeout_hours=720),
+        freeze_time(session_utils, start + timedelta(days=31)),
+        pytest.raises(exc.SessionExpiredError, match="Please login again"),
+    ):
+        session_utils.validate_session_timeout(row)
+
+
+def test_rotation_cannot_slide_expiry_past_the_absolute_deadline():
+    """``expires_at`` is capped, so refreshing cannot keep one login alive forever."""
+    start = datetime(2030, 1, 1, 12, 0, 0, tzinfo=UTC)
+
+    with _settings(absolute_timeout_hours=720, refresh_token_expire_days=7):
+        # Early in the session the refresh-token lifetime is the binding limit.
+        early = session_utils.session_expires_at(start, start + timedelta(days=1))
+        assert early == start + timedelta(days=8)
+
+        # Near the deadline the cap binds instead, and never exceeds it.
+        deadline = start + timedelta(hours=720)
+        late = session_utils.session_expires_at(start, start + timedelta(days=29))
+        assert late == deadline
+        assert session_utils.session_expires_at(start, deadline) == deadline
 
 
 # --------------------------------------------------------------------------- #

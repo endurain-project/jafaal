@@ -670,28 +670,45 @@ async def _grant_refresh_token(
         new_csrf_token,
     ) = jafaal_utils.create_tokens(user, token_manager, session.id, client)
 
+    # Captured before the claim: the conditional UPDATE may synchronise the ORM
+    # instance, and the rotated record must record the rotation the *old* token
+    # belonged to, not the one replacing it.
+    rotated_from_count = session.rotation_count
+    token_family_id = session.token_family_id
+
+    # Claim the rotation BEFORE recording the rotated token. The claim is a
+    # conditional UPDATE gated on the session still holding the digest verified
+    # above, so exactly one of N concurrent requests carrying the same refresh
+    # token proceeds. Doing it first is what keeps the loser off the rotated-
+    # token INSERT, whose UNIQUE index would otherwise raise an unhandled
+    # IntegrityError (a 500) instead of a defined response.
+    # Note: rotate_session increments rotation_count, refreshes
+    # last_rotation_at, and caps expires_at at the session's absolute deadline.
+    if not jafaal_sessions_utils.rotate_session(
+        session,
+        request,
+        new_refresh_token,
+        db,
+        new_csrf_token=new_csrf_token,
+    ):
+        # Another request rotated this session first. The presented token is no
+        # longer current; the client should retry, which will either replay that
+        # rotation's result in-grace or be told to log in again.
+        raise jafaal_exceptions.StaleRefreshTokenError(
+            "This refresh token was already rotated by a concurrent request. Retry with the current token."
+        )
+
     # Store the rotated (old) refresh token together with the encrypted
     # replacement so a retry within the grace window can replay it.
     # store_rotated_token hashes the old token with HMAC-SHA256 for lookup
     # and encrypts the replacement at rest.
     jafaal_sessions_rotated_tokens_utils.store_rotated_token(
         refresh_token_value,
-        session.token_family_id,
-        session.rotation_count,
+        token_family_id,
+        rotated_from_count,
         db,
         replacement_refresh_token=new_refresh_token,
         replacement_refresh_token_exp=new_refresh_token_exp,
-    )
-
-    # Edit session and store in database
-    # Note: edit_session automatically increments rotation_count
-    # and updates last_rotation_at
-    jafaal_sessions_utils.edit_session(
-        session,
-        request,
-        new_refresh_token,
-        db,
-        new_csrf_token=new_csrf_token,
     )
 
     # Opportunistically refresh IdP tokens for all linked identity providers.

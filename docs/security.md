@@ -46,10 +46,16 @@ protections and the deployment steps you are responsible for.
   as **theft** and invalidates the entire token family. A racing/duplicate
   refresh *within* grace replays the same replacement idempotently, **once** — a
   lost response produces exactly one retry, so a second replay is reuse and
-  invalidates the family too. Sessions
+  invalidates the family too. The rotation write is a **compare-and-swap** gated
+  on the session still holding the old digest, so two requests carrying the same
+  token cannot both rotate it. Sessions
   store the refresh token as a keyed HMAC-SHA256 digest — unforgeable without
   `secret_key`, and microseconds to verify, since a refresh token is a
   high-entropy server-minted JWT rather than a user-chosen secret.
+- **Sessions are always finite.** `absolute_timeout_hours` (30 days by default)
+  is enforced whether or not the optional idle timeout is on, and a session's
+  `expires_at` is capped at that deadline every time it rotates — so refreshing
+  extends a login up to the ceiling, never past it.
 - **CSRF binding** for web clients, with a bootstrap rule for page reloads (the
   in-memory CSRF token is lost on reload while the `HttpOnly` cookie persists).
   `/refresh` additionally rejects any request the browser marks as

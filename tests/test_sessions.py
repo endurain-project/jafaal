@@ -372,6 +372,52 @@ def test_token_exchange_claim_has_exactly_one_winner_under_real_concurrency(conc
         assert claimed.refresh_token.startswith("hash-")
 
 
+def test_rotation_claim_has_exactly_one_winner_under_real_concurrency(concurrent_db):
+    # Rotation is a compare-and-swap gated on the session still holding the old
+    # refresh-token digest. Under genuine parallelism exactly one caller may
+    # rotate; the losers must be told so cleanly rather than colliding on the
+    # rotated-token unique index and surfacing as a 500.
+    with concurrent_db.session() as setup, jafaal_orm.unit_of_work(setup):
+        session_utils.create_session(
+            "race-rotate",
+            SimpleNamespace(id=concurrent_db.user_id),
+            _request(),
+            "initial-rt",
+            setup,
+        )
+
+    with concurrent_db.session() as read:
+        original = sessions_crud.get_session_by_id("race-rotate", read)
+        original_digest = original.refresh_token
+        created_at = original.created_at
+
+    def _rotate(index):
+        with concurrent_db.session() as session, jafaal_orm.unit_of_work(session):
+            row = sessions_crud.get_session_by_id("race-rotate", session)
+            updated = session_utils.edit_session_object(
+                _request(),
+                f"new-digest-{index}",
+                session_utils.session_expires_at(created_at, datetime.now(UTC)),
+                row,
+                None,
+            )
+            return sessions_crud.claim_session_for_rotation(updated, original_digest, session)
+
+    outcomes = _run_concurrently(_rotate)
+    assert [err for _, err in outcomes if err is not None] == []
+    results = [result for result, _ in outcomes]
+    assert results.count(True) == 1, "more than one rotation of the same token committed"
+    assert results.count(False) == len(outcomes) - 1
+
+    # The row moved off the old digest exactly once, and the count advanced by
+    # one rotation rather than by however many requests raced.
+    with concurrent_db.session() as check:
+        rotated = sessions_crud.get_session_by_id("race-rotate", check)
+        assert rotated.refresh_token.startswith("new-digest-")
+        assert rotated.refresh_token != original_digest
+        assert rotated.rotation_count == original.rotation_count + 1
+
+
 def test_concurrent_rotation_of_one_token_records_a_single_row(concurrent_db):
     # Two refreshes presenting the SAME refresh token must not both record a
     # rotation: the unique index on the token hash is what makes the rotation
