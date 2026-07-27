@@ -33,6 +33,7 @@ async def begin_idp_authorization(
     client_id: str,
     redirect_uri: str,
     client_state: str | None = None,
+    requested_scope: str | None = None,
 ) -> str:
     """Mint an OAuth state and build the identity provider's authorization URL.
 
@@ -50,6 +51,10 @@ async def begin_idp_authorization(
         redirect_uri: The client's redirect URI, already matched exactly against
             its registration.
         client_state: The client's opaque ``state``, echoed back with the code.
+        requested_scope: The client's ``scope`` request, already validated. Kept
+            on the state so it can narrow the tokens minted at redemption; it is
+            JAFAAL's *own* scope, unrelated to the upstream provider scopes sent
+            to the identity provider.
 
     Returns:
         The identity provider's authorization URL to redirect the browser to.
@@ -78,6 +83,7 @@ async def begin_idp_authorization(
         client_id=client_id,
         redirect_uri=redirect_uri,
         client_state=client_state,
+        requested_scope=requested_scope,
     )
 
     logger.debug(f"OAuth state created: {state_id[:8]}... for IdP {idp.slug} (client={client_id})")

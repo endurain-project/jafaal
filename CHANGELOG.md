@@ -11,6 +11,42 @@ exception `code` slugs, the HTTP surface, the token/cookie wire formats, and the
 `jafaal.audit` event slugs are covered by SemVer; anything under `_core` /
 `_internal`, log message text, and default security parameters are not.
 
+## [Unreleased]
+
+### Fixed
+
+- **Identity-provider callbacks now accept an RFC 6749 §4.1.2.1 error response.**
+  `code` was a required query parameter, so a provider that refused the request
+  (the user pressing "Deny", `login_required`, `temporarily_unavailable`, …) —
+  which returns `error` and `state` with **no** `code` — produced a validation
+  error instead of a redirect: the OAuth state stayed redeemable until its TTL
+  lapsed, and a native app waiting on its callback listener never learned the
+  flow had failed. The error now travels the same path as a success (state
+  resolution, IdP binding, single-use claim) and is delivered to the client's
+  registered `redirect_uri`. Codes outside the RFC 6749 / OIDC Core registries
+  are reported as `access_denied`, `error_description` is bounded, and
+  `error_uri` is logged rather than forwarded. New audit event:
+  `idp.authorization_denied`.
+- **A client's requested `scope` is now honoured (RFC 6749 §3.3, §6).** The
+  `scope` parameter was validated against the catalog and the client's ceiling
+  and then discarded, so a client asking for `profile` was issued a token
+  carrying its user's entire account. The requested scope is now a third
+  narrowing bound on every issuance path: direct login, the authorization-code
+  exchange (persisted on the OAuth state across the browser round trip), and MFA
+  / passkey second-factor completion (carried on the pending-login ticket, so
+  finishing in two steps cannot widen what step one asked for). Refresh-token
+  rotation replays the presented token's own `scope` claim, so a rotation can no
+  longer restore a scope the grant never had.
+- `POST /auth/introspect` and `POST /auth/revoke` now send `Cache-Control:
+  no-store` (RFC 7662 §4; RFC 7009 §2.1 inheriting RFC 6749 §5.1). Both handle a
+  live credential, and neither was marked uncacheable.
+
+### Migrations
+
+- `0006_oauth_state_requested_scope` adds a nullable `requested_scope` column to
+  `oauth_states`. Idempotent, like the preceding revisions: a fresh database
+  gets it from the baseline, and the revision only adds what is missing.
+
 ## [1.0.0]
 
 First release.

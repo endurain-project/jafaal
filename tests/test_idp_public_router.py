@@ -314,3 +314,110 @@ def test_native_login_and_token_exchange_endpoints_are_gone(client, make_user):
 
     assert client.get(f"{BASE}/login/goog?code_challenge={challenge}&code_challenge_method=S256").status_code == 404
     assert client.post(f"{BASE}/session/{session_id}/tokens", json={"code_verifier": _verifier}).status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# GET /callback/{slug} — RFC 6749 §4.1.2.1 error responses from the provider
+# --------------------------------------------------------------------------- #
+
+
+def test_callback_provider_error_redirects_to_the_client(client, monkeypatch):
+    # A refused authorization request arrives as error + state and NO code.
+    # Requiring `code` would make this a 422 validation error, strand the
+    # waiting client, and leave the state redeemable.
+    idp = _create_idp(slug="goog")
+    state_id = _create_oauth_state(idp.id, client_state="opaque-123")
+
+    async def fake_handle(*args, **kwargs):
+        raise AssertionError("an error response must never reach the callback processor")
+
+    monkeypatch.setattr(idp_service.idp_service, "handle_callback", fake_handle)
+
+    resp = client.get(
+        f"{BASE}/callback/goog?error=access_denied&error_description=User+said+no&state={state_id}",
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+    location = resp.headers["location"]
+    assert location.startswith(NATIVE_REDIRECT_URI)
+    params = _query(location)
+    assert params["error"] == "access_denied"
+    assert params["error_description"] == "User said no"
+    assert params["state"] == "opaque-123"
+    assert "code" not in params
+
+
+def test_callback_provider_error_consumes_the_state(client, monkeypatch):
+    # The authorization request is over either way, so its state must not stay
+    # redeemable — otherwise an attacker who can force an error response gets a
+    # live state back.
+    idp = _create_idp(slug="goog")
+    state_id = _create_oauth_state(idp.id)
+
+    async def fake_handle(*args, **kwargs):
+        raise AssertionError("the state was still live after an error response")
+
+    monkeypatch.setattr(idp_service.idp_service, "handle_callback", fake_handle)
+
+    first = client.get(f"{BASE}/callback/goog?error=access_denied&state={state_id}", follow_redirects=False)
+    assert first.status_code == 302
+    replay = client.get(f"{BASE}/callback/goog?code=abc&state={state_id}", follow_redirects=False)
+    assert replay.status_code == 400
+
+
+def test_callback_forwards_oidc_error_codes_unchanged(client):
+    # OIDC Core §3.1.2.6 codes are as legitimate as RFC 6749's, and a client
+    # branches on them (login_required means "retry without prompt=none").
+    idp = _create_idp(slug="goog")
+    state_id = _create_oauth_state(idp.id)
+
+    resp = client.get(f"{BASE}/callback/goog?error=login_required&state={state_id}", follow_redirects=False)
+    assert _query(resp.headers["location"])["error"] == "login_required"
+
+
+def test_callback_collapses_unregistered_error_codes(client):
+    # JAFAAL is the authorization server its own client is talking to, so what
+    # comes back must be from the registry that client parses against — not a
+    # verbatim proxy of an arbitrary (and, before the state is claimed,
+    # unauthenticated) query parameter.
+    idp = _create_idp(slug="goog")
+    state_id = _create_oauth_state(idp.id)
+
+    resp = client.get(f"{BASE}/callback/goog?error=vendor_specific_boom&state={state_id}", follow_redirects=False)
+    assert _query(resp.headers["location"])["error"] == "access_denied"
+
+
+def test_callback_does_not_forward_provider_error_uri(client):
+    # error_uri is a provider-supplied URL a client UI would render as a "more
+    # information" link. Nothing obliges this server to hand one on.
+    idp = _create_idp(slug="goog")
+    state_id = _create_oauth_state(idp.id)
+
+    resp = client.get(
+        f"{BASE}/callback/goog?error=server_error&error_uri=https://evil.test/phish&state={state_id}",
+        follow_redirects=False,
+    )
+    assert "error_uri" not in _query(resp.headers["location"])
+
+
+def test_callback_truncates_a_provider_error_description(client):
+    idp = _create_idp(slug="goog")
+    state_id = _create_oauth_state(idp.id)
+
+    resp = client.get(
+        f"{BASE}/callback/goog?error=server_error&error_description={'x' * 5000}&state={state_id}",
+        follow_redirects=False,
+    )
+    assert len(_query(resp.headers["location"])["error_description"]) == 200
+
+
+def test_callback_without_code_or_error_is_reported_to_the_client(client):
+    # Neither half of a well-formed authorization response.
+    idp = _create_idp(slug="goog")
+    state_id = _create_oauth_state(idp.id)
+
+    resp = client.get(f"{BASE}/callback/goog?state={state_id}", follow_redirects=False)
+    assert resp.status_code == 302
+    params = _query(resp.headers["location"])
+    assert params["error"] == "access_denied"
+    assert "code" not in params

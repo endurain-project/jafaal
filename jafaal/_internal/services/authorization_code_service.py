@@ -206,6 +206,13 @@ def complete_pkce_exchange(
     user = cast(jafaal_ports.UserProtocol, session_obj.users)
     jafaal_user_guards.check_user_is_active(user)
 
+    # RFC 6749 §3.3: the ``scope`` the client asked for in the authorization
+    # request bounds what the code may be redeemed for. It was validated then
+    # (catalog membership and the client's ceiling) and parked on the state
+    # across the browser round trip; applying it here is what makes asking for
+    # less actually mean something.
+    requested_scope = tuple((oauth_state.requested_scope or "").split())
+
     session_id = session_obj.id
     (
         _,
@@ -214,7 +221,7 @@ def complete_pkce_exchange(
         refresh_token_exp,
         refresh_token,
         csrf_token,
-    ) = jafaal_utils.create_tokens(user, token_manager, session_id, client)
+    ) = jafaal_utils.create_tokens(user, token_manager, session_id, client, requested_scope)
 
     # Claim the session and persist the refresh-token digest in one atomic
     # conditional UPDATE. This closes the check-then-act race where two
@@ -245,7 +252,7 @@ def complete_pkce_exchange(
         refresh_token,
         refresh_token_exp,
         csrf_token,
-        jafaal_utils.granted_scope(user, client),
+        jafaal_utils.granted_scope(user, client, requested_scope),
     )
 
 

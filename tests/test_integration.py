@@ -4,6 +4,9 @@ Covers the login → refresh → logout lifecycle, the MFA-required branch, and 
 object-level authorization guard on the session endpoints.
 """
 
+import base64
+import json
+
 import pyotp
 from conftest import LIMITED_CLIENT_ID, NATIVE_CLIENT_ID, WEB_CLIENT_ID
 
@@ -12,6 +15,13 @@ import jafaal.mfa.crud as mfa_crud
 import jafaal.orm as jafaal_orm
 from jafaal import scopes as scopes_mod
 from jafaal._core import crypto
+
+
+def _access_scopes(access_token: str) -> set[str]:
+    """Return the ``scope`` claim of an access token, as a set."""
+    payload = access_token.split(".")[1]
+    payload += "=" * (-len(payload) % 4)
+    return set(json.loads(base64.urlsafe_b64decode(payload))["scope"].split())
 
 
 def _login(client, username="alice", password="Str0ng!Pass"):
@@ -163,6 +173,114 @@ def test_client_scope_ceiling_narrows_the_token(client, make_user):
 
     assert limited["scope"] == scopes_mod.PROFILE
     assert set(limited["scope"].split()) < set(full["scope"].split())
+
+
+# --------------------------------------------------------------------------- #
+# RFC 6749 §3.3 — the client's requested scope is a real bound
+# --------------------------------------------------------------------------- #
+
+
+def test_requested_scope_narrows_the_issued_token(client, make_user):
+    # §3.3 exists so a client can ask for less than it is entitled to. Validating
+    # the request and then issuing the full set anyway is the opposite of what
+    # asking for less is for.
+    make_user(username="alice", is_superuser=True)
+    resp = client.post(
+        "/api/v1/auth/login",
+        data={
+            "username": "alice",
+            "password": "Str0ng!Pass",
+            "client_id": NATIVE_CLIENT_ID,
+            "scope": scopes_mod.PROFILE,
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["scope"] == scopes_mod.PROFILE
+    # §5.1: the advertised scope and the token's own claim cannot disagree.
+    assert _access_scopes(body["access_token"]) == {scopes_mod.PROFILE}
+
+
+def test_omitted_scope_still_grants_everything_the_client_may_hold(client, make_user):
+    # No request means "whatever this client and user are entitled to" — the
+    # narrowing must not turn into a mandatory parameter.
+    make_user(username="alice", is_superuser=True)
+    body = client.post(
+        "/api/v1/auth/login",
+        data={"username": "alice", "password": "Str0ng!Pass", "client_id": NATIVE_CLIENT_ID},
+    ).json()
+    assert set(body["scope"].split()) == set(scopes_mod.get_scope_catalog().admin)
+
+
+def test_refresh_cannot_widen_a_narrowed_grant(client, make_user):
+    # RFC 6749 §6: a rotation MUST NOT include a scope the original grant did
+    # not carry. Re-deriving from the account would undo the narrowing on the
+    # very first refresh — silently, and for the life of the session.
+    make_user(username="alice", is_superuser=True)
+    login_body = client.post(
+        "/api/v1/auth/login",
+        data={
+            "username": "alice",
+            "password": "Str0ng!Pass",
+            "client_id": NATIVE_CLIENT_ID,
+            "scope": scopes_mod.PROFILE,
+        },
+    ).json()
+
+    refreshed = client.post(
+        "/api/v1/auth/token",
+        data={"grant_type": "refresh_token", "refresh_token": login_body["refresh_token"]},
+    )
+    assert refreshed.status_code == 200
+    body = refreshed.json()
+    assert body["scope"] == scopes_mod.PROFILE
+    assert _access_scopes(body["access_token"]) == {scopes_mod.PROFILE}
+
+
+def test_requested_scope_survives_the_mfa_challenge(client, make_user):
+    # The client asks at step one; a two-step login must not be a way to get
+    # back what step one gave up.
+    user = make_user(username="mfauser", is_superuser=True)
+    secret = pyotp.random_base32()
+    _enable_mfa(user.id, secret)
+
+    challenge = client.post(
+        "/api/v1/auth/login",
+        data={
+            "username": "mfauser",
+            "password": "Str0ng!Pass",
+            "client_id": NATIVE_CLIENT_ID,
+            "scope": scopes_mod.PROFILE,
+        },
+    ).json()
+
+    resp = client.post(
+        "/api/v1/auth/mfa/verify",
+        json={
+            "mfa_token": challenge["mfa_token"],
+            "mfa_code": pyotp.TOTP(secret).now(),
+            "client_id": NATIVE_CLIENT_ID,
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["scope"] == scopes_mod.PROFILE
+
+
+def test_requested_scope_outside_the_client_ceiling_is_refused(client, make_user):
+    # Unknown or out-of-ceiling scopes are a client bug worth reporting, not a
+    # value to silently drop.
+    make_user(username="alice", is_superuser=True)
+    resp = client.post(
+        "/api/v1/auth/login",
+        data={
+            "username": "alice",
+            "password": "Str0ng!Pass",
+            "client_id": LIMITED_CLIENT_ID,
+            "scope": scopes_mod.USERS_WRITE,
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "invalid_scope"
 
 
 def test_refresh_rotates_tokens(client, make_user):

@@ -11,7 +11,7 @@ contains no backend-specific code or memory-vs-Redis split.
 import json
 import logging
 import secrets
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import NoReturn, Protocol, runtime_checkable
@@ -138,11 +138,18 @@ class PendingLogin:
             ceiling, so letting the ticket be redeemed by a different one would
             let a login begun for a narrow, body-delivery client finish as a
             wide, cookie-delivery one.
+        scope: The ``scope`` requested on the password step (RFC 6749 §3.3),
+            re-applied when the second factor completes the login. Carried here
+            rather than re-read from the second-factor request for the same
+            reason as ``client_id``: a value the caller re-supplies at step two
+            is a value it can widen at step two. Empty means "whatever this
+            client and user are entitled to".
     """
 
     user_id: UserId
     username: str
     client_id: str
+    scope: tuple[str, ...] = ()
 
 
 def _datetime_from_epoch(epoch_seconds: int) -> datetime:
@@ -234,7 +241,13 @@ class PendingMFAStore(Protocol):
     brute force.
     """
 
-    def add_pending_login(self, username: str, user_id: UserId, client_id: str) -> str: ...
+    def add_pending_login(
+        self,
+        username: str,
+        user_id: UserId,
+        client_id: str,
+        scope: Sequence[str] = (),
+    ) -> str: ...
 
     def get_pending_login(self, mfa_token: str) -> PendingLogin | None: ...
 
@@ -575,9 +588,9 @@ class PendingMFALogin:
         return f"{_key_prefix()}:mfa:pending:{hashing.sha256_hex(mfa_token)}"
 
     @staticmethod
-    def _encode(user_id: UserId, username: str, client_id: str) -> bytes:
+    def _encode(user_id: UserId, username: str, client_id: str, scope: Sequence[str]) -> bytes:
         """Serialise a pending login for storage."""
-        return json.dumps({"uid": str(user_id), "un": username, "cid": client_id}).encode()
+        return json.dumps({"uid": str(user_id), "un": username, "cid": client_id, "sc": list(scope)}).encode()
 
     @staticmethod
     def _decode(raw: bytes) -> PendingLogin | None:
@@ -587,11 +600,25 @@ class PendingMFALogin:
             # The id is stored in its string form and coerced back to the host
             # user table's primary-key type (``int`` or ``uuid.UUID``) on read,
             # so the store works for both integer- and UUID-keyed hosts.
-            return PendingLogin(coerce_user_id(payload["uid"]), payload["un"], payload["cid"])
+            # ``sc`` is read defensively: an entry written by an older release
+            # predates it, and an in-flight login must not be invalidated by a
+            # deploy.
+            return PendingLogin(
+                coerce_user_id(payload["uid"]),
+                payload["un"],
+                payload["cid"],
+                tuple(payload.get("sc") or ()),
+            )
         except (TypeError, ValueError, KeyError, AttributeError):
             return None
 
-    def add_pending_login(self, username: str, user_id: UserId, client_id: str) -> str:
+    def add_pending_login(
+        self,
+        username: str,
+        user_id: UserId,
+        client_id: str,
+        scope: Sequence[str] = (),
+    ) -> str:
         """Record a pending MFA login and return its opaque ticket.
 
         Args:
@@ -599,6 +626,8 @@ class PendingMFALogin:
             user_id: The user the pending login belongs to.
             client_id: The registered client the login was started for; the
                 second factor must be completed against the same one.
+            scope: The ``scope`` requested on the password step, re-applied when
+                the second factor completes the login.
 
         Returns:
             The ``mfa_token`` to hand to the caller; it must be presented to
@@ -608,7 +637,7 @@ class PendingMFALogin:
         try:
             self._get_state().set(
                 self._pending_key(mfa_token),
-                self._encode(user_id, username, client_id),
+                self._encode(user_id, username, client_id, scope),
                 ttl_seconds=self.PENDING_MFA_TTL_SECONDS,
             )
         except StateStoreUnavailableError as err:

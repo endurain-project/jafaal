@@ -389,12 +389,19 @@ class ValidatedRefreshToken:
             (RFC 9068 §2.2). Read from the signed token rather than the request,
             so the caller cannot switch delivery mode or widen scope at rotation
             time — the client is fixed when the session is created.
+        scope: The scopes this grant actually carries, read from the signed
+            token's ``scope`` claim. RFC 6749 §6 forbids a rotation from issuing
+            a scope the original grant did not include, so this is replayed as
+            the bound on the replacement tokens — otherwise a client that asked
+            for a narrow scope at login would silently get the full set back on
+            its first refresh.
     """
 
     token: str
     user_id: jafaal_orm.UserId
     session_id: str
     client: jafaal_settings.OAuthClient
+    scope: tuple[str, ...] = ()
 
 
 def _validate_and_read_refresh_token(
@@ -446,7 +453,19 @@ def _validate_and_read_refresh_token(
             "Invalid token: it was issued to a client that is no longer registered"
         )
 
-    return ValidatedRefreshToken(token=refresh_token, user_id=user_id, session_id=sid, client=client)
+    # ``scope`` is essential in the claims registry, so validation above has
+    # already rejected a token without it.
+    scope = jafaal_token_manager.scopes_from_claims(claims)
+    if scope is None:
+        raise jafaal_exceptions.InvalidTokenError("Invalid token: 'scope' claim must be a space-delimited string")
+
+    return ValidatedRefreshToken(
+        token=refresh_token,
+        user_id=user_id,
+        session_id=sid,
+        client=client,
+        scope=tuple(scope),
+    )
 
 
 def get_validated_refresh_token(

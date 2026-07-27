@@ -137,6 +137,7 @@ class Event:
     IDP_EMAIL_LINKED: Final = "idp.email_linked"
     IDP_EMAIL_LINK_REFUSED: Final = "idp.email_link_refused"
     IDP_DISCOVERY_FAILED: Final = "idp.discovery_failed"
+    IDP_AUTHORIZATION_DENIED: Final = "idp.authorization_denied"
     OAUTH_STATE_REPLAY_REJECTED: Final = "oauth_state.replay_rejected"
     OAUTH_STATE_IP_MISMATCH: Final = "oauth_state.ip_mismatch"
 

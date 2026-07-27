@@ -45,6 +45,10 @@ class OAuthState(Base):
             exchange (RFC 6749 §4.1.3). Every browser redirect the flow emits
             targets this URI and nothing else.
         client_state: The client's opaque ``state``, echoed back with the code.
+        requested_scope: The space-delimited ``scope`` the client asked for in
+            the authorization request (RFC 6749 §3.3), replayed as a narrowing
+            bound when the code is redeemed. Distinct from the *upstream*
+            provider scopes on :class:`~jafaal.identity_providers.models.IdentityProvider`.
         authorization_code_hash: Keyed digest of the issued authorization code.
         identity_provider: Relationship to IdentityProvider model.
         users: Relationship to Users model (nullable).
@@ -157,6 +161,12 @@ class OAuthState(Base):
         String(256),
         nullable=True,
         comment="Opaque client 'state', echoed back with the authorization code (RFC 6749 4.1.2)",
+    )
+
+    requested_scope: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+        comment="Space-delimited 'scope' from the authorization request, re-applied at token exchange",
     )
 
     authorization_code_hash: Mapped[str | None] = mapped_column(

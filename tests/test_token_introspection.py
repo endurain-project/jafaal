@@ -135,3 +135,31 @@ def test_revoke_access_token_with_denylist_enabled(client, make_user, db):
     finally:
         jafaal.configure(original)
         jafaal.reset_state_store()
+
+
+# --------------------------------------------------------------------------- #
+# Cacheability
+# --------------------------------------------------------------------------- #
+
+
+def test_introspection_responses_are_not_cacheable(client, make_user, db):
+    # RFC 7662 §4: the body describes a live credential — its subject, scope and
+    # remaining validity — so an intermediary must not retain it.
+    user = make_user(username="alice")
+    access = _login_web(client).json()["access_token"]
+    key = _introspect_key(db, user.id)
+
+    resp = client.post(INTROSPECT, data={"token": access}, headers={"X-API-Key": key})
+    assert resp.headers["cache-control"] == "no-store"
+    assert resp.headers["pragma"] == "no-cache"
+
+
+def test_revocation_responses_are_not_cacheable(client, make_user):
+    # The request body carried a live credential; a response cached against it
+    # is a cached credential (RFC 7009 §2.1, inheriting RFC 6749 §5.1).
+    make_user(username="alice")
+    access = _login_web(client).json()["access_token"]
+
+    resp = client.post(REVOKE, data={"token": access})
+    assert resp.headers["cache-control"] == "no-store"
+    assert resp.headers["pragma"] == "no-cache"

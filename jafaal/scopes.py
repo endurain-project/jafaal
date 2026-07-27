@@ -14,7 +14,7 @@ a subset of ``admin``) at import and whenever a host configures one.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from jafaal._core.registry import ConfigSlot
@@ -146,6 +146,38 @@ def configure_scopes(catalog: ScopeCatalog) -> None:
 def get_scope_catalog() -> ScopeCatalog:
     """Return the configured scope catalog (JAFAAL's own until configured)."""
     return _scope_catalog.get()
+
+
+def narrow_to_requested(granted: tuple[str, ...], requested: Sequence[str] | None) -> tuple[str, ...]:
+    """Intersect what an account holds with what the client actually asked for.
+
+    The third and last bound on a credential's authority, after the host's
+    :class:`~jafaal.ports.ScopeResolver` and the registered client's ceiling.
+    RFC 6749 §3.3 exists so a client can ask for *less* than it could have, and
+    §5.1 makes the granted ``scope`` part of the token response — without this
+    bound a client requesting ``profile`` is handed its user's entire account
+    anyway, which is the opposite of what asking for less is for.
+
+    Strictly narrowing, and skipped entirely when nothing was requested
+    (``None`` or empty means "whatever this client and user are entitled to").
+    A requested scope the account does not hold is *dropped* rather than
+    refused: §3.3 explicitly permits the server to issue a narrower scope than
+    was requested, and every JAFAAL token response advertises what was actually
+    granted. Requests for scopes that are unknown to the catalog or outside the
+    client's ceiling are rejected earlier, at the endpoint.
+
+    Args:
+        granted: Scopes the account holds, already narrowed by the client's
+            ceiling.
+        requested: The client's ``scope`` request, if it made one.
+
+    Returns:
+        The scopes the credential should carry.
+    """
+    if not requested:
+        return granted
+    wanted = set(requested)
+    return tuple(scope for scope in granted if scope in wanted)
 
 
 def reset_scopes() -> None:

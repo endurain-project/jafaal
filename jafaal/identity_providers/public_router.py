@@ -41,6 +41,43 @@ logger = logging.getLogger(__name__)
 # Define the API router
 router = jafaal_orm.auth_router()
 
+#: Authorization-response error codes forwarded to JAFAAL's own client unchanged
+#: — RFC 6749 §4.1.2.1 plus the OIDC Core 1.0 §3.1.2.6 additions. Between them
+#: they cover every reason a provider legitimately refuses.
+#:
+#: A code outside the set is provider-specific (or simply attacker-supplied: the
+#: callback is a public endpoint, so the query string is not trustworthy until a
+#: state has been resolved and claimed). It is logged and reported as
+#: ``access_denied``, so the error response JAFAAL emits stays inside the
+#: registry its own clients parse against.
+_PASSTHROUGH_AUTHORIZATION_ERRORS: frozenset[str] = frozenset(
+    {
+        # RFC 6749 §4.1.2.1
+        "invalid_request",
+        "unauthorized_client",
+        "access_denied",
+        "unsupported_response_type",
+        "invalid_scope",
+        "server_error",
+        "temporarily_unavailable",
+        # OIDC Core 1.0 §3.1.2.6
+        "interaction_required",
+        "login_required",
+        "account_selection_required",
+        "consent_required",
+        "invalid_request_uri",
+        "invalid_request_object",
+        "request_not_supported",
+        "request_uri_not_supported",
+        "registration_not_supported",
+    }
+)
+
+#: Longest ``error_description`` forwarded to the client. The provider (or, before
+#: the state is claimed, whoever hit the endpoint) controls this string and a
+#: redirect URL is a bounded resource, so it is truncated rather than trusted.
+_MAX_ERROR_DESCRIPTION_CHARS = 200
+
 
 def _append_query_params(url: str, params: dict[str, str]) -> str:
     """Append query parameters to a URL or relative path, preserving any existing query."""
@@ -48,6 +85,36 @@ def _append_query_params(url: str, params: dict[str, str]) -> str:
     query = dict(parse_qsl(parts.query, keep_blank_values=True))
     query.update(params)
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+
+def _provider_error_params(error: str, error_description: str | None) -> dict[str, str]:
+    """Translate a provider's authorization error into JAFAAL's own error response.
+
+    JAFAAL is the authorization server its client is talking to, so what goes
+    back to that client must be JAFAAL's error — not a verbatim proxy of the
+    upstream's. Unrecognised codes collapse to ``access_denied`` and the
+    description is bounded.
+
+    ``error_uri`` is deliberately **not** forwarded. RFC 6749 §4.1.2.1 governs
+    the error *this* server returns, and nothing obliges it to hand its clients
+    a provider-supplied URL that a UI would render as a "more information" link.
+    It is logged instead, where an operator can follow it.
+
+    Args:
+        error: The ``error`` parameter as received.
+        error_description: The ``error_description`` parameter as received.
+
+    Returns:
+        The error parameters to deliver to the client's redirect URI.
+    """
+    code = error if error in _PASSTHROUGH_AUTHORIZATION_ERRORS else "access_denied"
+    if code != error:
+        logger.info(f"Identity provider returned unregistered authorization error {error!r}; reporting access_denied")
+    params = {"error": code}
+    description = (error_description or "").strip()
+    if description:
+        params["error_description"] = description[:_MAX_ERROR_DESCRIPTION_CHARS]
+    return params
 
 
 def _audit_state_ip_mismatch(
@@ -169,8 +236,11 @@ async def handle_callback(
         Depends(jafaal_token_manager.get_token_manager),
     ],
     db: Annotated[Session, Depends(jafaal_orm.get_db)],
-    code: str = Query(..., description="Authorization code from IdP"),
+    code: str | None = Query(None, description="Authorization code from IdP; absent on an error response"),
     state: str = Query(..., description="State parameter for CSRF protection"),
+    error: str | None = Query(None, description="RFC 6749 §4.1.2.1 error code, when the provider refused"),
+    error_description: str | None = Query(None, description="Human-readable detail accompanying `error`"),
+    error_uri: str | None = Query(None, description="Provider's error page; logged, never forwarded"),
 ):
     """Handle the OAuth callback from an identity provider.
 
@@ -188,6 +258,12 @@ async def handle_callback(
     including failures — RFC 6749 §4.1.2.1, and the only way a native app waiting
     on its callback listener ever learns the flow failed.
 
+    A refused authorization request arrives as ``error`` (plus ``state``) with no
+    ``code``, so ``code`` is optional here: requiring it would turn every "the
+    user pressed Deny" into a validation error, leave the state redeemable, and
+    strand the waiting client — the exact outcome the redirect rule exists to
+    prevent.
+
     Args:
         request: The incoming HTTP request.
         response: The HTTP response object.
@@ -197,6 +273,9 @@ async def handle_callback(
         db: Database session.
         code: Authorization code received from the identity provider.
         state: The opaque state id minted at initiation.
+        error: The provider's error code, when it refused the request.
+        error_description: Human-readable detail accompanying ``error``.
+        error_uri: The provider's error page; logged, never forwarded onward.
 
     Returns:
         RedirectResponse: To the client's registered redirect URI.
@@ -267,6 +346,34 @@ async def handle_callback(
             raise jafaal_exceptions.InvalidRequestError("Invalid or expired OAuth state")
 
         logger.debug(f"OAuth callback received for state {state[:8]}... (purpose={oauth_state.purpose})")
+
+        # RFC 6749 §4.1.2.1: a refused authorization request comes back as
+        # ``error`` (+ the ``state``) and no ``code``. It reaches this point
+        # through exactly the same gauntlet as a success — state resolution, the
+        # IdP binding, the single-use claim — because the authorization request
+        # is finished either way and its state must not stay redeemable.
+        if error:
+            if error_uri:
+                logger.info(f"Identity provider {idp.slug} error_uri: {error_uri}")
+            jafaal_audit.record(
+                jafaal_audit.Event.IDP_AUTHORIZATION_DENIED,
+                outcome=jafaal_audit.Outcome.FAILURE,
+                level=logging.WARNING,
+                idp=idp.slug,
+                ip=network.get_ip_address(request),
+                purpose=oauth_state.purpose,
+                error=error,
+            )
+            logger.info(f"Identity provider {idp.slug} refused the authorization request: {error}")
+            return _return_to_client(oauth_state, _provider_error_params(error, error_description))
+
+        if not code:
+            # Neither half of a well-formed authorization response. Reported to
+            # the client the same way any other post-validation failure is.
+            logger.warning(f"OAuth callback for {idp.slug} carried neither 'code' nor 'error'")
+            raise jafaal_exceptions.InvalidRequestError(
+                "The identity provider callback carried neither an authorization code nor an error."
+            )
 
         # Process the OAuth callback (service will handle both DB and cookie state)
         result = await idp_service.idp_service.handle_callback(

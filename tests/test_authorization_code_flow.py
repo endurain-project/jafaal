@@ -125,14 +125,15 @@ def _stub_callback(monkeypatch, user):
     monkeypatch.setattr(idp_service.idp_service, "handle_callback", _handle_callback)
 
 
-def _complete_authorization(client, monkeypatch, make_user, *, state="opaque-state"):
+def _complete_authorization(client, monkeypatch, make_user, *, state="opaque-state", scope=None, superuser=False):
     """Run /authorize → callback and return ``(verifier, code, echoed_state)``."""
-    user = make_user(username="ada")
+    user = make_user(username="ada", is_superuser=superuser)
     _create_idp()
     _stub_callback(monkeypatch, user)
 
     verifier, challenge = _pkce()
-    started = _authorize(client, challenge=challenge, state=state)
+    extra = {"scope": scope} if scope is not None else {}
+    started = _authorize(client, challenge=challenge, state=state, **extra)
     assert started.status_code == 302
     upstream_state = parse_qs(urlsplit(started.headers["location"]).query)["state"][0]
 
@@ -298,6 +299,25 @@ def test_a_scope_outside_the_catalog_is_refused(client):
 
     assert response.status_code == 302
     assert parse_qs(urlsplit(response.headers["location"]).query)["error"] == ["invalid_scope"]
+
+
+def test_requested_scope_survives_the_browser_round_trip(client, monkeypatch, make_user):
+    # The authorization request and the token exchange are separated by a
+    # redirect to the IdP and back, so a scope that is not parked on the state
+    # row is a scope that silently reverts to "everything" at redemption.
+    verifier, code, _ = _complete_authorization(
+        client, monkeypatch, make_user, scope=jafaal.scopes.PROFILE, superuser=True
+    )
+    body = _redeem(client, code=code, verifier=verifier).json()
+
+    assert body["scope"] == jafaal.scopes.PROFILE
+
+
+def test_an_omitted_scope_still_grants_the_full_set(client, monkeypatch, make_user):
+    verifier, code, _ = _complete_authorization(client, monkeypatch, make_user, superuser=True)
+    body = _redeem(client, code=code, verifier=verifier).json()
+
+    assert set(body["scope"].split()) == set(jafaal.scopes.get_scope_catalog().admin)
 
 
 # --------------------------------------------------------------------------- #

@@ -347,7 +347,9 @@ def complete_second_factor(
         ip=network.get_ip_address(request),
         ceremony="second_factor",
     )
-    return jafaal_utils.complete_login(response, request, user, client, token_manager, db)
+    # Scope comes from the claimed ticket — the password step is where the client
+    # asked — so completing with a passkey cannot widen the grant.
+    return jafaal_utils.complete_login(response, request, user, client, token_manager, db, claimed.scope)
 
 
 # ===========================================================================

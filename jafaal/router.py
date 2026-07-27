@@ -94,6 +94,7 @@ def _replay_in_grace_refresh(
     token_user_id: jafaal_orm.UserId,
     replay_refresh_token: str,
     replay_refresh_token_exp: datetime,
+    granted_scope: tuple[str, ...],
     token_manager: jafaal_token_manager.TokenManager,
     db: Session,
 ) -> dict:
@@ -118,6 +119,8 @@ def _replay_in_grace_refresh(
         token_user_id: User ID from the refresh token's ``sub`` claim.
         replay_refresh_token: The claimed replacement refresh token.
         replay_refresh_token_exp: Expiry of the replacement refresh token.
+        granted_scope: Scopes the replayed grant carries, so the reissued access
+            token matches the one whose response was lost.
         token_manager: Token manager for minting the access/CSRF tokens.
         db: Database session.
 
@@ -137,7 +140,7 @@ def _replay_in_grace_refresh(
 
     # Mint a fresh, stateless access token (safe to re-issue every retry).
     replay_access_token_exp, replay_access_token = jafaal_utils.mint_access_token(
-        replay_user, token_manager, session.id, client
+        replay_user, token_manager, session.id, client, granted_scope
     )
 
     # A cookie client lost its CSRF token along with the rotation response, so
@@ -157,7 +160,7 @@ def _replay_in_grace_refresh(
         replay_refresh_token,
         replay_refresh_token_exp,
         replay_csrf_token,
-        jafaal_utils.granted_scope(replay_user, client),
+        jafaal_utils.granted_scope(replay_user, client, granted_scope),
     )
 
 
@@ -271,6 +274,11 @@ def login_for_access_token(
             is locked, or ``client_id`` is missing or unregistered.
     """
     client = authorization_code_service.resolve_login_client(form_data.client_id, request)
+    # RFC 6749 §3.3: the caller may ask for less than it is entitled to. Validated
+    # here (catalog membership + the client's ceiling) and carried through to the
+    # token minter — including across the MFA challenge — so a narrow request
+    # cannot be widened by finishing the login in two steps.
+    requested_scope = tuple(form_data.scopes)
     authorization_code_service.validate_requested_scope(" ".join(form_data.scopes), client)
 
     client_ip = network.get_ip_address(request)
@@ -335,7 +343,9 @@ def login_for_access_token(
         # the caller's proof that *it* satisfied the password factor; without
         # it the second factor alone cannot complete a login.
         with _translate_store_outage():
-            mfa_token = pending_mfa_store.add_pending_login(form_data.username, user.id, client.client_id)
+            mfa_token = pending_mfa_store.add_pending_login(
+                form_data.username, user.id, client.client_id, requested_scope
+            )
 
         # Don't reset failed login attempts yet - wait for MFA verification
         # This prevents bypassing lockout by triggering MFA flow
@@ -347,7 +357,7 @@ def login_for_access_token(
         failed_attempts.reset_attempts(form_data.username)
         failed_attempts.reset_ip_attempts(client_ip)
 
-    return jafaal_utils.complete_login(response, request, user, client, token_manager, db)
+    return jafaal_utils.complete_login(response, request, user, client, token_manager, db, requested_scope)
 
 
 @router.post(
@@ -490,7 +500,10 @@ def verify_mfa_and_login(
         failed_attempts.reset_attempts(username)
         failed_attempts.reset_ip_attempts(network.get_ip_address(request))
 
-    return jafaal_utils.complete_login(response, request, user, client, token_manager, db)
+    # The scope comes from the claimed ticket, not from this request: the
+    # password step is where the client asked, and re-reading it here would let
+    # step two widen what step one requested.
+    return jafaal_utils.complete_login(response, request, user, client, token_manager, db, claimed.scope)
 
 
 async def _grant_refresh_token(
@@ -632,6 +645,7 @@ async def _grant_refresh_token(
                 token_user_id,
                 replay[0],
                 replay[1],
+                refresh.scope,
                 token_manager,
                 db,
             )
@@ -671,6 +685,11 @@ async def _grant_refresh_token(
 
     # Create the new token bundle first so the rotated record can persist the
     # replacement refresh token used for idempotent in-grace replay.
+    #
+    # The presented token's own ``scope`` claim bounds the replacement: RFC 6749
+    # §6 forbids a rotation from adding a scope the original grant did not carry,
+    # so re-deriving it from the account would silently undo a narrow request on
+    # the very first refresh.
     (
         session_id,
         new_access_token_exp,
@@ -678,7 +697,7 @@ async def _grant_refresh_token(
         new_refresh_token_exp,
         new_refresh_token,
         new_csrf_token,
-    ) = jafaal_utils.create_tokens(user, token_manager, session.id, client)
+    ) = jafaal_utils.create_tokens(user, token_manager, session.id, client, refresh.scope)
 
     # Captured before the claim: the conditional UPDATE may synchronise the ORM
     # instance, and the rotated record must record the rotation the *old* token
@@ -747,7 +766,7 @@ async def _grant_refresh_token(
         new_refresh_token,
         new_refresh_token_exp,
         new_csrf_token,
-        jafaal_utils.granted_scope(user, client),
+        jafaal_utils.granted_scope(user, client, refresh.scope),
     )
 
 
@@ -859,6 +878,7 @@ async def authorize(
             client_id=client_id,
             redirect_uri=redirect_uri,
             client_state=state,
+            requested_scope=scope,
         )
     except jafaal_exceptions.OAuthError as err:
         return _authorize_error_redirect(redirect_uri, err, state)
@@ -1168,6 +1188,7 @@ async def logout(
 @router.post("/introspect", response_model=jafaal_schema.TokenIntrospectionResponse)
 @jafaal_rate_limit.limit(jafaal_rate_limit.WRITE)
 def introspect_token_endpoint(
+    response: Response,
     _scopes: Annotated[
         None,
         Security(jafaal_dependencies.check_auth_scopes, scopes=[jafaal_scopes.AUTH_INTROSPECT]),
@@ -1187,6 +1208,7 @@ def introspect_token_endpoint(
     ``jafaal.configure_api_key_scopes([..., jafaal.scopes.AUTH_INTROSPECT])``.
 
     Args:
+        response: The HTTP response object, marked ``no-store``.
         token: The token to introspect (form field).
         token_type_hint: Optional RFC 7662 hint; ignored (the token's ``typ``
             claim is authoritative).
@@ -1194,12 +1216,17 @@ def introspect_token_endpoint(
     Returns:
         The RFC 7662 introspection response.
     """
+    # RFC 7662 §4: the response describes a live credential (its subject, scope,
+    # and remaining validity), so it must not be cached by an intermediary any
+    # more than the token itself would be.
+    jafaal_utils.apply_no_store(response)
     return token_admin_service.introspect_token(token, token_manager, db)
 
 
 @router.post("/revoke", response_model=None, status_code=status.HTTP_200_OK)
 @jafaal_rate_limit.limit(jafaal_rate_limit.WRITE)
 def revoke_token_endpoint(
+    response: Response,
     token: Annotated[str, Form()],
     token_manager: Annotated[
         jafaal_token_manager.TokenManager,
@@ -1216,6 +1243,7 @@ def revoke_token_endpoint(
     unknown token.
 
     Args:
+        response: The HTTP response object, marked ``no-store``.
         token: The token to revoke (form field).
         token_type_hint: Optional RFC 7009 hint; ignored (the token's ``typ``
             claim is authoritative).
@@ -1223,5 +1251,8 @@ def revoke_token_endpoint(
     Returns:
         An empty object (RFC 7009 mandates a 200 with no error).
     """
+    # The request body carried a live credential; a cached response keyed on it
+    # is a cached credential. RFC 7009 §2.1 inherits RFC 6749 §5.1's no-store.
+    jafaal_utils.apply_no_store(response)
     token_admin_service.revoke_token(token, token_manager, db)
     return {}

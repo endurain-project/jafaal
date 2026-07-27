@@ -130,6 +130,7 @@ def create_oauth_state(
     client_id: str | None = None,
     redirect_uri: str | None = None,
     client_state: str | None = None,
+    requested_scope: str | None = None,
 ) -> oauth_state_models.OAuthState:
     """Create and persist a new OAuth state with a 10-minute expiry.
 
@@ -153,6 +154,10 @@ def create_oauth_state(
             its registration. Every browser redirect this flow later emits goes
             here and nowhere else.
         client_state: The client's opaque ``state``, echoed back with the code.
+        requested_scope: The space-delimited ``scope`` from the authorization
+            request, already validated against the catalog and the client's
+            ceiling. Replayed as a narrowing bound when the code is redeemed, so
+            a client that asked for less is not handed more.
 
     Returns:
         The persisted OAuthState instance.
@@ -176,6 +181,7 @@ def create_oauth_state(
         client_id=client_id,
         redirect_uri=redirect_uri,
         client_state=client_state,
+        requested_scope=requested_scope,
     )
 
     db.add(oauth_state)

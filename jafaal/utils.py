@@ -5,6 +5,7 @@ Provides credential verification, JWT/CSRF token creation, and the
 both password and PKCE login flows.
 """
 
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -20,6 +21,7 @@ import jafaal.audit as jafaal_audit
 import jafaal.credentials.crud as jafaal_credentials_crud
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.ports as jafaal_ports
+import jafaal.scopes as jafaal_scopes
 import jafaal.sessions.utils as jafaal_sessions_utils
 import jafaal.settings as jafaal_settings
 from jafaal._core import network
@@ -102,6 +104,7 @@ def create_tokens(
     token_manager: jafaal_token_manager.TokenManager,
     session_id: str | None = None,
     client: jafaal_settings.OAuthClient | None = None,
+    requested_scope: Sequence[str] | None = None,
 ) -> tuple[str, datetime, str, datetime, str, str]:
     """
     Generates session tokens for a user, including access token, refresh token, and CSRF token.
@@ -112,6 +115,9 @@ def create_tokens(
         session_id (str | None, optional): An optional session ID. If not provided, a new unique session ID is generated.
         client: The registered client the tokens are issued to. Its scope
             ceiling narrows what the tokens carry.
+        requested_scope: The ``scope`` the client asked for (RFC 6749 §3.3),
+            applied as a final narrowing bound. ``None`` means "everything this
+            client and user are entitled to".
 
     Returns:
         tuple[str, datetime, str, datetime, str, str]:
@@ -129,11 +135,11 @@ def create_tokens(
 
     # Create the access, refresh tokens and csrf token
     access_token_exp, access_token = token_manager.create_token(
-        session_id, user, jafaal_token_manager.TokenType.ACCESS, client
+        session_id, user, jafaal_token_manager.TokenType.ACCESS, client, requested_scope
     )
 
     refresh_token_exp, refresh_token = token_manager.create_token(
-        session_id, user, jafaal_token_manager.TokenType.REFRESH, client
+        session_id, user, jafaal_token_manager.TokenType.REFRESH, client, requested_scope
     )
 
     csrf_token = token_manager.create_csrf_token()
@@ -153,6 +159,7 @@ def mint_access_token(
     token_manager: jafaal_token_manager.TokenManager,
     session_id: str,
     client: jafaal_settings.OAuthClient | None = None,
+    requested_scope: Sequence[str] | None = None,
 ) -> tuple[datetime, str]:
     """
     Mint a single fresh access token for an existing session.
@@ -166,11 +173,13 @@ def mint_access_token(
         token_manager: Token manager responsible for token creation.
         session_id: Existing session identifier to bind the token to.
         client: The registered client the token is issued to.
+        requested_scope: The scopes the replayed grant carries, so the reissued
+            access token cannot come back wider than the one it replaces.
 
     Returns:
         Tuple of (access_token_exp, access_token).
     """
-    return token_manager.create_token(session_id, user, jafaal_token_manager.TokenType.ACCESS, client)
+    return token_manager.create_token(session_id, user, jafaal_token_manager.TokenType.ACCESS, client, requested_scope)
 
 
 def _is_secure_cookie_environment() -> bool:
@@ -326,13 +335,19 @@ def build_token_response(
     return body
 
 
-def granted_scope(user: jafaal_ports.UserProtocol, client: jafaal_settings.OAuthClient) -> str:
+def granted_scope(
+    user: jafaal_ports.UserProtocol,
+    client: jafaal_settings.OAuthClient,
+    requested_scope: Sequence[str] | None = None,
+) -> str:
     """Return the space-delimited scopes a token for ``user``/``client`` carries.
 
-    Mirrors exactly what :meth:`TokenManager.create_token` stamps, so the
-    advertised ``scope`` and the token's ``scope`` claim cannot disagree.
+    Mirrors exactly what :meth:`TokenManager.create_token` stamps — including the
+    requested-scope bound — so the advertised ``scope`` and the token's ``scope``
+    claim cannot disagree.
     """
-    return " ".join(client.narrow(jafaal_ports.get_scope_resolver().scopes_for(user)))
+    granted = client.narrow(jafaal_ports.get_scope_resolver().scopes_for(user))
+    return " ".join(jafaal_scopes.narrow_to_requested(granted, requested_scope))
 
 
 def complete_login(
@@ -342,6 +357,7 @@ def complete_login(
     client: jafaal_settings.OAuthClient,
     token_manager: jafaal_token_manager.TokenManager,
     db: Session,
+    requested_scope: Sequence[str] | None = None,
 ) -> dict:
     """Mint a session and its token bundle for an authenticated user.
 
@@ -361,6 +377,8 @@ def complete_login(
         client: The registered client the tokens are issued to.
         token_manager: Utility for token generation.
         db: Database session for storing session information.
+        requested_scope: The ``scope`` the client asked for, applied as a final
+            narrowing bound (RFC 6749 §3.3).
 
     Returns:
         dict: The RFC 6749 §5.1 token response (see :func:`build_token_response`).
@@ -373,7 +391,7 @@ def complete_login(
         refresh_token_exp,
         refresh_token,
         csrf_token,
-    ) = create_tokens(user, token_manager, client=client)
+    ) = create_tokens(user, token_manager, client=client, requested_scope=requested_scope)
 
     # Decide whether this login is from a not-previously-seen device *before*
     # the new session is written. Only pay the lookup when a host sink actually
@@ -435,5 +453,5 @@ def complete_login(
         refresh_token,
         refresh_token_exp,
         csrf_token,
-        granted_scope(user, client),
+        granted_scope(user, client, requested_scope),
     )

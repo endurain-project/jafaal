@@ -7,6 +7,7 @@ and mint CSRF tokens) and an accessor used as a FastAPI dependency.
 import logging
 import secrets
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
@@ -27,6 +28,7 @@ from joserfc.jwt import Token
 
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.ports as jafaal_ports
+import jafaal.scopes as jafaal_scopes
 import jafaal.settings as jafaal_settings
 from jafaal._core import jwk_keys
 
@@ -467,6 +469,7 @@ class TokenManager:
         user: jafaal_ports.UserProtocol,
         token_type: TokenType,
         client: jafaal_settings.OAuthClient | None = None,
+        requested_scope: Sequence[str] | None = None,
     ) -> tuple[datetime, str]:
         """
         Creates a JWT token for a user session with appropriate access scope
@@ -482,6 +485,9 @@ class TokenManager:
                 scope ceiling narrows the user's grants and its ``client_id``
                 becomes the RFC 9068 §2.2 ``client_id`` claim. ``None`` falls
                 back to the deployment-wide identifier.
+            requested_scope: The ``scope`` the client asked for (RFC 6749 §3.3),
+                applied as a final narrowing bound. ``None`` means "everything
+                this client and user are entitled to".
 
         Returns:
             tuple[datetime, str]: A tuple containing the token's expiration
@@ -490,14 +496,20 @@ class TokenManager:
         Raises:
             ValueError: If required parameters are missing or invalid.
         """
-        # Scopes come from the host's ScopeResolver port (the built-in default
-        # is the catalog's is_superuser two-tier mapping), so an application
-        # with a richer authorisation model stamps its own grants without
-        # patching the token minter. The registered client's ceiling then
-        # narrows that set: a token can never carry more than both allow.
+        # Three bounds, applied in order, each of which can only ever remove:
+        #
+        # 1. the host's ScopeResolver port decides what the *account* holds (the
+        #    built-in default is the catalog's is_superuser two-tier mapping), so
+        #    an application with a richer authorisation model stamps its own
+        #    grants without patching the token minter;
+        # 2. the registered client's ceiling caps what *this client* may ever
+        #    carry; and
+        # 3. the client's own ``scope`` request caps what it asked for on *this*
+        #    exchange, so a client that deliberately asks for less gets less.
         scope = jafaal_ports.get_scope_resolver().scopes_for(user)
         if client is not None:
             scope = client.narrow(scope)
+        scope = jafaal_scopes.narrow_to_requested(scope, requested_scope)
 
         # Set now
         issued_at = datetime.now(UTC)
