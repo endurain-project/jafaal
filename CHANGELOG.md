@@ -21,7 +21,15 @@ First release.
 
 - Username/password login with Argon2 hashing (bcrypt verification is retained
   so a host can import existing hashes and have them upgraded transparently on
-  first login).
+  first login; bcrypt input is truncated at its 72-byte limit, matching the
+  semantics those imported hashes were created with, so a long password can
+  never raise where other accounts return a clean 401).
+- Passwords are NFKC-normalized before hashing (NIST SP 800-63B §5.1.1.2), so a
+  passphrase enrolled on a composing platform verifies on a decomposing one.
+- A `length_only` password policy by default, with a 15-character regular
+  minimum (20 for admins). SP 800-63B-4 §3.1.1.2 states verifiers **SHALL NOT**
+  impose composition rules; `password_type="strict"` remains available for hosts
+  bound by legacy requirements.
 - Progressive lockout on failed logins, keyed per account **and** per source IP,
   so one address cannot cheaply lock out many accounts. The source IP is taken
   from the forwarded chain resolved right-to-left (the first hop not listed in
@@ -32,7 +40,9 @@ First release.
   work, so an unauthenticated caller cannot force unbounded Argon2 input.
 - Breached-password screening (NIST SP 800-63B) via the *Have I Been Pwned*
   range API — free, unauthenticated, and k-anonymous, so only a five-character
-  hash prefix ever leaves the process — or an offline host-supplied blocklist.
+  hash prefix ever leaves the process — or an offline host-supplied blocklist. A
+  startup warning fires while none is installed: dropping composition rules
+  without a blocklist is the wrong half of the guidance.
 - Local sign-up with optional email verification and admin approval, and
   enumeration-safe password reset.
 
@@ -75,7 +85,13 @@ First release.
   every API key.
 - Refresh-token rotation with reuse detection: a replay past a short grace window
   invalidates the whole token family, while a racing retry *within* the window
-  replays one idempotent result.
+  replays one idempotent result. That replay is single-use — a lost response
+  produces exactly one retry, so anything further is reuse of a superseded token
+  and invalidates the family too. The claim is an atomic conditional `UPDATE`,
+  so concurrent replays cannot both win.
+- Every response carrying a token — login, `/auth/token`, `/auth/refresh`, and
+  the MFA challenge — is sent `Cache-Control: no-store` and `Pragma: no-cache`
+  (RFC 6749 §5.1), so no intermediary retains a credential.
 - Server-side sessions with idle and absolute timeouts, device metadata, and a
   CSRF token bound to the session.
 - RFC 7662 token introspection and RFC 7009 revocation.
@@ -85,7 +101,11 @@ First release.
 - TOTP with QR provisioning, single-use backup codes, and single-use enforcement
   of each matched timestep.
 - WebAuthn / passkeys: registration, passwordless authentication, and an
-  optional second factor after password login.
+  optional second factor after password login. Binding *and* unbinding a passkey
+  require step-up verification (NIST SP 800-63B §6.1.2 / §6.1.4): because a
+  passkey logs in on its own, a stolen access token must not be able to register
+  one — that would be a permanent credential surviving a password change and
+  bypassing the account's TOTP factor — nor strip the factors already there.
 - Step-up re-authentication for sensitive operations, including delegation to a
   linked identity provider for SSO-only accounts.
 
@@ -100,7 +120,11 @@ First release.
   than an unverified one.
 - SSRF-guarded outbound calls: scheme allow-list, public-address enforcement on
   every resolved record, and connections pinned to the validated IP so a DNS
-  rebind cannot swap in an internal target.
+  rebind cannot swap in an internal target. Requests that carry credentials —
+  the token exchange, userinfo, and RFC 7009 revocation — additionally refuse to
+  follow redirects, because a 307/308 preserves the method *and* body and would
+  replay the client secret to the redirect target, which the address check does
+  not cover.
 
 **Authorization and integration**
 
@@ -110,7 +134,11 @@ First release.
 - Optional `reauthorize_scopes_per_request`: an access token's scopes are
   intersected with the tier its account currently holds, so demoting an
   administrator applies immediately rather than at token expiry. Strictly
-  narrowing — a token never gains a scope it was not issued with.
+  narrowing — a token never gains a scope it was not issued with. API keys are
+  narrowed **unconditionally**, since their expiry is optional and they cannot
+  rely on lapsing to shed stale authority. Only scopes the catalog governs are
+  subject to this, so a service capability such as `auth:introspect` is
+  unaffected.
 - Scope denials carry an RFC 6750 `WWW-Authenticate: Bearer
   error="insufficient_scope", scope="..."` challenge with a space-delimited
   scope list, so a client can parse what to re-request.

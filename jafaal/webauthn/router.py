@@ -9,9 +9,12 @@ Two routers:
   *passwordless authentication* ceremony that issues JAFAAL tokens from a passkey
   assertion alone.
 
-Each endpoint declares its own guard: registration/management require an access
-token; the authentication and second-factor ceremonies are anonymous (bound to a
-one-time challenge and, for the second factor, to the pending-MFA login).
+Each endpoint declares its own guard: registration and credential *deletion*
+require an access token **plus step-up verification** (they bind and unbind an
+authenticator, so a stolen token alone must not suffice); listing credentials
+requires only an access token; the authentication and second-factor ceremonies
+are anonymous (bound to a one-time challenge and, for the second factor, to the
+pending-MFA login).
 """
 
 from __future__ import annotations
@@ -26,10 +29,12 @@ from sqlalchemy.orm import Session
 import jafaal._internal.internal_dependencies as jafaal_internal_dependencies
 import jafaal._internal.security_stores as jafaal_security_stores
 import jafaal._internal.services.authorization_code_service as authorization_code_service
+import jafaal._internal.services.step_up_service as step_up_service
 import jafaal._internal.token_manager as jafaal_token_manager
 import jafaal._internal.user_guards as jafaal_user_guards
 import jafaal.audit as jafaal_audit
 import jafaal.exceptions as jafaal_exceptions
+import jafaal.identity_service as jafaal_identity_service
 import jafaal.orm as jafaal_orm
 import jafaal.ports as jafaal_ports
 import jafaal.rate_limit as jafaal_rate_limit
@@ -58,17 +63,42 @@ _TokenResponse = jafaal_schema.TokenResponseWeb | jafaal_schema.TokenResponseMob
 @jafaal_rate_limit.limit(jafaal_rate_limit.WRITE)
 def begin_registration(
     request: Request,
+    data: webauthn_schema.WebAuthnRegistrationBegin,
     token_user_id: Annotated[
         jafaal_orm.UserId,
         Depends(jafaal_internal_dependencies.get_sub_from_access_token),
+    ],
+    identity_service: Annotated[
+        jafaal_identity_service.LocalCredentialStore,
+        Depends(jafaal_identity_service.get_identity_service),
+    ],
+    step_up_store: Annotated[
+        jafaal_security_stores.StepUpStore,
+        Depends(jafaal_security_stores.get_step_up_attempts),
     ],
     db: Annotated[Session, Depends(jafaal_orm.get_db)],
 ) -> dict:
     """Start a passkey registration ceremony for the authenticated user.
 
+    Requires step-up verification: a passkey is a login credential in its own
+    right, so binding one is an authenticator-binding operation, not a profile
+    edit. An SSO-only account with no local factor is challenged to
+    re-authenticate at its identity provider rather than being waved through —
+    unlike TOTP enrolment, registration has no bootstrap exemption, because a
+    federated account always has a provider to re-authenticate against.
+
     Returns the ``navigator.credentials.create()`` options; the challenge is
-    stored server-side and redeemed by ``/register/complete``.
+    stored server-side, keyed to this user, and redeemed once by
+    ``/register/complete``.
     """
+    step_up_service.verify_step_up_credentials(
+        token_user_id,
+        data.current_password,
+        data.mfa_code,
+        identity_service,
+        step_up_store,
+        db,
+    )
     user = jafaal_user_guards.get_user_by_id_or_404(token_user_id, db)
     return webauthn_service.begin_registration(user, db)
 
@@ -88,7 +118,12 @@ def complete_registration(
     ],
     db: Annotated[Session, Depends(jafaal_orm.get_db)],
 ) -> webauthn_schema.WebAuthnCredentialRead:
-    """Finish a passkey registration ceremony and store the credential."""
+    """Finish a passkey registration ceremony and store the credential.
+
+    Carries no step-up fields of its own: it can only succeed against the
+    single-use, user-keyed challenge minted by ``/register/begin``, which is
+    already step-up gated.
+    """
     user = jafaal_user_guards.get_user_by_id_or_404(token_user_id, db)
     credential = webauthn_service.complete_registration(user, data.credential, data.label, db)
     jafaal_audit.record(
@@ -121,18 +156,45 @@ def list_credentials(
     return [webauthn_schema.WebAuthnCredentialRead.model_validate(cred) for cred in credentials]
 
 
-@router.delete("/credentials/{credential_pk}", status_code=status.HTTP_204_NO_CONTENT)
+@router.post("/credentials/{credential_pk}/delete", status_code=status.HTTP_204_NO_CONTENT)
 @jafaal_rate_limit.limit(jafaal_rate_limit.WRITE)
 def delete_credential(
     request: Request,
     credential_pk: int,
+    data: webauthn_schema.WebAuthnCredentialDelete,
     token_user_id: Annotated[
         jafaal_orm.UserId,
         Depends(jafaal_internal_dependencies.get_sub_from_access_token),
     ],
+    identity_service: Annotated[
+        jafaal_identity_service.LocalCredentialStore,
+        Depends(jafaal_identity_service.get_identity_service),
+    ],
+    step_up_store: Annotated[
+        jafaal_security_stores.StepUpStore,
+        Depends(jafaal_security_stores.get_step_up_attempts),
+    ],
     db: Annotated[Session, Depends(jafaal_orm.get_db)],
 ) -> None:
-    """Delete one of the authenticated user's passkeys."""
+    """Delete one of the authenticated user's passkeys.
+
+    Requires step-up verification, at the same assurance as registering one:
+    removing an authenticator is how an attacker holding a stolen token would
+    strip the account's factors (NIST SP 800-63B §6.1.4).
+
+    Modelled as ``POST .../delete`` rather than ``DELETE`` because the step-up
+    proof has to travel in a request body, and a body on ``DELETE`` is poorly
+    supported — several HTTP clients (httpx's ``.delete()`` among them) offer no
+    way to send one, and intermediaries may strip it.
+    """
+    step_up_service.verify_step_up_credentials(
+        token_user_id,
+        data.current_password,
+        data.mfa_code,
+        identity_service,
+        step_up_store,
+        db,
+    )
     credential = webauthn_crud.get_credential_by_pk(credential_pk, token_user_id, db)
     if credential is None:
         raise jafaal_exceptions.NotFoundError("Passkey not found.")

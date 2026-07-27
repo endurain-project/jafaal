@@ -92,7 +92,8 @@ def _replay_in_grace_refresh(
     client: jafaal_settings.OAuthClient,
     session: jafaal_sessions_models.UsersSessions,
     token_user_id: jafaal_orm.UserId,
-    refresh_token_value: str,
+    replay_refresh_token: str,
+    replay_refresh_token_exp: datetime,
     token_manager: jafaal_token_manager.TokenManager,
     db: Session,
 ) -> dict:
@@ -106,12 +107,17 @@ def _replay_in_grace_refresh(
     access token is minted (stateless, safe to re-issue) and, under cookie
     delivery, a fresh CSRF token is bound to the otherwise-unchanged session.
 
+    The replay itself has already been claimed single-use by the caller (see
+    :func:`~jafaal.sessions.rotated_refresh_tokens.utils.claim_grace_replay_token`);
+    a second presentation of the same rotated token is handled as reuse.
+
     Args:
         response: HTTP response used to set the refresh cookie.
         client: The registered client the session belongs to.
         session: The session whose token is being replayed.
         token_user_id: User ID from the refresh token's ``sub`` claim.
-        refresh_token_value: The raw refresh token presented for replay.
+        replay_refresh_token: The claimed replacement refresh token.
+        replay_refresh_token_exp: Expiry of the replacement refresh token.
         token_manager: Token manager for minting the access/CSRF tokens.
         db: Database session.
 
@@ -119,17 +125,8 @@ def _replay_in_grace_refresh(
         The token-response body for the client.
 
     Raises:
-        JafaalError: 401 if the replacement is gone, or the user is missing or
-            inactive.
+        JafaalError: 401 if the user is missing or inactive.
     """
-    replay = jafaal_sessions_rotated_tokens_utils.get_grace_replay_token(refresh_token_value, db)
-    if replay is None:
-        # Replacement was cleaned up (or never stored); fall back to the
-        # standard invalid-token response.
-        raise jafaal_exceptions.InvalidTokenError("Invalid refresh token")
-
-    replay_refresh_token, replay_refresh_token_exp = replay
-
     # Validate the user is still present and active before re-issuing.
     replay_user = jafaal_ports.get_user_repository().get_by_id(token_user_id, db)
     if replay_user is None:
@@ -178,6 +175,10 @@ def _mfa_required_response(
     inspects the status code. Body-delivery clients keep ``200`` because the flag
     in the body is what their SDK branches on.
 
+    The response is marked ``no-store``: the ``mfa_token`` is a bearer ticket
+    that completes a password-verified login, so it must not be cached by an
+    intermediary any more than an access token would be (RFC 6749 §5.1).
+
     Args:
         response: HTTP response whose status code may be adjusted.
         client: The registered client making the request.
@@ -187,6 +188,7 @@ def _mfa_required_response(
     Returns:
         The MFA-required response body.
     """
+    jafaal_utils.apply_no_store(response)
     if client.uses_cookie_delivery:
         response.status_code = status.HTTP_202_ACCEPTED
     return jafaal_schema.MFARequiredResponse(
@@ -600,6 +602,31 @@ async def _grant_refresh_token(
     # Uses HMAC-SHA256 internally for deterministic, secure lookup
     is_reused, in_grace = jafaal_sessions_rotated_tokens_utils.check_token_reuse(refresh_token_value, db)
 
+    if is_reused and in_grace:
+        # Idempotent in-grace replay: the presented token was already rotated but
+        # is still inside the grace window (a lost rotation response, or a
+        # racing/duplicate refresh from a background uploader). Claim the
+        # original replacement — single-use — and replay it instead of
+        # re-rotating, so duplicate/concurrent refreshes converge.
+        #
+        # Losing the claim means the one legitimate retry was already served, so
+        # this is a *third* presentation of a superseded token. That is reuse,
+        # not a retry, and falls through to the theft path below rather than
+        # handing out the live credential again.
+        replay = jafaal_sessions_rotated_tokens_utils.claim_grace_replay_token(refresh_token_value, db)
+        if replay is not None:
+            return _replay_in_grace_refresh(
+                response,
+                client,
+                session,
+                token_user_id,
+                replay[0],
+                replay[1],
+                token_manager,
+                db,
+            )
+        in_grace = False
+
     if is_reused and not in_grace:
         # Token theft detected - invalidate entire family. Runs in its own
         # transaction because this request ends in a 401: revoking inside the
@@ -616,23 +643,6 @@ async def _grant_refresh_token(
             ),
         )
         raise jafaal_exceptions.InvalidTokenError("Token reuse detected. All sessions invalidated.")
-
-    if is_reused and in_grace:
-        # Idempotent in-grace replay: the presented token was already rotated but
-        # is still inside the grace window (a lost rotation response, or a
-        # racing/duplicate refresh from a background uploader). Replay the
-        # original replacement instead of re-rotating so duplicate/concurrent
-        # refreshes converge. See _replay_in_grace_refresh for the full
-        # rationale and the CSRF/access-token handling.
-        return _replay_in_grace_refresh(
-            response,
-            client,
-            session,
-            token_user_id,
-            refresh_token_value,
-            token_manager,
-            db,
-        )
 
     is_valid = jafaal_sessions_utils.verify_refresh_token(refresh_token_value, session.refresh_token)
 

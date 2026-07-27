@@ -14,6 +14,31 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
 from jafaal.orm import UserId
+from jafaal.schema import StepUpVerification
+
+
+class WebAuthnRegistrationBegin(StepUpVerification):
+    """Payload starting a registration ceremony.
+
+    Registering a passkey **binds a new authenticator to the account**, and a
+    passkey is sufficient on its own to log in — so an access token alone must
+    not be enough to add one, or a stolen token becomes a permanent credential
+    that survives a password change and bypasses the account's TOTP factor
+    (NIST SP 800-63B §6.1.2). The inherited step-up fields re-prove the account's
+    existing factors before the ceremony starts; the challenge minted here is
+    stored server-side and single-use, so ``/register/complete`` needs no second
+    proof.
+    """
+
+
+class WebAuthnCredentialDelete(StepUpVerification):
+    """Payload removing a registered passkey.
+
+    Unbinding an authenticator is guarded at the same assurance as binding one
+    (NIST SP 800-63B §6.1.4): without it, a stolen access token could strip the
+    account's factors — and, paired with registration, swap the account's
+    authenticator set outright.
+    """
 
 
 class WebAuthnRegistrationComplete(BaseModel):

@@ -533,10 +533,10 @@ Mounted by `create_auth_router` (paths relative to your API root):
 
 | Method & path | Auth | Purpose |
 | --- | --- | --- |
-| `POST /auth/webauthn/register/begin` | access token | Start registration; returns `navigator.credentials.create()` options. |
+| `POST /auth/webauthn/register/begin` | access token **+ step-up** | Start registration; returns `navigator.credentials.create()` options. |
 | `POST /auth/webauthn/register/complete` | access token | Verify the attestation and store the passkey. |
 | `GET /auth/webauthn/credentials` | access token | List the user's passkeys. |
-| `DELETE /auth/webauthn/credentials/{id}` | access token | Delete a passkey. |
+| `POST /auth/webauthn/credentials/{id}/delete` | access token **+ step-up** | Delete a passkey. |
 | `POST /public/webauthn/authenticate/begin` | anonymous | Start passwordless login; returns `{challenge_id, options}`. |
 | `POST /public/webauthn/authenticate/complete` | anonymous | Verify the assertion and issue JAFAAL tokens. |
 | `POST /auth/webauthn/mfa/begin` | anonymous | Start the second-factor ceremony for a pending login. |

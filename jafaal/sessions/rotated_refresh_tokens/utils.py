@@ -192,23 +192,39 @@ def check_token_reuse(raw_token: str, db: Session) -> tuple[bool, bool]:
     return (True, False)
 
 
-def get_grace_replay_token(raw_token: str, db: Session) -> tuple[str, datetime] | None:
+def claim_grace_replay_token(raw_token: str, db: Session) -> tuple[str, datetime] | None:
     """
-    Return the replacement refresh token for an in-grace retry.
+    Consume the replacement refresh token for an in-grace retry.
 
     When a refresh token is presented again while still inside the
-    grace window (a lost rotation response or a racing retry), the
+    grace window (a lost rotation response, or a racing retry), the
     replacement minted on the original rotation is replayed instead
     of issuing a brand-new token, so duplicate/concurrent refreshes
     converge on a single outcome.
+
+    The replay is **single-use**. A lost response produces exactly one
+    retry, so one replay is all a legitimate client ever needs; anything
+    beyond that is reuse of a token the server has already superseded,
+    which RFC 9700 §4.14.2 treats as evidence of compromise. Without the
+    limit the grace window is a 60-second oracle that hands the *live*
+    refresh token to anyone presenting a rotated one, repeatedly, and
+    converts the reuse signal that theft detection depends on into a
+    silent success.
+
+    The claim is an atomic conditional ``UPDATE`` (see
+    :func:`~jafaal.sessions.rotated_refresh_tokens.crud.claim_replacement_token`),
+    so two concurrent replays cannot both succeed: one is served, the
+    other is reported as reuse.
 
     Args:
         raw_token: The raw refresh token being replayed.
         db: SQLAlchemy database session.
 
     Returns:
-        Tuple of (replacement_refresh_token, expiry) when a live
-        in-grace record with a stored replacement exists, else None.
+        Tuple of (replacement_refresh_token, expiry) when this caller
+        claimed a live in-grace replay, else ``None`` — meaning the
+        window lapsed, no replacement was stored, or the single replay
+        was already taken.
 
     Raises:
         JafaalError: If lookup or decryption fails.
@@ -228,6 +244,19 @@ def get_grace_replay_token(raw_token: str, db: Session) -> tuple[str, datetime] 
     replacement = crypto.decrypt_token_fernet(rotated_token.replacement_refresh_token)
 
     if replacement is None:
+        return None
+
+    # Consume the replay before handing the credential back. Losing this race
+    # means another request already replayed it, so this caller is presenting a
+    # token that has been superseded twice — reuse, not a retry.
+    if not rotated_token_crud.claim_replacement_token(rotated_token.id, db):
+        logger.warning(
+            f"In-grace replay already consumed for family {rotated_token.token_family_id}; treating as reuse",
+            extra={
+                "token_family_id": rotated_token.token_family_id,
+                "rotation_count": rotated_token.rotation_count,
+            },
+        )
         return None
 
     return (replacement, timeutils.ensure_aware_utc(rotated_token.replacement_refresh_token_exp))

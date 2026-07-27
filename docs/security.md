@@ -227,21 +227,30 @@ Also make sure to:
 The `password_type` on your [`PasswordPolicy`](ports-and-adapters.md) selects the
 validation applied at sign-up and password change:
 
-- **`"length_only"`** — enforces only minimum/maximum length. This is the choice
-  aligned with NIST SP 800-63B, which advises **against** composition rules in
-  favour of length plus breached-password screening. Pair it with a longer
-  `min_length` and a host-side breach check: install a
+- **`"length_only"`** (the shipped default) — enforces only minimum/maximum
+  length. SP 800-63B-4 §3.1.1.2 states verifiers **SHALL NOT** impose composition
+  rules, in favour of length plus breached-password screening. Pair it with a
+  breach check: install a
   [`PasswordBreachChecker`][jafaal.PasswordBreachChecker] via
   `jafaal.configure_password_breach_checker(...)` (e.g. an HIBP k-anonymity
-  lookup or a local blocklist) — it is consulted after the length/complexity
-  policy and before hashing, and should fail open on an upstream error.
+  lookup or a local blocklist) — it is consulted after the length policy and
+  before hashing, and should fail open on an upstream error. JAFAAL logs a
+  startup warning while no checker is installed, because dropping composition
+  rules without a blocklist is the wrong half of the guidance.
 - **`"strict"`** — additionally requires upper/lower/digit/special. Available for
-  hosts bound by legacy composition requirements.
+  hosts bound by legacy composition requirements, but it is a deliberate
+  deviation from the standard.
 
-Passwords are never truncated, and `max_length` (default 128, minimum
-64) bounds input before hashing so long passphrases are supported. Note the
-legacy bcrypt verifier silently truncates at 72 bytes; Argon2 (used for all new
-hashes) does not.
+`StaticSettingsProvider` defaults to `length_only` with a 15-character regular
+minimum (20 for admins) — the length SP 800-63B-4 §3.1.1.1 recommends, not the 8
+it merely permits.
+
+Passwords are NFKC-normalized before hashing (§3.1.1.2), so a passphrase enrolled
+on one platform verifies on another. `max_length` (default 128, minimum 64)
+bounds input before hashing so long passphrases are supported without unbounded
+Argon2 work. Argon2 — used for every hash JAFAAL writes — never truncates. The
+bcrypt verifier, kept only so a host can import hashes from a previous system,
+truncates at 72 bytes, matching the semantics those hashes were created with.
 
 ## Response headers for SSO redirect pages
 

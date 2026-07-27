@@ -7,6 +7,7 @@ FastAPI dependency.
 
 import secrets
 import string
+import unicodedata
 from collections.abc import Iterable
 from typing import Protocol, cast
 
@@ -17,6 +18,69 @@ from pwdlib.hashers.bcrypt import BcryptHasher
 
 import jafaal.settings as jafaal_settings
 from jafaal.exceptions import PasswordPolicyError
+
+#: bcrypt ignores every byte past this offset. See :class:`TruncatingBcryptHasher`.
+BCRYPT_MAX_PASSWORD_BYTES = 72
+
+
+def normalize_password(password: str) -> str:
+    """Return ``password`` in Unicode NFKC form.
+
+    NIST SP 800-63B (r3 §5.1.1.2, r4 §3.1.1.2) requires the verifier to apply
+    NFKC or NFKD before hashing, so the same passphrase typed on two platforms
+    produces the same hash. Without it a password containing a composed
+    character (``é`` as U+00E9, which macOS and iOS emit) fails to verify
+    against a hash stored from the decomposed form (U+0065 U+0301, which Linux
+    input methods emit) — an unrecoverable authentication failure that looks
+    exactly like a forgotten password.
+
+    NFKC is chosen over NFKD because it is the composing form, so it does not
+    inflate the byte length of the input (which matters against bcrypt's 72-byte
+    limit). Pure-ASCII passwords — the overwhelming majority — are unchanged.
+
+    Args:
+        password: The plaintext password as received from the client.
+
+    Returns:
+        The NFKC-normalized password.
+    """
+    return unicodedata.normalize("NFKC", password)
+
+
+class TruncatingBcryptHasher(BcryptHasher):
+    """``BcryptHasher`` that truncates input at bcrypt's 72-byte limit.
+
+    bcrypt ignores everything past 72 bytes. Up to bcrypt 4.x the library did so
+    silently; bcrypt 5.0 raises ``ValueError`` instead. JAFAAL uses bcrypt only
+    to verify hashes a host imported from another system, and those hashes were
+    produced under the truncating behaviour — so truncating here reproduces the
+    semantics they were created with, which is what makes them verifiable at all.
+
+    Without this, a password longer than 72 bytes raises out of ``verify`` and
+    surfaces as a 500 for any account carrying an imported bcrypt hash, while
+    every other account returns 401: an unauthenticated oracle for which
+    accounts those are, plus an availability bug.
+
+    Every hash JAFAAL *writes* is Argon2, which has no such limit and always
+    receives the full password.
+    """
+
+    @staticmethod
+    def _truncate(password: str | bytes) -> bytes:
+        """Return ``password`` as at most 72 UTF-8 bytes.
+
+        Truncation is on bytes, not characters, and may therefore split a
+        multi-byte sequence — which is exactly what bcrypt itself does, so an
+        imported hash still matches.
+        """
+        raw = password.encode("utf-8") if isinstance(password, str) else password
+        return raw[:BCRYPT_MAX_PASSWORD_BYTES]
+
+    def hash(self, password: str | bytes, *, salt: bytes | None = None) -> str:
+        return super().hash(self._truncate(password), salt=salt)
+
+    def verify(self, password: str | bytes, hash: str | bytes) -> bool:  # noqa: A002 - pwdlib's parameter name
+        return super().verify(self._truncate(password), hash)
 
 
 class SupportsHashPassword(Protocol):
@@ -128,13 +192,16 @@ class PasswordHasher:
         """
         Hashes the provided password using the configured password hashing algorithm.
 
+        The password is NFKC-normalized first (NIST SP 800-63B §5.1.1.2), so a
+        passphrase enrolled on one platform verifies on another.
+
         Args:
             password (str): The plain text password to be hashed.
 
         Returns:
             str: The resulting hashed password.
         """
-        return self._password_hash.hash(password)
+        return self._password_hash.hash(normalize_password(password))
 
     def verify_password(self, plain_password: str, hashed_password: str) -> bool:
         """
@@ -147,7 +214,7 @@ class PasswordHasher:
         Returns:
             bool: True if the plain password matches the hashed password, False otherwise.
         """
-        return self._password_hash.verify(plain_password, hashed_password)
+        return self._password_hash.verify(normalize_password(plain_password), hashed_password)
 
     def verify_and_update(self, plain_password: str, hashed_password: str) -> tuple[bool, str | None]:
         """
@@ -162,7 +229,7 @@ class PasswordHasher:
             whether the password is correct, and the second element is the updated hash if
             the hash algorithm has changed or None otherwise.
         """
-        return self._password_hash.verify_and_update(plain_password, hashed_password)
+        return self._password_hash.verify_and_update(normalize_password(plain_password), hashed_password)
 
     def dummy_verify(self) -> None:
         """Run a constant-time-equivalent password verify against a dummy hash.
@@ -246,12 +313,15 @@ class PasswordHasher:
         Notes:
             - NIST SP 800-63B advises against imposing composition rules and in
               favour of length plus breach screening. ``"length_only"`` is the
-              standards-aligned choice; pair it with a longer ``min_length`` and,
-              ideally, a host-side breached-password check. ``"strict"`` remains
-              available for hosts bound by legacy composition requirements.
-            - The password is never truncated. The legacy bcrypt verifier
-              silently truncates at 72 bytes, so a ``max_length`` above 72 only
-              fully applies to Argon2 hashes (used for all new passwords).
+              standards-aligned choice and the shipped default; pair it with a
+              longer ``min_length`` and a breached-password check. ``"strict"``
+              remains available for hosts bound by legacy composition
+              requirements, but SP 800-63B-4 §3.1.1.2 states verifiers SHALL NOT
+              impose them.
+            - The password is never truncated for Argon2, which is what every
+              hash JAFAAL writes uses. Only the bcrypt verifier truncates, at 72
+              bytes, reproducing the semantics the imported hashes it reads were
+              created with (see :class:`TruncatingBcryptHasher`).
         """
         if len(password) < min_length:
             raise PasswordPolicyError(f"Password is too short (got {len(password)}, need ≥ {min_length}).")
@@ -341,7 +411,7 @@ def get_password_hasher() -> PasswordHasher:
                     memory_cost=settings.passwords.argon2_memory_cost,
                     parallelism=settings.passwords.argon2_parallelism,
                 ),
-                BcryptHasher(),
+                TruncatingBcryptHasher(),
             ]
         )
         _settings_password_hasher_generation = generation
@@ -349,11 +419,11 @@ def get_password_hasher() -> PasswordHasher:
 
 
 # Initialize the PasswordHasher with both Argon2 and Bcrypt support
-# Argon2 listed first => new hashes use Argon2; bcrypt remains verifiable for legacy rows.
+# Argon2 listed first => new hashes use Argon2; bcrypt remains verifiable for imported rows.
 # This default-cost instance is used before settings are installed (and is
 # imported directly by tests); get_password_hasher() returns a settings-tuned
 # instance once jafaal.configure has run.
-password_hasher = PasswordHasher(hasher=[Argon2Hasher(), BcryptHasher()])
+password_hasher = PasswordHasher(hasher=[Argon2Hasher(), TruncatingBcryptHasher()])
 
 # Cached settings-derived hasher (rebuilt on settings-generation bump).
 _settings_password_hasher: PasswordHasher | None = None

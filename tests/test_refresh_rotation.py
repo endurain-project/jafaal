@@ -173,6 +173,36 @@ def test_in_grace_replay_is_idempotent(client, make_user):
     assert _refresh_cookie(client) == replacement
 
 
+def test_in_grace_replay_is_single_use_then_treated_as_theft(client, make_user):
+    """The grace window serves one retry, not an unlimited credential oracle.
+
+    A lost rotation response produces exactly one retry. Serving the live
+    replacement every time a rotated token is presented would let a thief keep
+    harvesting it for the whole window, and would suppress the reuse signal
+    RFC 9700 §4.14.2 relies on to detect the theft at all.
+    """
+    make_user(username="alice")
+    _login(client)
+    old = _refresh_cookie(client)
+
+    assert client.post(REFRESH).status_code == 200
+
+    # First re-presentation inside grace: the legitimate retry, served.
+    _set_refresh_cookie(client, old)
+    assert client.post(REFRESH).status_code == 200
+
+    # Second: the replay is spent, so this is reuse of a superseded token —
+    # rejected, and the whole family is invalidated even though we are still
+    # well inside the 60-second window.
+    _set_refresh_cookie(client, old)
+    second = client.post(REFRESH)
+    assert second.status_code == 401
+
+    # The family is gone: the replacement no longer refreshes either. Its
+    # session row was deleted, so this reports 404 rather than 401.
+    assert client.post(REFRESH).status_code == 404
+
+
 def test_refresh_rejects_session_owner_mismatch(client, make_user):
     make_user(username="alice")
     bob = make_user(username="bob")

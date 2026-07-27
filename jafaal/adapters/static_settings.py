@@ -15,11 +15,22 @@ __all__ = [
     "StaticSettingsProvider",
 ]
 
-#: Recommended baseline password policy (strict complexity; longer for admins).
+#: Recommended baseline password policy.
+#:
+#: NIST SP 800-63B-4 §3.1.1.2 states verifiers **SHALL NOT** impose composition
+#: rules (the r3 wording was a SHOULD NOT), so the default is ``length_only``.
+#: Length carries the strength that character classes used to pretend to: the
+#: regular minimum is the 15 characters §3.1.1.1 recommends, not the 8 it merely
+#: permits. Pair this with breach screening — dropping composition rules without
+#: a blocklist is the wrong half of the guidance, and
+#: ``jafaal.adapters.HibpBreachChecker`` needs no credentials.
+#:
+#: A host bound by legacy composition requirements can still pass
+#: ``PasswordPolicy(..., password_type="strict")`` explicitly.
 DEFAULT_PASSWORD_POLICY = PasswordPolicy(
-    min_length_regular=8,
-    min_length_admin=12,
-    password_type="strict",
+    min_length_regular=15,
+    min_length_admin=20,
+    password_type="length_only",
 )
 
 #: Conservative sign-up default: open sign-up, no email/admin gating.

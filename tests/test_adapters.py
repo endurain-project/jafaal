@@ -155,8 +155,12 @@ class TestStaticSettingsProvider:
         provider = StaticSettingsProvider()
         assert provider.get_password_policy() is DEFAULT_PASSWORD_POLICY
         assert provider.get_signup_config() is DEFAULT_SIGNUP_CONFIG
-        assert provider.get_password_policy().min_length_for(is_superuser=True) == 12
-        assert provider.get_password_policy().min_length_for(is_superuser=False) == 8
+        assert provider.get_password_policy().min_length_for(is_superuser=True) == 20
+        assert provider.get_password_policy().min_length_for(is_superuser=False) == 15
+
+    def test_default_policy_imposes_no_composition_rules(self):
+        """NIST SP 800-63B-4 §3.1.1.2: verifiers SHALL NOT impose composition rules."""
+        assert DEFAULT_PASSWORD_POLICY.password_type == "length_only"
 
     def test_overrides(self):
         policy = jafaal.PasswordPolicy(min_length_regular=10, min_length_admin=20, password_type="length_only")

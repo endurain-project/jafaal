@@ -2,10 +2,70 @@
 
 import pytest
 from conftest import replace_settings
+from pwdlib.hashers.argon2 import Argon2Hasher
 
 import jafaal
-from jafaal._internal.password_hasher import PasswordHasher, get_password_hasher
+from jafaal._internal.password_hasher import (
+    BCRYPT_MAX_PASSWORD_BYTES,
+    PasswordHasher,
+    TruncatingBcryptHasher,
+    get_password_hasher,
+    normalize_password,
+)
 from jafaal.exceptions import PasswordPolicyError
+
+# A composed/decomposed pair that NFKC folds together: "pässw0rd!" written with
+# U+00E4, and with "a" + U+0308 COMBINING DIAERESIS.
+COMPOSED_PASSWORD = "p\u00e4ssw0rd!"
+DECOMPOSED_PASSWORD = "pa\u0308ssw0rd!"
+
+
+def test_imported_bcrypt_hash_does_not_raise_on_over_long_password():
+    """A >72-byte password against an imported bcrypt hash must not 500.
+
+    bcrypt 5.0 raises ValueError past 72 bytes where 4.x truncated silently. If
+    that escapes, a long password returns 500 for accounts carrying an imported
+    bcrypt hash but 401 for everyone else — an unauthenticated oracle for which
+    accounts those are.
+    """
+    hasher = PasswordHasher(hasher=[Argon2Hasher(), TruncatingBcryptHasher()])
+    imported = TruncatingBcryptHasher().hash("a" * 80)
+
+    # Verifies (bcrypt ignores everything past 72 bytes) and, crucially, does
+    # not raise.
+    ok, updated = hasher.verify_and_update("a" * 100, imported)
+    assert ok is True
+    # ...and the row is upgraded off bcrypt onto Argon2.
+    assert updated is not None
+    assert updated.startswith("$argon2")
+
+    # A genuinely wrong password is still a clean False, not an exception.
+    assert hasher.verify_and_update("b" * 100, imported) == (False, None)
+
+
+def test_bcrypt_truncates_at_the_documented_boundary():
+    assert BCRYPT_MAX_PASSWORD_BYTES == 72
+    hasher = PasswordHasher(hasher=[TruncatingBcryptHasher()])
+    imported = TruncatingBcryptHasher().hash("x" * 72)
+    # Byte 73 onward is ignored, matching the semantics the imported hash was
+    # created with.
+    assert hasher.verify_password("x" * 72 + "ignored", imported) is True
+    assert hasher.verify_password("x" * 71, imported) is False
+
+
+def test_password_is_nfkc_normalized_before_hashing():
+    """NIST SP 800-63B §5.1.1.2: normalize so one passphrase works everywhere."""
+    assert normalize_password(DECOMPOSED_PASSWORD) == COMPOSED_PASSWORD
+    # ASCII is untouched.
+    assert normalize_password("Str0ng!Pass") == "Str0ng!Pass"
+
+    hasher = get_password_hasher()
+    hashed = hasher.hash_password(DECOMPOSED_PASSWORD)
+    # Enrolled on a decomposing platform, typed on a composing one.
+    assert hasher.verify_password(COMPOSED_PASSWORD, hashed) is True
+    assert hasher.verify_password(DECOMPOSED_PASSWORD, hashed) is True
+    # Both spellings also survive the verify_and_update path.
+    assert hasher.verify_and_update(COMPOSED_PASSWORD, hashed)[0] is True
 
 
 def test_get_password_hasher_uses_settings_argon2_cost():

@@ -1568,6 +1568,16 @@ class IdentityProviderService:
                         "client_secret": client_secret,
                     },
                     headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    # This POST carries the client secret and the IdP refresh
+                    # token in its body, and the pooled discovery client follows
+                    # redirects. On a 307/308 httpx preserves both the method and
+                    # the body, so a revocation_endpoint that redirects — one
+                    # taken from a discovery document, i.e. not fully under our
+                    # control — would replay those credentials to the redirect
+                    # target. The SSRF guard blocks private addresses but not
+                    # cross-origin replay to a public host, so redirects are
+                    # refused outright here, matching _create_oauth_client.
+                    follow_redirects=False,
                 )
 
                 # RFC 7009: The revocation endpoint responds with HTTP 200
@@ -1575,11 +1585,17 @@ class IdentityProviderService:
                 if response.status_code == 200:
                     logger.info(f"Successfully revoked IdP token for user {user_id}, idp {idp_id}")
                     return True
-                else:
+                if response.is_redirect:
                     logger.warning(
-                        f"IdP revocation endpoint returned {response.status_code} for user {user_id}, idp {idp_id}"
+                        f"IdP {idp.name} revocation endpoint returned a redirect ({response.status_code}); "
+                        "refusing to replay client credentials to the redirect target. "
+                        "The token is cleared locally only."
                     )
                     return False
+                logger.warning(
+                    f"IdP revocation endpoint returned {response.status_code} for user {user_id}, idp {idp_id}"
+                )
+                return False
 
             except httpx.TimeoutException as err:
                 logger.warning(f"Timeout revoking token at IdP {idp.name} for user {user_id}: {err}", exc_info=err)

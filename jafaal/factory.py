@@ -96,6 +96,16 @@ def _warn_on_insecure_defaults() -> None:
             "records and IdP link-token IP checks). Set trusted_proxies to your reverse proxy's IPs/CIDRs."
         )
 
+    if isinstance(jafaal_ports.get_password_breach_checker(), jafaal_ports.NullPasswordBreachChecker):
+        logger.warning(
+            "JAFAAL breached-password screening is not configured: the no-op checker is active, so a "
+            "password known to be in a public breach corpus is accepted at sign-up, reset, and change. "
+            "NIST SP 800-63B-4 §3.1.1.2 pairs 'no composition rules' with a blocklist check — JAFAAL's "
+            "default policy drops the former, so install the latter: "
+            "jafaal.configure_password_breach_checker(jafaal.adapters.HibpBreachChecker()) needs no "
+            "credentials and sends only a five-character SHA-1 prefix."
+        )
+
 
 def _warn_on_router_prefix_mismatch(prefixes: RouterPrefixes) -> None:
     """Warn when the auth-path settings drift from the router prefixes.

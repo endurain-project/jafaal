@@ -44,7 +44,7 @@ from jafaal import PasswordPolicy, SignupConfig, configure_settings_provider
 
 class MySettings:
     def get_password_policy(self) -> PasswordPolicy:
-        return PasswordPolicy(min_length_regular=8, min_length_admin=12, password_type="strict")
+        return PasswordPolicy(min_length_regular=15, min_length_admin=20, password_type="length_only")
 
     def get_signup_config(self) -> SignupConfig:
         return SignupConfig(enabled=True, require_email_verification=False, require_admin_approval=False)
@@ -141,7 +141,7 @@ from jafaal.adapters import StaticSettingsProvider
 
 jafaal.configure_settings_provider(
     StaticSettingsProvider(
-        password_policy=jafaal.PasswordPolicy(min_length_regular=10, min_length_admin=16, password_type="strict"),
+        password_policy=jafaal.PasswordPolicy(min_length_regular=16, min_length_admin=24, password_type="length_only"),
         signup_config=jafaal.SignupConfig(enabled=True, require_email_verification=True, require_admin_approval=False),
     )
 )

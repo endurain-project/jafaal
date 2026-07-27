@@ -232,7 +232,10 @@ class TokenSettings:
             request, so a demotion applies immediately rather than at token
             expiry. Strictly narrowing — a token never gains a scope it was not
             issued with. Off by default; adds no query (the user row is already
-            loaded every request), only the narrowing.
+            loaded every request), only the narrowing. Applies to access tokens
+            only: API keys are narrowed unconditionally, because they are
+            long-lived (``expires_at`` is optional) and so cannot rely on expiry
+            to shed stale authority.
     """
 
     algorithm: str = "HS256"
@@ -337,8 +340,9 @@ class PasswordSettings:
         max_length: Maximum accepted password length, enforced *before* hashing
             so an unauthenticated caller cannot force unbounded Argon2 work.
             Must be at least 64 so long passphrases are accepted (NIST
-            SP 800-63B). Note the legacy bcrypt verifier truncates at 72 bytes;
-            Argon2 (used for all new hashes) does not.
+            SP 800-63B). Note the bcrypt verifier — used only to read hashes
+            imported from another system — truncates at 72 bytes; Argon2, which
+            every hash JAFAAL writes uses, does not.
     """
 
     argon2_time_cost: int = 3

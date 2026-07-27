@@ -233,6 +233,23 @@ def clear_refresh_token_cookies(response: Response) -> None:
     )
 
 
+def apply_no_store(response: Response) -> None:
+    """Mark ``response`` as uncacheable, per RFC 6749 §5.1.
+
+    §5.1 requires ``Cache-Control: no-store`` on *any* response carrying tokens,
+    and ``Pragma: no-cache`` alongside it for HTTP/1.0 intermediaries. Without
+    it a proxy, a browser back/forward cache, or a CDN in front of the API may
+    retain an access token — or, under body delivery, a refresh token — and
+    serve it to someone else.
+
+    Applied to every credential-bearing response, not just the token endpoint:
+    the direct login endpoint and the MFA challenge hand back equally sensitive
+    material.
+    """
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+
+
 def build_token_response(
     response: Response,
     client: jafaal_settings.OAuthClient,
@@ -259,7 +276,8 @@ def build_token_response(
 
     ``expires_in`` is seconds-until-expiry per §5.1;
     ``refresh_token_expires_in`` and ``session_id`` are JAFAAL extensions, which
-    §5.1 explicitly permits.
+    §5.1 explicitly permits. The response is marked ``no-store`` because §5.1
+    requires it of every token-bearing response.
 
     Args:
         response: HTTP response used to set the refresh cookie.
@@ -280,6 +298,7 @@ def build_token_response(
     Raises:
         None.
     """
+    apply_no_store(response)
     now = datetime.now(UTC)
     body = {
         "session_id": session_id,

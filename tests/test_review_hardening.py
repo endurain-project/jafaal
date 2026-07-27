@@ -179,6 +179,66 @@ def test_reauthorization_never_grants_a_scope_the_token_lacks():
     assert not set(narrowed) & (set(catalog.admin) - set(catalog.regular))
 
 
+def test_narrowing_leaves_scopes_the_catalog_does_not_govern():
+    """A capability the resolver never mints must survive narrowing.
+
+    ``auth:introspect`` is deliberately outside the catalog tiers — it is granted
+    straight to a service API key, never to a user. Intersecting against the
+    resolver's output alone would strip it on every request.
+    """
+    from jafaal.identity_service import DefaultIdentityService
+
+    regular = type("U", (), {"id": 1, "is_superuser": False})()
+    narrowed = DefaultIdentityService._narrow_to_current_entitlement(
+        [scopes.PROFILE, scopes.AUTH_INTROSPECT, scopes.USERS_WRITE],
+        regular,
+    )
+    assert scopes.AUTH_INTROSPECT in narrowed  # ungoverned: untouched
+    assert scopes.PROFILE in narrowed  # governed and held
+    assert scopes.USERS_WRITE not in narrowed  # governed and no longer held
+
+
+def test_api_key_scopes_are_narrowed_on_demotion_without_the_toggle(make_user, db):
+    """An API key must shed stale admin authority even with the toggle off.
+
+    Unlike an access token, an API key's expiry is optional, so it cannot rely on
+    lapsing to drop scopes the account no longer holds.
+    """
+    from fastapi import Security
+
+    import jafaal.api_keys.crud as api_keys_crud
+    import jafaal.api_keys.schema as api_keys_schema
+
+    user = make_user(username="keyholder", password=PASSWORD, is_superuser=True)
+    jafaal.configure_api_key_scopes([scopes.SESSIONS_READ])
+    _row, raw_key = api_keys_crud.create_api_key(
+        user.id,
+        api_keys_schema.UsersApiKeyCreate(name="admin key", scopes=[scopes.SESSIONS_READ]),
+        db,
+    )
+    db.commit()
+
+    app = FastAPI()
+    jafaal.register_exception_handlers(app)
+
+    @app.get("/admin-only")
+    def admin_only(_auth=Security(jafaal.check_auth_scopes, scopes=[scopes.SESSIONS_READ])):
+        return {"ok": True}
+
+    http = TestClient(app)
+    headers = {"X-API-Key": raw_key}
+
+    # sessions:read is an admin-tier scope, so the key works while the account
+    # is still a superuser.
+    assert http.get("/admin-only", headers=headers).status_code == 200
+
+    ports.get_user_repository().get_by_id(user.id, db).is_superuser = False
+    db.commit()
+
+    # Narrowed immediately — no reauthorize_scopes_per_request required.
+    assert http.get("/admin-only", headers=headers).status_code == 403
+
+
 # --------------------------------------------------------------------------- #
 # M7 - security-critical events get reserved capacity
 # --------------------------------------------------------------------------- #

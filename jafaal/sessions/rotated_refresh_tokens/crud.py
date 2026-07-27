@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, delete, select
+from sqlalchemy import CursorResult, delete, select, update
 from sqlalchemy.orm import Session
 
 import jafaal.sessions.rotated_refresh_tokens.models as rotated_token_models
@@ -68,6 +68,41 @@ def create_rotated_token(
     db.refresh(db_rotated_token)
 
     return db_rotated_token
+
+
+@db_errors.handle_db_errors
+def claim_replacement_token(rotated_token_id: int, db: Session) -> bool:
+    """Atomically consume a rotated record's stored replacement token.
+
+    The in-grace replay is single-use. Clearing
+    ``replacement_refresh_token`` is the claim: a conditional ``UPDATE``
+    gated on the column still being populated, so two concurrent replays
+    of the same rotated token cannot both win — exactly the pattern
+    :func:`~jafaal.sessions.crud.claim_session_for_token_exchange` uses
+    for authorization codes.
+
+    Args:
+        rotated_token_id: Primary key of the rotated-token record.
+        db: SQLAlchemy database session.
+
+    Returns:
+        ``True`` if this caller claimed the replay, ``False`` if it had
+        already been consumed (or was never stored).
+
+    Raises:
+        JafaalError: If database error occurs.
+    """
+    stmt = (
+        update(rotated_token_models.RotatedRefreshToken)
+        .where(
+            rotated_token_models.RotatedRefreshToken.id == rotated_token_id,
+            rotated_token_models.RotatedRefreshToken.replacement_refresh_token.is_not(None),
+        )
+        .values(replacement_refresh_token=None)
+    )
+    result = cast(CursorResult[Any], db.execute(stmt))
+    db.flush()
+    return result.rowcount == 1
 
 
 @db_errors.handle_db_errors

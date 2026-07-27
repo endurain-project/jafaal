@@ -60,6 +60,15 @@ def _auth_headers(client, username="alice", password="Str0ng!Pass"):
     return {"Authorization": f"Bearer {access}"}
 
 
+def _step_up(password="Str0ng!Pass"):
+    """Step-up body required to bind or unbind an authenticator."""
+    return {"current_password": password}
+
+
+def _delete_credential_url(credential_pk):
+    return f"{CREDENTIALS}/{credential_pk}/delete"
+
+
 @contextmanager
 def override_settings(**overrides):
     """Temporarily replace the installed settings, restoring them afterwards."""
@@ -164,7 +173,7 @@ def _assertion_credential(raw_id=b"cred-1", *, transports=None):
 
 def test_register_begin_returns_creation_options(client, make_user):
     make_user(username="alice")
-    resp = client.post(REG_BEGIN, headers=_auth_headers(client))
+    resp = client.post(REG_BEGIN, json=_step_up(), headers=_auth_headers(client))
     assert resp.status_code == 200
     options = resp.json()
     assert options["challenge"]
@@ -173,11 +182,23 @@ def test_register_begin_returns_creation_options(client, make_user):
     assert options["pubKeyCredParams"]
 
 
+def test_register_begin_requires_step_up(client, make_user):
+    """A stolen access token alone must not be able to bind a new authenticator."""
+    make_user(username="alice")
+    headers = _auth_headers(client)
+
+    missing = client.post(REG_BEGIN, json={}, headers=headers)
+    assert missing.status_code == 401
+
+    wrong = client.post(REG_BEGIN, json=_step_up("Wr0ng!Pass"), headers=headers)
+    assert wrong.status_code == 401
+
+
 def test_register_begin_uses_opaque_user_handle(client, make_user):
     user = make_user(username="alice")
     headers = _auth_headers(client)
-    opts1 = client.post(REG_BEGIN, headers=headers).json()
-    opts2 = client.post(REG_BEGIN, headers=headers).json()
+    opts1 = client.post(REG_BEGIN, json=_step_up(), headers=headers).json()
+    opts2 = client.post(REG_BEGIN, json=_step_up(), headers=headers).json()
     handle = opts1["user"]["id"]
     # The handle must not be the raw (often sequential / PII) user id.
     assert handle != bytes_to_base64url(str(user.id).encode("utf-8"))
@@ -201,14 +222,14 @@ def test_user_handle_is_opaque_stable_and_per_user(make_user):
 
 def test_register_begin_requires_auth(client, make_user):
     make_user(username="alice")
-    resp = client.post(REG_BEGIN)
+    resp = client.post(REG_BEGIN, json=_step_up())
     assert resp.status_code in (401, 403)
 
 
 def test_register_complete_persists_credential(client, make_user, mock_verify, db):
     make_user(username="alice")
     headers = _auth_headers(client)
-    client.post(REG_BEGIN, headers=headers)
+    client.post(REG_BEGIN, json=_step_up(), headers=headers)
 
     resp = client.post(
         REG_COMPLETE,
@@ -241,11 +262,11 @@ def test_register_duplicate_credential_conflicts(client, make_user, mock_verify)
     make_user(username="alice")
     headers = _auth_headers(client)
 
-    client.post(REG_BEGIN, headers=headers)
+    client.post(REG_BEGIN, json=_step_up(), headers=headers)
     first = client.post(REG_COMPLETE, json={"credential": _assertion_credential()}, headers=headers)
     assert first.status_code == 201
 
-    client.post(REG_BEGIN, headers=headers)
+    client.post(REG_BEGIN, json=_step_up(), headers=headers)
     second = client.post(REG_COMPLETE, json={"credential": _assertion_credential()}, headers=headers)
     assert second.status_code == 409
 
@@ -270,14 +291,26 @@ def test_delete_credential(client, make_user, db):
     user = make_user(username="alice")
     cred = _register_credential(user.id)
 
-    resp = client.delete(f"{CREDENTIALS}/{cred.id}", headers=_auth_headers(client))
+    resp = client.post(_delete_credential_url(cred.id), json=_step_up(), headers=_auth_headers(client))
     assert resp.status_code == 204
     assert webauthn_crud.get_credentials_by_user_id(user.id, db) == []
 
 
+def test_delete_credential_requires_step_up(client, make_user, db):
+    """Unbinding an authenticator is gated at the same assurance as binding one."""
+    user = make_user(username="alice")
+    cred = _register_credential(user.id)
+    headers = _auth_headers(client)
+
+    assert client.post(_delete_credential_url(cred.id), json={}, headers=headers).status_code == 401
+    assert client.post(_delete_credential_url(cred.id), json=_step_up("Wr0ng!Pass"), headers=headers).status_code == 401
+    # The passkey survives both attempts.
+    assert webauthn_crud.get_credential_by_pk(cred.id, user.id, db) is not None
+
+
 def test_delete_missing_credential_404(client, make_user):
     make_user(username="alice")
-    resp = client.delete(f"{CREDENTIALS}/9999", headers=_auth_headers(client))
+    resp = client.post(_delete_credential_url(9999), json=_step_up(), headers=_auth_headers(client))
     assert resp.status_code == 404
 
 
@@ -287,7 +320,7 @@ def test_cannot_delete_another_users_credential(client, make_user, db):
     alice_cred = _register_credential(alice.id, raw_id=b"alice-key")
 
     # Bob authenticates and tries to delete Alice's credential by its pk.
-    resp = client.delete(f"{CREDENTIALS}/{alice_cred.id}", headers=_auth_headers(client, "bob"))
+    resp = client.post(_delete_credential_url(alice_cred.id), json=_step_up(), headers=_auth_headers(client, "bob"))
     assert resp.status_code == 404
     # Alice's credential is untouched.
     assert webauthn_crud.get_credential_by_pk(alice_cred.id, alice.id, db) is not None
@@ -579,7 +612,7 @@ def test_explicit_rp_id_and_origins_are_used(client, make_user):
     make_user(username="alice")
     headers = _auth_headers(client)
     with override_settings(rp_id="passkeys.example", origins=("https://passkeys.example",)):
-        resp = client.post(REG_BEGIN, headers=headers)
+        resp = client.post(REG_BEGIN, json=_step_up(), headers=headers)
     assert resp.status_code == 200
     assert resp.json()["rp"]["id"] == "passkeys.example"
 

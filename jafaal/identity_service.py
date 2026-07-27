@@ -61,6 +61,7 @@ import jafaal.credentials.crud as jafaal_credentials_crud
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.orm as jafaal_orm
 import jafaal.ports as jafaal_ports
+import jafaal.scopes as jafaal_scopes
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.utils as jafaal_sessions_utils
 import jafaal.settings as jafaal_settings
@@ -590,34 +591,44 @@ class DefaultIdentityService:
         token_scopes: list[str],
         user: jafaal_ports.UserProtocol,
     ) -> list[str]:
-        """Intersect a token's scopes with what the account is entitled to *now*.
+        """Intersect a credential's scopes with what the account is entitled to *now*.
 
-        Scopes are stamped into the access token when it is minted, so demoting
-        an administrator (or otherwise narrowing their rights) normally has no
-        effect until the token expires. With
-        :attr:`~jafaal.settings.AuthSettings.reauthorize_scopes_per_request` the
-        token's grant is re-checked against what the host's
-        :class:`~jafaal.ports.ScopeResolver` grants the account on this request,
-        so a demotion applies immediately.
+        Scopes are stamped into a credential when it is minted, so demoting an
+        administrator (or otherwise narrowing their rights) normally has no
+        effect until it expires. Applied to access tokens under
+        :attr:`~jafaal.settings.AuthSettings.reauthorize_scopes_per_request`
+        (opt-in, because they are short-lived) and *unconditionally* to API keys
+        (which may never expire), the credential's grant is re-checked against
+        what the host's :class:`~jafaal.ports.ScopeResolver` grants the account
+        on this request, so a demotion applies immediately.
 
-        The result is an **intersection**, never a union: a token can only ever
-        lose authority here. Re-deriving the grant outright would *add* scopes a
-        promoted user's older token never carried, which is a privilege change no
-        issued credential should silently pick up.
+        Only scopes the **catalog governs** are subject to this check. A scope
+        outside the catalog is, by construction, one the resolver never mints and
+        therefore never speaks to — :data:`~jafaal.scopes.AUTH_INTROSPECT` is the
+        built-in example, a service-to-service capability granted directly to an
+        API key. Intersecting against the resolver's output alone would strip
+        those unconditionally, revoking a capability the account was never
+        supposed to hold *as a user*.
+
+        The result is an **intersection**, never a union: a credential can only
+        ever lose authority here. Re-deriving the grant outright would *add*
+        scopes a promoted user's older credential never carried, which is a
+        privilege change no issued credential should silently pick up.
 
         Args:
-            token_scopes: Scopes carried by the presented access token.
+            token_scopes: Scopes carried by the presented credential.
             user: The freshly loaded account.
 
         Returns:
             The scopes still backed by the account's current entitlement.
         """
         entitled = set(jafaal_ports.get_scope_resolver().scopes_for(user))
-        narrowed = [scope for scope in token_scopes if scope in entitled]
+        governed = set(jafaal_scopes.get_scope_catalog().admin)
+        narrowed = [scope for scope in token_scopes if scope in entitled or scope not in governed]
         if len(narrowed) != len(token_scopes):
-            dropped = sorted(set(token_scopes) - entitled)
+            dropped = sorted(set(token_scopes) - set(narrowed))
             logger.info(
-                f"Access token scopes narrowed to the account's current entitlement: dropped {dropped}",
+                f"Credential scopes narrowed to the account's current entitlement: dropped {dropped}",
                 extra={"user_id": user.id, "dropped_scopes": dropped},
             )
         return narrowed
@@ -712,6 +723,18 @@ class DefaultIdentityService:
         )
 
         scopes = jafaal_api_keys_utils.json_to_scopes(db_key.scopes)
+
+        # Re-check the key's grant against what the account is entitled to *now*.
+        # Unlike the access-token path this is unconditional, not gated on
+        # ``reauthorize_scopes_per_request``, because the reasoning that makes
+        # that switch opt-in does not transfer: an access token is short-lived
+        # and lapses at expiry, whereas an API key's ``expires_at`` is optional,
+        # so a key minted once can outlive every privilege the account had. Left
+        # unnarrowed, demoting an administrator leaves every admin scope frozen
+        # into any key they created while privileged, forever. Intersection only:
+        # a key can lose authority here, never gain it.
+        scopes = self._narrow_to_current_entitlement(scopes, user)
+
         return self._build_principal(
             user,
             scopes,

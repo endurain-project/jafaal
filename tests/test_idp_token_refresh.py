@@ -26,6 +26,10 @@ class _FakeResponse:
         self._data = data or {}
         self.text = ""
 
+    @property
+    def is_redirect(self):
+        return self.status_code in (301, 302, 303, 307, 308)
+
     def json(self):
         return self._data
 
@@ -39,11 +43,13 @@ class _FakeResponse:
 class _FakeHttpClient:
     def __init__(self, response):
         self._r = response
+        self.post_kwargs = None
 
     async def get(self, url, **kwargs):
         return self._r
 
     async def post(self, url, **kwargs):
+        self.post_kwargs = kwargs
         return self._r
 
 
@@ -273,3 +279,28 @@ def test_revoke_success(db, make_user, monkeypatch):
     svc.discovery._cache_expiry[idp.id] = datetime.now(UTC) + timedelta(hours=1)
     svc.discovery._http_client = _FakeHttpClient(_FakeResponse(status_code=200))
     assert asyncio.run(svc.revoke_idp_token(user.id, idp.id, db)) is True
+
+
+def test_revoke_never_follows_a_redirect(db, make_user, monkeypatch):
+    """The revocation POST must not replay client credentials to a redirect target.
+
+    The body carries ``client_secret`` and the IdP refresh token, and on a
+    307/308 httpx preserves both the method and the body. The revocation
+    endpoint comes from the provider's discovery document, so a redirect there
+    would exfiltrate the credentials to whatever host it names — which the SSRF
+    guard does not prevent, since it only rejects private addresses.
+    """
+    user = make_user()
+    idp = _create_idp(db, issuer_url=ISSUER)
+    _link_with_tokens(db, user.id, idp.id, refresh="rt")
+    svc = IdentityProviderService()
+    _no_ssrf(monkeypatch)
+    svc.discovery._discovery_cache[idp.id] = {"revocation_endpoint": f"{ISSUER}/revoke"}
+    svc.discovery._cache_expiry[idp.id] = datetime.now(UTC) + timedelta(hours=1)
+    fake_client = _FakeHttpClient(_FakeResponse(status_code=307))
+    svc.discovery._http_client = fake_client
+
+    # A redirect is reported as a failed revocation, never chased.
+    assert asyncio.run(svc.revoke_idp_token(user.id, idp.id, db)) is False
+    # ...and redirect-following was explicitly disabled for the request.
+    assert fake_client.post_kwargs["follow_redirects"] is False

@@ -405,6 +405,33 @@ def test_token_endpoint_errors_are_not_cacheable(client):
     assert response.headers["cache-control"] == "no-store"
 
 
+def test_successful_token_responses_are_not_cacheable(client, make_user):
+    """RFC 6749 §5.1 requires no-store on *any* response carrying tokens.
+
+    The error path alone is not enough: it is the success path that hands out an
+    access token (and, under body delivery, a refresh token) which a proxy,
+    CDN, or browser cache could otherwise retain and serve to someone else.
+    """
+    make_user(username="cacheuser", password="Str0ng!Pass")
+
+    login = client.post(
+        "/api/v1/auth/login",
+        data={"username": "cacheuser", "password": "Str0ng!Pass", "client_id": CLIENT_ID},
+    )
+    assert login.status_code == 200
+    assert login.json()["access_token"]
+    assert login.headers["cache-control"] == "no-store"
+    assert login.headers["pragma"] == "no-cache"
+
+    refreshed = client.post(
+        "/api/v1/auth/refresh",
+        headers={"Authorization": f"Bearer {login.json()['refresh_token']}"},
+    )
+    assert refreshed.status_code == 200
+    assert refreshed.headers["cache-control"] == "no-store"
+    assert refreshed.headers["pragma"] == "no-cache"
+
+
 def test_the_code_is_not_stored_in_plaintext(client, monkeypatch, make_user):
     """Database read access alone must not yield a redeemable code."""
     import jafaal.oauth_state.models as oauth_state_models

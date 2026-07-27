@@ -187,7 +187,7 @@ class SqlUserRepository:
 
 class StaticSettingsProvider:
     def get_password_policy(self) -> PasswordPolicy:
-        return PasswordPolicy(min_length_regular=8, min_length_admin=12, password_type="strict")
+        return PasswordPolicy(min_length_regular=15, min_length_admin=20, password_type="length_only")
 
     def get_signup_config(self) -> SignupConfig:
         return SignupConfig(enabled=True, require_email_verification=False,
