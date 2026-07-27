@@ -19,11 +19,9 @@ First release.
 
 **Authentication**
 
-- Username/password login with Argon2 hashing (bcrypt verification is retained
-  so a host can import existing hashes and have them upgraded transparently on
-  first login; bcrypt input is truncated at its 72-byte limit, matching the
-  semantics those imported hashes were created with, so a long password can
-  never raise where other accounts return a clean 401).
+- Username/password login with Argon2id hashing — the only supported algorithm,
+  with transparent rehashing on verify when the cost parameters change.
+  Passwords are never truncated.
 - Passwords are NFKC-normalized before hashing (NIST SP 800-63B §5.1.1.2), so a
   passphrase enrolled on a composing platform verifies on a decomposing one.
 - A `length_only` password policy by default, with a 15-character regular

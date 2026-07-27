@@ -17,7 +17,7 @@ JAFAAL is a batteries-included, framework-agnostic authentication library for
 FastAPI + SQLAlchemy applications. It owns the security-critical parts of auth so
 your app doesn't have to:
 
-- **Password login** (Argon2, bcrypt fallback) with progressive per-account lockout
+- **Password login** (Argon2id) with progressive per-account lockout
 - **JWT access/refresh tokens** (HS256) with refresh-token **rotation + reuse detection**
 - **Sessions** with idle/absolute timeout, CSRF binding, and web/mobile (PKCE) flows
 - **MFA** (TOTP + single-use backup codes) with replay protection

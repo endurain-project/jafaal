@@ -32,7 +32,7 @@ class LocalCredential(Base):
 
     Attributes:
         user_id: FK to ``users.id`` and primary key (one row per user).
-        password_hash: Argon2/bcrypt password hash.
+        password_hash: Argon2 password hash.
         created_at: Row creation timestamp.
         updated_at: Last update timestamp.
         users: Back-reference to the owning ``Users`` row.

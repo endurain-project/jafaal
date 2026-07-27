@@ -8,8 +8,10 @@ protections and the deployment steps you are responsible for.
 
 ### Credentials
 
-- **Argon2** password hashing (via `pwdlib`) with a bcrypt fallback for legacy
-  hashes and transparent rehashing on verify.
+- **Argon2id** password hashing (via `pwdlib`), with transparent rehashing on
+  verify when the configured cost parameters change. It is the only supported
+  algorithm: a second one exists only to read hashes you no longer want, and
+  every additional verifier is another way to get a password comparison wrong.
 - A **timing-equalising dummy verify** on the "user not found" login branch, so
   response time cannot be used to enumerate valid usernames.
 - Password hashes live in JAFAAL's own `users_local_credentials` table, never on
@@ -246,11 +248,9 @@ minimum (20 for admins) — the length SP 800-63B-4 §3.1.1.1 recommends, not th
 it merely permits.
 
 Passwords are NFKC-normalized before hashing (§3.1.1.2), so a passphrase enrolled
-on one platform verifies on another. `max_length` (default 128, minimum 64)
-bounds input before hashing so long passphrases are supported without unbounded
-Argon2 work. Argon2 — used for every hash JAFAAL writes — never truncates. The
-bcrypt verifier, kept only so a host can import hashes from a previous system,
-truncates at 72 bytes, matching the semantics those hashes were created with.
+on one platform verifies on another. Argon2id is the only hashing algorithm and
+it never truncates, so `max_length` (default 128, minimum 64) is the sole upper
+bound and exists only to cap hashing work on an unauthenticated endpoint.
 
 ## Response headers for SSO redirect pages
 

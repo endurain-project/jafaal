@@ -6,9 +6,7 @@ from pwdlib.hashers.argon2 import Argon2Hasher
 
 import jafaal
 from jafaal._internal.password_hasher import (
-    BCRYPT_MAX_PASSWORD_BYTES,
     PasswordHasher,
-    TruncatingBcryptHasher,
     get_password_hasher,
     normalize_password,
 )
@@ -20,37 +18,20 @@ COMPOSED_PASSWORD = "p\u00e4ssw0rd!"
 DECOMPOSED_PASSWORD = "pa\u0308ssw0rd!"
 
 
-def test_imported_bcrypt_hash_does_not_raise_on_over_long_password():
-    """A >72-byte password against an imported bcrypt hash must not 500.
+def test_a_very_long_password_verifies_without_raising():
+    """Argon2 takes the password whole, so length is bounded by policy alone.
 
-    bcrypt 5.0 raises ValueError past 72 bytes where 4.x truncated silently. If
-    that escapes, a long password returns 500 for accounts carrying an imported
-    bcrypt hash but 401 for everyone else — an unauthenticated oracle for which
-    accounts those are.
+    Any hasher with a hard input limit turns a long password into a 500 for some
+    accounts and a 401 for others — an unauthenticated oracle for which hash an
+    account carries.
     """
-    hasher = PasswordHasher(hasher=[Argon2Hasher(), TruncatingBcryptHasher()])
-    imported = TruncatingBcryptHasher().hash("a" * 80)
+    hasher = PasswordHasher(hasher=Argon2Hasher())
+    hashed = hasher.hash_password("a" * 200)
 
-    # Verifies (bcrypt ignores everything past 72 bytes) and, crucially, does
-    # not raise.
-    ok, updated = hasher.verify_and_update("a" * 100, imported)
-    assert ok is True
-    # ...and the row is upgraded off bcrypt onto Argon2.
-    assert updated is not None
-    assert updated.startswith("$argon2")
-
-    # A genuinely wrong password is still a clean False, not an exception.
-    assert hasher.verify_and_update("b" * 100, imported) == (False, None)
-
-
-def test_bcrypt_truncates_at_the_documented_boundary():
-    assert BCRYPT_MAX_PASSWORD_BYTES == 72
-    hasher = PasswordHasher(hasher=[TruncatingBcryptHasher()])
-    imported = TruncatingBcryptHasher().hash("x" * 72)
-    # Byte 73 onward is ignored, matching the semantics the imported hash was
-    # created with.
-    assert hasher.verify_password("x" * 72 + "ignored", imported) is True
-    assert hasher.verify_password("x" * 71, imported) is False
+    assert hasher.verify_password("a" * 200, hashed) is True
+    # Not truncated: a prefix is not the password.
+    assert hasher.verify_password("a" * 72, hashed) is False
+    assert hasher.verify_and_update("b" * 200, hashed) == (False, None)
 
 
 def test_password_is_nfkc_normalized_before_hashing():

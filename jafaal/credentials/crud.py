@@ -55,7 +55,7 @@ def upsert_password_hash(
 
     Args:
         user_id: ID of the user to write the credential for.
-        password_hash: Argon2/bcrypt password hash to store.
+        password_hash: Argon2 password hash to store.
         db: SQLAlchemy database session.
         commit: Whether to commit immediately. Pass ``False`` to bundle the
             write into a larger transaction owned by the caller.

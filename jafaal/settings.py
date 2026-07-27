@@ -340,9 +340,7 @@ class PasswordSettings:
         max_length: Maximum accepted password length, enforced *before* hashing
             so an unauthenticated caller cannot force unbounded Argon2 work.
             Must be at least 64 so long passphrases are accepted (NIST
-            SP 800-63B). Note the bcrypt verifier — used only to read hashes
-            imported from another system — truncates at 72 bytes; Argon2, which
-            every hash JAFAAL writes uses, does not.
+            SP 800-63B). Passwords are never truncated.
     """
 
     argon2_time_cost: int = 3

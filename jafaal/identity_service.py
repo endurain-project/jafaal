@@ -365,7 +365,7 @@ class LocalCredentialStore(Protocol):
 
         Args:
             user_id: ID of the user to write the credential for.
-            password_hash: Argon2/bcrypt password hash to store.
+            password_hash: Argon2 password hash to store.
 
         Returns:
             None.
@@ -417,7 +417,7 @@ class DefaultIdentityService:
         Args:
             db: SQLAlchemy database session.
             token_manager: Configured JWT token manager.
-            password_hasher: Argon2/bcrypt password hasher.
+            password_hasher: Argon2 password hasher.
         """
         self._db = db
         self._token_manager = token_manager
@@ -943,7 +943,7 @@ class DefaultIdentityService:
 
         Args:
             user_id: ID of the user to write the credential for.
-            password_hash: Argon2/bcrypt password hash to store.
+            password_hash: Argon2 password hash to store.
 
         Returns:
             None.
@@ -991,7 +991,7 @@ def get_identity_service(
     Args:
         db: SQLAlchemy database session (from ``get_db``).
         token_manager: JWT token manager.
-        password_hasher: Argon2/bcrypt password hasher.
+        password_hasher: Argon2 password hasher.
 
     Returns:
         IdentityService: A fresh ``DefaultIdentityService`` instance

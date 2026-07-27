@@ -61,7 +61,7 @@ def hash_api_key(raw_key: str) -> str:
 
     A keyed HMAC-SHA256 under the API-key subkey derived from
     ``AuthSettings.secret_key``. High-entropy secrets do not need a slow KDF
-    (Argon2/bcrypt), but keying the digest means database read access alone does
+    (Argon2), but keying the digest means database read access alone does
     not let an attacker verify a stolen key offline, and an API-key digest can
     never collide with a digest computed for another purpose.
 

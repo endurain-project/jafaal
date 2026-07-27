@@ -371,7 +371,7 @@ def test_body_delivery_clients_are_not_subject_to_the_origin_check(client, make_
 #
 # Refresh tokens are high-entropy signed JWTs, so the session stores a keyed
 # HMAC-SHA256 digest (microseconds) rather than a password KDF (~50 ms, paid
-# twice per /refresh). Legacy Argon2/bcrypt rows must keep verifying until they
+# twice per /refresh). Legacy Argon2 rows must keep verifying until they
 # are rotated away.
 # --------------------------------------------------------------------------- #
 
@@ -395,7 +395,7 @@ def test_login_stores_refresh_token_as_keyed_hmac(client, make_user):
     body = _login(client).json()
 
     stored = _stored_hash(body["session_id"])
-    # 64 lowercase hex characters == HMAC-SHA256, not an Argon2/bcrypt PHC string.
+    # 64 lowercase hex characters == HMAC-SHA256, not an Argon2 PHC string.
     assert len(stored) == 64
     assert set(stored) <= set("0123456789abcdef")
     assert not stored.startswith("$")
