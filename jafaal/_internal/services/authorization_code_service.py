@@ -32,11 +32,13 @@ import hmac
 import logging
 import secrets
 from typing import TYPE_CHECKING, cast
+from uuid import uuid4
 
 import jafaal._internal.user_guards as jafaal_user_guards
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_providers.utils as idp_utils
 import jafaal.oauth_state.crud as oauth_state_crud
+import jafaal.oauth_state.utils as oauth_state_utils
 import jafaal.ports as jafaal_ports
 import jafaal.scopes as jafaal_scopes
 import jafaal.sessions.crud as jafaal_sessions_crud
@@ -275,6 +277,174 @@ def resolve_client(client_id: str) -> jafaal_settings.OAuthClient:
         logger.warning(f"Request from unregistered client_id={client_id!r}")
         raise jafaal_exceptions.InvalidClientError("Unknown client_id. Register it via AuthSettings.oauth_clients.")
     return client
+
+
+def begin_local_authorization(
+    *,
+    request: Request,
+    db: Session,
+    code_challenge: str,
+    code_challenge_method: str,
+    client_id: str,
+    redirect_uri: str,
+    client_state: str | None,
+    requested_scope: str | None,
+) -> str:
+    """Park an authorization request and return the host's login-page URL.
+
+    The local (no-``idp``) half of ``/auth/authorize``. JAFAAL is an
+    authorization server with no user interface of its own, so it persists the
+    validated request and hands the browser to the host's login page, which
+    collects credentials and posts them back to ``/auth/login`` with the
+    ``auth_request`` handle.
+
+    The handle is the OAuth state id — a 256-bit random value that already
+    carries the client, the exact redirect URI, the PKCE challenge and the
+    requested scope, all validated *before* this is called. Nothing about the
+    authorization request is re-read from the login request, so the login page
+    cannot alter the terms of the grant it is completing.
+
+    Args:
+        request: The incoming HTTP request (source IP, for the state record).
+        db: Active database session.
+        code_challenge: The client's PKCE challenge.
+        code_challenge_method: The client's PKCE method (``S256``).
+        client_id: The registered client, already resolved.
+        redirect_uri: The client's redirect URI, already matched exactly.
+        client_state: The client's opaque ``state``, echoed back with the code.
+        requested_scope: The client's ``scope`` request, already validated.
+
+    Returns:
+        The absolute URL to redirect the browser to.
+
+    Raises:
+        OAuthError: ``server_error`` if no login page is configured. Reported by
+            redirect rather than raised at the user agent, because by this point
+            the redirect URI has validated and the waiting client should learn
+            that the deployment cannot serve local login.
+    """
+    login_ui_url = jafaal_settings.get_settings().login_ui_url
+    if not login_ui_url:
+        logger.error(
+            "An authorization request omitted 'idp' but AuthSettings.login_ui_url is not set, so there "
+            "is no login page to send the user to."
+        )
+        raise jafaal_exceptions.OAuthError(
+            "server_error",
+            "This deployment does not offer local login at the authorization endpoint.",
+        )
+
+    state_id, nonce = oauth_state_utils.create_state_id_and_nonce()
+    oauth_state_crud.create_oauth_state(
+        db=db,
+        state_id=state_id,
+        # No upstream provider: this request is satisfied by JAFAAL's own
+        # credentials, so there is no IdP to bind the state to.
+        idp_id=None,
+        nonce=nonce,
+        ip_address=network.get_ip_address(request),
+        code_challenge=code_challenge,
+        code_challenge_method=code_challenge_method,
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+        client_state=client_state,
+        requested_scope=requested_scope,
+    )
+    logger.debug(f"Local authorization request parked as state {state_id[:8]}... (client={client_id})")
+    return idp_utils.append_query_params(login_ui_url, {"auth_request": state_id})
+
+
+def resolve_authorization_request(
+    auth_request: str,
+    client: jafaal_settings.OAuthClient,
+    db: Session,
+) -> oauth_state_models.OAuthState:
+    """Resolve the ``auth_request`` handle a login is completing.
+
+    Args:
+        auth_request: The handle handed to the host's login page.
+        client: The client named on the login request.
+        db: Active database session.
+
+    Returns:
+        The pending authorization request.
+
+    Raises:
+        InvalidRequestError: If the handle is unknown, expired, already used, or
+            does not belong to a local authorization request for this client.
+            One message for all of them: the handle is unauthenticated at this
+            point, so distinguishing the cases would let a caller probe which
+            requests are in flight.
+    """
+    oauth_state = oauth_state_crud.get_oauth_state_by_id_and_not_used(auth_request, db)
+    if (
+        oauth_state is None
+        or oauth_state.purpose != "login"
+        # An IdP-bound state belongs to the SSO round trip and is completed by
+        # the provider callback. Redeeming one here would skip the provider.
+        or oauth_state.idp_id is not None
+        or oauth_state.client_id is None
+        or not hmac.compare_digest(oauth_state.client_id, client.client_id)
+    ):
+        logger.warning("Login presented an unusable auth_request handle")
+        raise jafaal_exceptions.InvalidRequestError(
+            "This authorization request is unknown or has expired. Start the flow again from /auth/authorize."
+        )
+    return oauth_state
+
+
+def complete_local_authorization(
+    oauth_state: oauth_state_models.OAuthState,
+    user: jafaal_ports.UserProtocol,
+    request: Request,
+    db: Session,
+) -> dict[str, str]:
+    """Turn a completed local login into an RFC 6749 §4.1.2 authorization response.
+
+    The counterpart of the SSO callback's login branch, and deliberately the same
+    shape: a session with **no** tokens, plus a single-use code delivered to the
+    client's registered redirect URI. The tokens are minted only when that code
+    is redeemed at ``/auth/token`` with the PKCE verifier, so nothing bearer-ish
+    ever travels through the login page or the browser's address bar.
+
+    Args:
+        oauth_state: The pending authorization request, already resolved.
+        user: The authenticated user.
+        request: The incoming HTTP request, for session device metadata.
+        db: Active database session.
+
+    Returns:
+        ``{"redirect_to": url}`` — the host's login page navigates there.
+
+    Raises:
+        InvalidRequestError: If the request was consumed concurrently.
+    """
+    # Claim the request before anything is minted: one authorization request
+    # yields at most one code, even if the login page double-submits.
+    if not oauth_state_crud.mark_oauth_state_used(oauth_state.id, db):
+        logger.warning(f"Authorization request {oauth_state.id[:8]}... was already completed")
+        raise jafaal_exceptions.InvalidRequestError(
+            "This authorization request has already been completed. Start the flow again from /auth/authorize."
+        )
+
+    session_id = str(uuid4())
+    jafaal_sessions_utils.create_session(
+        session_id,
+        user,
+        request,
+        None,
+        db,
+        oauth_state_id=oauth_state.id,
+    )
+    code = issue_authorization_code(oauth_state.id, db)
+
+    params = {"code": code, "iss": jafaal_settings.get_settings().resolved_issuer}
+    if oauth_state.client_state:
+        params["state"] = oauth_state.client_state
+    # ``redirect_uri`` was matched byte-for-byte against the client's
+    # registration before the request was parked, so it is safe to navigate to.
+    assert oauth_state.redirect_uri  # noqa: S101 - guaranteed by begin_local_authorization
+    return {"redirect_to": idp_utils.append_query_params(oauth_state.redirect_uri, params)}
 
 
 def resolve_login_client(client_id: str | None, request: Request) -> jafaal_settings.OAuthClient:

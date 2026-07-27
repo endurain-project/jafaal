@@ -44,20 +44,26 @@ roles, and implements the standards that govern each:
 | **Credential authority** | NIST SP 800-63B (password policy + breach screening), RFC 6238 (TOTP), W3C WebAuthn L2 (passkeys), RFC 7662 (introspection), RFC 7009 (revocation) |
 
 > [!IMPORTANT]
-> **JAFAAL is not a general-purpose authorization server or an OpenID Provider.**
-> There is no consent screen, no client secret, and no dynamic registration, and
-> it never issues tokens to *third-party* clients. For SSO it acts as an OAuth
-> *client* against your IdP — it does not become one. If you need to *be* an
-> identity provider, put a real authorization server in front of JAFAAL.
+> **JAFAAL is an authorization server for clients you own.**
 >
-> What it does implement, for **your own** apps, is the authorization-code flow
-> with PKCE (`/auth/authorize` → `/auth/token`), so any standard OAuth client
-> library can drive it. Clients are public (RFC 8252) and registered only so
-> their redirect URIs can be matched exactly.
+> That is the boundary, and it is deliberate rather than unfinished. Register
+> your applications via `AuthSettings.oauth_clients` and drive `/auth/authorize`
+> → `/auth/token` with any standard OAuth client library — PKCE mandatory,
+> `code` the only response type, redirect URIs matched byte-for-byte, clients
+> public per RFC 8252.
+>
+> **Not planned:** third-party clients (consent screen, client secrets, dynamic
+> registration), being an OpenID Provider (`id_token`, userinfo, the logout
+> specs, certification), `client_credentials`, and the implicit/hybrid/ROPC
+> grants that OAuth 2.1 removes. If you need to *be* an identity provider, put a
+> real one in front of JAFAAL — it already speaks to Keycloak, Authentik,
+> Authelia, Casdoor and Pocket ID as a relying party.
 >
 > `POST /auth/login` authenticates a first-party user directly; it is **not** the
-> (OAuth 2.1-removed) resource-owner password-credentials grant, and the
-> discovery document deliberately does not advertise it.
+> resource-owner password-credentials grant, and the discovery document
+> deliberately does not advertise it. A native app should prefer
+> `/auth/authorize`, which keeps the password out of the app entirely
+> (RFC 8252 §8.1).
 
 Both **web and mobile** clients are first-class. They differ only in refresh-token
 delivery: browsers get an `HttpOnly`, `SameSite=Strict` cookie (so page script

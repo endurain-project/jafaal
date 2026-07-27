@@ -170,6 +170,28 @@ class TokenResponseMobile(BaseModel):
     scope: StrictStr | None = None
 
 
+class AuthorizationRedirectResponse(BaseModel):
+    """Where to send the browser once a local authorization request completes.
+
+    Returned by ``/auth/login`` (and the second-factor endpoints) when the
+    request carried an ``auth_request`` handle from ``/auth/authorize``. The
+    login then produces an RFC 6749 §4.1.2 *authorization response* rather than
+    a token response: the URL carries a single-use ``code``, the client's
+    ``state``, and ``iss`` — and no token, which is the point of the code flow.
+
+    The host's login page navigates to it; JAFAAL does not redirect on its own,
+    because the page is script and needs to clear its own state first.
+
+    Attributes:
+        redirect_to: The client's registered ``redirect_uri`` with the
+            authorization response parameters appended.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    redirect_to: StrictStr
+
+
 class TokenIntrospectionResponse(BaseModel):
     """RFC 7662 token introspection response.
 

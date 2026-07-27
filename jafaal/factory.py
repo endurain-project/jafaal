@@ -68,9 +68,12 @@ def _warn_on_insecure_defaults() -> None:
     Surfaced here, at the single integration entry point, so an operator sees
     them in the logs:
 
-    * the no-op rate limiter (endpoints are not rate-limited); and
+    * the no-op rate limiter (endpoints are not rate-limited);
     * a trust-all ``trusted_proxies`` in a *deployed* environment (any client
-      can then spoof its source IP via ``X-Forwarded-For`` / ``X-Real-IP``).
+      can then spoof its source IP via ``X-Forwarded-For`` / ``X-Real-IP``);
+    * no breached-password screening; and
+    * symmetric (HS256) signing while registered clients exist, where every
+      verifier also holds the power to mint.
 
     The in-memory state store in a deployed environment is a *hard error*, not a
     warning — see :func:`_ensure_state_store_safe_for_deployment`. A missing rate
@@ -105,6 +108,46 @@ def _warn_on_insecure_defaults() -> None:
             "jafaal.configure_password_breach_checker(jafaal.adapters.HibpBreachChecker()) needs no "
             "credentials and sends only a five-character SHA-1 prefix."
         )
+
+    _warn_on_symmetric_signing()
+
+
+def _warn_on_symmetric_signing() -> None:
+    """Warn when HS256 is signing tokens that leave the deployment.
+
+    HS256 signs and verifies with the *same* secret, so every party that can
+    verify a token can also mint one. That is fine while JAFAAL is the only thing
+    reading its tokens, and it is why HS256 remains the zero-configuration
+    default — an asymmetric algorithm needs key material the host has to generate
+    and distribute.
+
+    It stops being fine as soon as the tokens are handed to something else. Two
+    signals say they are:
+
+    * a **registered client** exists, so tokens are issued to an application that
+      is not this process; and
+    * ``jwks_uri`` is what a separate resource server would use to verify, and
+      under HS256 there is nothing to publish — so a deployment that wants
+      stateless verification cannot have it.
+
+    Warned rather than refused: a single-process app that both issues and
+    consumes its own tokens is a legitimate, common deployment, and HS256 is
+    correct there.
+    """
+    if not jafaal_settings.is_configured():
+        return
+    settings = jafaal_settings.get_settings()
+    if settings.tokens.is_asymmetric or not settings.oauth_clients:
+        return
+    logger.warning(
+        f"JAFAAL is signing tokens with {settings.tokens.algorithm} (symmetric) while "
+        f"{len(settings.oauth_clients)} OAuth client(s) are registered. The signing secret and the "
+        "verification key are the same value, so anything able to verify a token can also mint one: a "
+        "resource server cannot verify statelessly without being handed the power to issue. The JWKS "
+        "endpoint has no key to publish and answers 404, and jwks_uri is omitted from the discovery "
+        "document. Configure an asymmetric algorithm — tokens=TokenSettings(algorithm='ES256') with "
+        "secrets=Secrets(private_key=<PEM>) — so verifiers get a public key instead."
+    )
 
 
 def _warn_on_router_prefix_mismatch(prefixes: RouterPrefixes) -> None:

@@ -201,6 +201,52 @@ def _mfa_required_response(
     )
 
 
+def _finish_login(
+    response: Response,
+    request: Request,
+    user: jafaal_ports.UserProtocol,
+    client: jafaal_settings.OAuthClient,
+    token_manager: jafaal_token_manager.TokenManager,
+    db: Session,
+    requested_scope: tuple[str, ...],
+    auth_request: str | None,
+) -> dict:
+    """Complete an authenticated login, in whichever shape it was started.
+
+    Two outcomes, and the caller does not choose between them — the presence of
+    an ``auth_request`` does:
+
+    * **direct login** — mint the token bundle and return it (the RFC 6749 §5.1
+      shape, or the cookie variant for a browser client); or
+    * **authorization request** — create a token-less session, mint a single-use
+      code, and return where to send the browser. No token is placed in a
+      redirect, and none passes through the host's login page.
+
+    Shared by password login and every second-factor completion, so a flow begun
+    at ``/auth/authorize`` finishes as an authorization response no matter which
+    factor ended it.
+
+    Args:
+        response: The HTTP response object.
+        request: The incoming HTTP request.
+        user: The authenticated user.
+        client: The registered client the login is for.
+        token_manager: Utility for minting tokens.
+        db: Database session.
+        requested_scope: The scope the client asked for.
+        auth_request: The pending authorization request, if any.
+
+    Returns:
+        Either the token response or ``{"redirect_to": url}``.
+    """
+    if auth_request is None:
+        return jafaal_utils.complete_login(response, request, user, client, token_manager, db, requested_scope)
+
+    oauth_state = authorization_code_service.resolve_authorization_request(auth_request, client, db)
+    jafaal_utils.apply_no_store(response)
+    return authorization_code_service.complete_local_authorization(oauth_state, user, request, db)
+
+
 @router.post(
     "/login",
     summary="First-party direct login (not an OAuth grant)",
@@ -217,7 +263,10 @@ def _mfa_required_response(
         "The endpoint may return `202 Accepted` with an MFA challenge instead of tokens."
     ),
     response_model=(
-        jafaal_schema.MFARequiredResponse | jafaal_schema.TokenResponseWeb | jafaal_schema.TokenResponseMobile
+        jafaal_schema.MFARequiredResponse
+        | jafaal_schema.AuthorizationRedirectResponse
+        | jafaal_schema.TokenResponseWeb
+        | jafaal_schema.TokenResponseMobile
     ),
 )
 @jafaal_rate_limit.limit(jafaal_rate_limit.SENSITIVE)
@@ -245,6 +294,10 @@ def login_for_access_token(
         Session,
         Depends(jafaal_orm.get_db),
     ],
+    auth_request: Annotated[
+        str | None,
+        Form(description="Handle from /auth/authorize; completes that request instead of issuing tokens."),
+    ] = None,
 ):
     """Authenticate a user directly and issue tokens to a registered client.
 
@@ -280,6 +333,15 @@ def login_for_access_token(
     # cannot be widened by finishing the login in two steps.
     requested_scope = tuple(form_data.scopes)
     authorization_code_service.validate_requested_scope(" ".join(form_data.scopes), client)
+
+    if auth_request is not None:
+        # Resolved before any credential is checked, so a bad handle costs an
+        # attacker nothing to discover and, more importantly, so a *successful*
+        # authentication is never left with nowhere to go. The terms of the grant
+        # (scope, PKCE, redirect URI) come from the parked request, never from
+        # this form.
+        oauth_state = authorization_code_service.resolve_authorization_request(auth_request, client, db)
+        requested_scope = tuple((oauth_state.requested_scope or "").split())
 
     client_ip = network.get_ip_address(request)
 
@@ -344,7 +406,7 @@ def login_for_access_token(
         # it the second factor alone cannot complete a login.
         with _translate_store_outage():
             mfa_token = pending_mfa_store.add_pending_login(
-                form_data.username, user.id, client.client_id, requested_scope
+                form_data.username, user.id, client.client_id, requested_scope, auth_request
             )
 
         # Don't reset failed login attempts yet - wait for MFA verification
@@ -357,12 +419,14 @@ def login_for_access_token(
         failed_attempts.reset_attempts(form_data.username)
         failed_attempts.reset_ip_attempts(client_ip)
 
-    return jafaal_utils.complete_login(response, request, user, client, token_manager, db, requested_scope)
+    return _finish_login(response, request, user, client, token_manager, db, requested_scope, auth_request)
 
 
 @router.post(
     "/mfa/verify",
-    response_model=(jafaal_schema.TokenResponseWeb | jafaal_schema.TokenResponseMobile),
+    response_model=(
+        jafaal_schema.AuthorizationRedirectResponse | jafaal_schema.TokenResponseWeb | jafaal_schema.TokenResponseMobile
+    ),
 )
 @jafaal_rate_limit.limit(jafaal_rate_limit.SENSITIVE)
 def verify_mfa_and_login(
@@ -502,8 +566,9 @@ def verify_mfa_and_login(
 
     # The scope comes from the claimed ticket, not from this request: the
     # password step is where the client asked, and re-reading it here would let
-    # step two widen what step one requested.
-    return jafaal_utils.complete_login(response, request, user, client, token_manager, db, claimed.scope)
+    # step two widen what step one requested. The same goes for the authorization
+    # request being completed.
+    return _finish_login(response, request, user, client, token_manager, db, claimed.scope, claimed.auth_request)
 
 
 async def _grant_refresh_token(
@@ -817,9 +882,12 @@ def _authorize_error_redirect(
     summary="OAuth 2.0 authorization endpoint (RFC 6749 §4.1, PKCE required)",
     description=(
         "Starts the authorization-code flow for a **registered public client** (RFC 8252 native app).\n\n"
-        "The user is sent to the selected identity provider; when they come back, JAFAAL redirects the "
-        "browser to the client's registered `redirect_uri` with `code` and `state`, which the client "
-        "redeems at `/auth/token` with `grant_type=authorization_code` and its `code_verifier`.\n\n"
+        "Name an `idp` to authenticate against an identity provider, or omit it to authenticate with "
+        "JAFAAL's own credentials (password / MFA / passkey) — the browser is then sent to the host's "
+        "`login_ui_url`, which posts back to `/auth/login` with the `auth_request` handle.\n\n"
+        "Either way the browser ends up at the client's registered `redirect_uri` with `code`, `state` "
+        "and `iss`, which the client redeems at `/auth/token` with `grant_type=authorization_code` and "
+        "its `code_verifier`.\n\n"
         "PKCE is mandatory (`code_challenge_method=S256`), `response_type=code` is the only supported "
         "response type, and `redirect_uri` must match one registered for the `client_id` **exactly**.\n\n"
         "Errors are reported per RFC 6749 §4.1.2.1: as a redirect carrying `error`/`error_description`/"
@@ -835,11 +903,27 @@ async def authorize(
     redirect_uri: Annotated[str, Query(description="Must exactly match one of the client's registered URIs.")],
     code_challenge: Annotated[str, Query(description="PKCE challenge, base64url SHA-256 (43-128 chars).")],
     code_challenge_method: Annotated[str, Query(description="Must be 'S256'.")],
-    idp: Annotated[str, Query(description="Slug of the identity provider to authenticate with.")],
+    idp: Annotated[
+        str | None,
+        Query(description="Slug of the identity provider to authenticate with. Omit for local login."),
+    ] = None,
     state: Annotated[str | None, Query(description="Opaque value echoed back with the code.")] = None,
     scope: Annotated[str | None, Query(description="Space-delimited scopes to request.")] = None,
 ):
     """Start an RFC 6749 authorization-code flow for a registered public client.
+
+    Two ways to authenticate the user, chosen by whether ``idp`` is present:
+
+    * **named provider** — the browser goes to that identity provider, and the
+      provider's callback issues the code; or
+    * **local** — the browser goes to the host's ``login_ui_url``, which collects
+      JAFAAL credentials and posts them to ``/auth/login`` with the
+      ``auth_request`` handle. This is the flow a native app should use even
+      though ``/auth/login`` exists: the password is entered in a browser the app
+      does not control, which is the whole point of RFC 8252 §8.1.
+
+    Both end at the client's registered ``redirect_uri`` with a single-use code.
+    No token is ever placed in a redirect.
 
     Args:
         request: The incoming HTTP request.
@@ -849,16 +933,17 @@ async def authorize(
         redirect_uri: Where to deliver the authorization code.
         code_challenge: PKCE challenge (RFC 7636).
         code_challenge_method: PKCE method; only ``S256``.
-        idp: Slug of the identity provider to authenticate against.
+        idp: Slug of the identity provider to authenticate against. Omit to
+            authenticate locally.
         state: Opaque client value, returned unmodified with the code.
         scope: Space-delimited scopes to request. Omitted means "everything this
             client and user are entitled to"; the granted set is always reported
             in the token response.
 
     Returns:
-        A redirect to the identity provider's authorization endpoint, or — for a
-        failure after the redirect URI validates — to the client's redirect URI
-        carrying the error.
+        A redirect to the identity provider's authorization endpoint or to the
+        host's login page — or, for a failure after the redirect URI validates,
+        to the client's redirect URI carrying the error.
 
     Raises:
         OAuthError: 400/401 if the client is unregistered or the redirect URI is
@@ -877,17 +962,29 @@ async def authorize(
         authorization_code_service.validate_authorization_request(response_type, code_challenge, code_challenge_method)
         authorization_code_service.validate_requested_scope(scope, client)
 
-        authorization_url = await idp_utils.begin_idp_authorization(
-            idp_slug=idp,
-            request=request,
-            db=db,
-            code_challenge=code_challenge,
-            code_challenge_method=code_challenge_method,
-            client_id=client_id,
-            redirect_uri=redirect_uri,
-            client_state=state,
-            requested_scope=scope,
-        )
+        if idp:
+            next_url = await idp_utils.begin_idp_authorization(
+                idp_slug=idp,
+                request=request,
+                db=db,
+                code_challenge=code_challenge,
+                code_challenge_method=code_challenge_method,
+                client_id=client_id,
+                redirect_uri=redirect_uri,
+                client_state=state,
+                requested_scope=scope,
+            )
+        else:
+            next_url = authorization_code_service.begin_local_authorization(
+                request=request,
+                db=db,
+                code_challenge=code_challenge,
+                code_challenge_method=code_challenge_method,
+                client_id=client_id,
+                redirect_uri=redirect_uri,
+                client_state=state,
+                requested_scope=scope,
+            )
     except jafaal_exceptions.OAuthError as err:
         return _authorize_error_redirect(redirect_uri, err, state)
     except jafaal_exceptions.JafaalError as err:
@@ -900,7 +997,7 @@ async def authorize(
             jafaal_exceptions.OAuthError("invalid_request", err.detail),
             state,
         )
-    return RedirectResponse(url=authorization_url, status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(url=next_url, status_code=status.HTTP_302_FOUND)
 
 
 @router.post(

@@ -38,29 +38,50 @@ tables, routers, token logic — ships with the library, and ready-made
 
 ## What JAFAAL is (and is not)
 
-JAFAAL authenticates **your** users for **your** API. Concretely, it plays four
+JAFAAL authenticates **your** users for **your** API. Concretely, it plays five
 roles, and implements the standards that govern each:
 
 | Role | Standards |
 |---|---|
 | **JWT issuer** for your own resource servers | RFC 9068 (`at+jwt` access tokens), RFC 7519, RFC 7517 / 7638 (JWKS + `kid` thumbprints), RFC 8414 (discovery) |
 | **Bearer-token resource server** | RFC 6750 (header extraction, `WWW-Authenticate` challenges incl. `insufficient_scope`) |
-| **OAuth client / OIDC Relying Party** for SSO | RFC 6749 *client* role, RFC 7636 (PKCE S256), OIDC Core 1.0 (`nonce`, `azp`, `at_hash`), RFC 9700 (Security BCP) |
+| **Authorization server for your own apps** | RFC 6749 §4.1 (authorization code), RFC 7636 (PKCE S256), RFC 8252 (native apps / public clients), RFC 9207 (`iss`), RFC 9700 (exact redirect-URI matching) |
+| **OAuth client / OIDC Relying Party** for SSO | RFC 6749 *client* role, RFC 7636, OIDC Core 1.0 (`nonce`, `azp`, `at_hash`, userinfo `sub` check), RFC 9207, RFC 9700 |
 | **Credential authority** | NIST SP 800-63B (password policy + breach screening), RFC 6238 (TOTP), W3C WebAuthn L2 (passkeys), RFC 7662 (introspection), RFC 7009 (revocation) |
 
-!!! warning "JAFAAL is not an authorization server"
-    JAFAAL is **not** an OAuth 2.0 authorization server or an OpenID Provider. It
-    has no client registry, no authorization endpoint, and no consent screen, and
-    it never issues tokens to third-party clients. For SSO it acts as an OAuth
-    *client* against your IdP — it does not become one. If you need to *be* an
-    identity provider, put a real authorization server in front of JAFAAL.
+### The boundary
 
-    `POST /auth/login` therefore authenticates a first-party user directly; it is
-    **not** the (OAuth 2.1-removed) resource-owner password-credentials grant,
-    and the [discovery document](configuration.md#discovery-rfc-8414)
-    deliberately does not advertise it as a `token_endpoint`. The only endpoint
-    advertised as one is `/auth/refresh`, which accepts the standard
-    RFC 6749 §6 request.
+**JAFAAL is an authorization server for clients you own.**
+
+That is the whole of it, and it is a deliberate boundary rather than an
+unfinished one. Everything inside it is implemented to the letter of the specs
+above; nothing outside it is planned.
+
+**Inside the boundary.** Register your applications as
+[`OAuthClient`][jafaal.OAuthClient]s and drive `/auth/authorize` → `/auth/token`
+with any standard OAuth client library. PKCE is mandatory, `code` is the only
+response type, and redirect URIs match byte-for-byte. Clients are public
+(RFC 8252): a native app or browser cannot keep a secret, so PKCE — not a client
+credential — is what binds a code to its requester.
+
+**Outside the boundary, and not planned:**
+
+| Not planned | Why |
+|---|---|
+| **Third-party clients** (consent screen, client secrets, per-grant storage, [RFC 7591](https://www.rfc-editor.org/rfc/rfc7591) dynamic registration) | Letting a client you *don't* control obtain tokens for your users needs a consent UI, a grant store, and a client-management surface — each a new attack surface (consent phishing, redirect handling, secret leakage) in a library whose value is that its attack surface is small and reviewed. |
+| **Being an OpenID Provider** (`id_token`, the `openid` scope, userinfo, `/.well-known/openid-configuration`, pairwise subjects, session management, the logout specs) | That is a product, not a feature. An uncertified OP inherits all of an OP's risk and none of its credibility; doing it properly means [OpenID Foundation certification](https://openid.net/certification/). Put a real OP (Keycloak, Authentik, Authelia, …) in front of JAFAAL instead — JAFAAL already speaks to all of them as a relying party. |
+| **`client_credentials`** | Service-to-service auth is covered by scoped API keys, which need no user and no grant. |
+| **Implicit and hybrid flows** | Removed by OAuth 2.1; RFC 9700 §2.1.2 recommends against issuing tokens in a redirect. |
+| **The resource-owner password-credentials grant** | Removed by OAuth 2.1. `POST /auth/login` authenticates a first-party user directly and is deliberately **not** advertised in the [discovery document](configuration.md#discovery-rfc-8414) as a `token_endpoint`, precisely so no client attempts it. |
+
+!!! tip "Which endpoint should my app use?"
+    A **first-party app you ship** (your own SPA, your own mobile app) can use
+    either: `/auth/login` is one request and needs no browser redirect;
+    `/auth/authorize` → `/auth/token` is the standard flow and is what a native
+    app should prefer, because it keeps the password out of the app entirely
+    (RFC 8252 §8.1).
+
+    Anything else must use `/auth/authorize` → `/auth/token`.
 
 Both **web and mobile** clients are first-class. They differ only in
 refresh-token delivery: browsers get an `HttpOnly`, `SameSite=Strict` cookie (so

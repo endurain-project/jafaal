@@ -158,12 +158,36 @@ a standard client needs exactly one token URL. `/auth/refresh` remains as an
 alias that also accepts the refresh token from the `HttpOnly` cookie or an
 `Authorization` header.
 
-!!! note "Scope"
-    `/auth/authorize` authenticates through an identity provider (`idp=`).
-    Password login has no browser authorization endpoint because JAFAAL ships no
-    login UI — a first-party app posts to `/auth/login` with its `client_id`
-    directly. That endpoint is not an OAuth grant and is never advertised in
-    discovery.
+!!! note "Local login at the authorization endpoint"
+    `/auth/authorize` authenticates either through an identity provider
+    (`idp=<slug>`) or with JAFAAL's own credentials (omit `idp`).
+
+    JAFAAL ships no login UI, so the local path hands the browser to yours. Set
+    `login_ui_url` and the flow is:
+
+    1. the client opens `/auth/authorize?...` with no `idp`;
+    2. JAFAAL parks the validated request and redirects to
+       `<login_ui_url>?auth_request=<handle>`;
+    3. your page collects the credentials and posts them to `/auth/login`
+       **with that `auth_request`**;
+    4. JAFAAL answers `{"redirect_to": "<client redirect_uri>?code=…&state=…&iss=…"}`
+       and your page navigates there;
+    5. the client redeems the code at `/auth/token` with its `code_verifier`.
+
+    MFA and passkey second factors work unchanged — the handle rides on the
+    pending-login ticket, so whichever factor finishes the login produces the
+    authorization response.
+
+    Nothing about the grant is re-read from step 3: the client, redirect URI,
+    PKCE challenge and scope all come from the request parked at step 2, so a
+    compromised login page cannot widen or redirect a grant. No token ever
+    passes through the page or the address bar.
+
+    **A native app should prefer this over `/auth/login`.** It keeps the
+    password in a browser the app does not control, which is what RFC 8252 §8.1
+    asks for. `/auth/login` without an `auth_request` remains available for a
+    first-party app that owns its own login form; it is not an OAuth grant and
+    is never advertised in discovery.
 
 Everything is advertised in the RFC 8414 discovery document at
 `/.well-known/oauth-authorization-server`, so a client can be configured from a
@@ -191,6 +215,7 @@ the settings and invalidates settings-derived caches (e.g. the token manager).
 | `idle_timeout_hours` | `1` | Idle-session timeout (opt-in via `idle_timeout_enabled`). |
 | `absolute_timeout_hours` | `720` | Hard ceiling on session lifetime, measured from creation. **Always enforced**, and `expires_at` is capped at it on every rotation, so refreshing cannot extend a login indefinitely. |
 | `base_url` | `""` | Public base URL; default JWT issuer/audience and SSO redirect base. |
+| `login_ui_url` | `""` | Absolute URL of **your** login page. Required to offer local login at `/auth/authorize`; JAFAAL redirects there with an `auth_request` handle. Empty means `idp` is mandatory. |
 | `csrf_trusted_origins` | `()` | Origins allowed to drive the web refresh flow; defaults to the `base_url` origin. **Set this when the frontend is served from a different origin than the API.** |
 | `environment` | `"production"` | One of `production`, `demo`, `staging`, `development`, `local`, `test`, `testing`. The first three are treated as **deployed**; anything else is rejected at construction. |
 | `refresh_cookie_prefix` | `""` | Optional `__Secure-`/`__Host-` refresh-cookie name prefix, applied only when deployed (`__Host-` requires `refresh_cookie_path="/"`). |

@@ -144,12 +144,18 @@ class PendingLogin:
             reason as ``client_id``: a value the caller re-supplies at step two
             is a value it can widen at step two. Empty means "whatever this
             client and user are entitled to".
+        auth_request: The pending authorization request this login is completing
+            (``/auth/authorize`` without an ``idp``), or ``None`` for a direct
+            login. Carried for the same reason again: the second factor must
+            finish the authorization request the password step started, not one
+            the caller names afterwards.
     """
 
     user_id: UserId
     username: str
     client_id: str
     scope: tuple[str, ...] = ()
+    auth_request: str | None = None
 
 
 def _datetime_from_epoch(epoch_seconds: int) -> datetime:
@@ -247,6 +253,7 @@ class PendingMFAStore(Protocol):
         user_id: UserId,
         client_id: str,
         scope: Sequence[str] = (),
+        auth_request: str | None = None,
     ) -> str: ...
 
     def get_pending_login(self, mfa_token: str) -> PendingLogin | None: ...
@@ -588,9 +595,23 @@ class PendingMFALogin:
         return f"{_key_prefix()}:mfa:pending:{hashing.sha256_hex(mfa_token)}"
 
     @staticmethod
-    def _encode(user_id: UserId, username: str, client_id: str, scope: Sequence[str]) -> bytes:
+    def _encode(
+        user_id: UserId,
+        username: str,
+        client_id: str,
+        scope: Sequence[str],
+        auth_request: str | None,
+    ) -> bytes:
         """Serialise a pending login for storage."""
-        return json.dumps({"uid": str(user_id), "un": username, "cid": client_id, "sc": list(scope)}).encode()
+        return json.dumps(
+            {
+                "uid": str(user_id),
+                "un": username,
+                "cid": client_id,
+                "sc": list(scope),
+                "ar": auth_request,
+            }
+        ).encode()
 
     @staticmethod
     def _decode(raw: bytes) -> PendingLogin | None:
@@ -600,14 +621,15 @@ class PendingMFALogin:
             # The id is stored in its string form and coerced back to the host
             # user table's primary-key type (``int`` or ``uuid.UUID``) on read,
             # so the store works for both integer- and UUID-keyed hosts.
-            # ``sc`` is read defensively: an entry written by an older release
-            # predates it, and an in-flight login must not be invalidated by a
-            # deploy.
+            # ``sc`` / ``ar`` are read defensively: an entry written by an older
+            # release predates them, and an in-flight login must not be
+            # invalidated by a deploy.
             return PendingLogin(
                 coerce_user_id(payload["uid"]),
                 payload["un"],
                 payload["cid"],
                 tuple(payload.get("sc") or ()),
+                payload.get("ar"),
             )
         except (TypeError, ValueError, KeyError, AttributeError):
             return None
@@ -618,6 +640,7 @@ class PendingMFALogin:
         user_id: UserId,
         client_id: str,
         scope: Sequence[str] = (),
+        auth_request: str | None = None,
     ) -> str:
         """Record a pending MFA login and return its opaque ticket.
 
@@ -628,6 +651,8 @@ class PendingMFALogin:
                 second factor must be completed against the same one.
             scope: The ``scope`` requested on the password step, re-applied when
                 the second factor completes the login.
+            auth_request: The pending authorization request being completed, if
+                the login came from ``/auth/authorize``.
 
         Returns:
             The ``mfa_token`` to hand to the caller; it must be presented to
@@ -637,7 +662,7 @@ class PendingMFALogin:
         try:
             self._get_state().set(
                 self._pending_key(mfa_token),
-                self._encode(user_id, username, client_id, scope),
+                self._encode(user_id, username, client_id, scope, auth_request),
                 ttl_seconds=self.PENDING_MFA_TTL_SECONDS,
             )
         except StateStoreUnavailableError as err:

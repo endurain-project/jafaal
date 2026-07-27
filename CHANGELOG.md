@@ -102,6 +102,20 @@ First release.
   and every redemption failure returns the same `invalid_grant` so the endpoint
   is not an oracle. Errors follow §5.2 (`{"error", "error_description"}`) and,
   once the redirect URI validates, §4.1.2.1 (reported *at* that URI).
+- **The authorization endpoint authenticates locally, not only through an
+  identity provider.** Omit `idp` and JAFAAL parks the validated request and
+  sends the browser to the host's `login_ui_url` with an `auth_request` handle;
+  that page posts the credentials to `/auth/login` with the handle, and JAFAAL
+  answers with the redirect carrying the code. MFA and passkey second factors
+  work unchanged — the handle rides on the pending-login ticket, so whichever
+  factor finishes the login produces the authorization response. Nothing about
+  the grant is re-read from the login request: client, redirect URI, PKCE
+  challenge and scope all come from the parked request, so a compromised login
+  page cannot widen or redirect a grant, and no token passes through the page or
+  the address bar. This is what lets a native app use the code flow without ever
+  handling the password itself (RFC 8252 §8.1) — previously the flow required a
+  configured identity provider, and an app without one had no choice but to
+  collect the password.
 - RFC 9207 issuer identification: every authorization response — success *and*
   error — carries `iss`, and `authorization_response_iss_parameter_supported` is
   advertised so a client can *require* the check. A client configured against
@@ -343,6 +357,12 @@ First release.
   full configuration check by default (`verify=False` opts out), so a missing
   host adapter fails at startup with one clear message instead of on the first
   request that needs it.
+- A startup warning when tokens are signed with HS256 while registered clients
+  exist. The signing secret and the verification key are then the same value, so
+  anything able to verify a token can also mint one — a resource server cannot
+  verify statelessly without being handed the power to issue. Warned rather than
+  refused: a single process that both issues and consumes its own tokens is a
+  legitimate deployment, and HS256 is correct there.
 - `AuthSettings.environment` is validated against a known set rather than being a
   free-form string, so a typo cannot silently disable the deployed-environment
   controls (cookie `Secure`, cookie name prefix, and the two startup guards).

@@ -53,7 +53,9 @@ logger = logging.getLogger(__name__)
 router = jafaal_orm.auth_router()
 public_router = jafaal_orm.auth_router()
 
-_TokenResponse = jafaal_schema.TokenResponseWeb | jafaal_schema.TokenResponseMobile
+_TokenResponse = (
+    jafaal_schema.AuthorizationRedirectResponse | jafaal_schema.TokenResponseWeb | jafaal_schema.TokenResponseMobile
+)
 
 
 # ===========================================================================
@@ -349,8 +351,13 @@ def complete_second_factor(
         ip=network.get_ip_address(request),
         ceremony="second_factor",
     )
-    # Scope comes from the claimed ticket — the password step is where the client
-    # asked — so completing with a passkey cannot widen the grant.
+    # Scope and the authorization request being completed come from the claimed
+    # ticket — the password step is where the client asked — so completing with a
+    # passkey cannot widen the grant or redirect it somewhere else.
+    if claimed.auth_request is not None:
+        oauth_state = authorization_code_service.resolve_authorization_request(claimed.auth_request, client, db)
+        jafaal_utils.apply_no_store(response)
+        return authorization_code_service.complete_local_authorization(oauth_state, user, request, db)
     return jafaal_utils.complete_login(response, request, user, client, token_manager, db, claimed.scope)
 
 

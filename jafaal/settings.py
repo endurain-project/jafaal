@@ -817,6 +817,14 @@ class AuthSettings:
             username/password form to. Cosmetic — it configures the
             ``OAuth2PasswordBearer`` scheme's ``tokenUrl`` and nothing else;
             JAFAAL does not implement the OAuth password grant.
+        login_ui_url: Absolute URL of the **host's** login page, used by
+            ``/auth/authorize`` when no ``idp`` is named. JAFAAL is an
+            authorization server with no user interface of its own: it redirects
+            the browser here with an ``auth_request`` parameter, the host's page
+            collects the credentials and posts them to ``/auth/login`` with that
+            parameter, and JAFAAL answers with the redirect back to the client.
+            Empty (the default) means local login is not offered at the
+            authorization endpoint, and ``idp`` is then required.
         login_ip_lockout_enabled: When ``True`` (default), a per-source-IP
             backoff bounds how many accounts one IP can lock out by spraying
             failed logins across usernames (the per-account lockout is
@@ -851,6 +859,7 @@ class AuthSettings:
     environment: str = "production"
     store_key_prefix: str = "jafaal:auth"
     login_token_url: str = "/api/v1/auth/login"
+    login_ui_url: str = ""
 
     # --- registered public clients (RFC 8252) ---
     # Empty by default: a deployment that only serves its own first-party web
