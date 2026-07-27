@@ -2,7 +2,7 @@
 
 Resolves the host's password policy (via the :class:`~jafaal.ports.SettingsProvider`
 port) into the correct minimum length for the account's tier and delegates
-validate+hash to the IdentityService.
+validate+hash to the LocalCredentialStore.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 
 def validate_and_hash_for_user(
-    identity_service: jafaal_identity_service.IdentityService,
+    identity_service: jafaal_identity_service.LocalCredentialStore,
     is_superuser: bool,
     password: str,
 ) -> str:

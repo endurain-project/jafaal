@@ -60,7 +60,7 @@ def create_user_api_key(
         Depends(jafaal_dependencies.get_current_principal),
     ],
     identity_service: Annotated[
-        jafaal_identity_service.IdentityService,
+        jafaal_identity_service.LocalCredentialStore,
         Depends(jafaal_identity_service.get_identity_service),
     ],
     step_up_store: Annotated[

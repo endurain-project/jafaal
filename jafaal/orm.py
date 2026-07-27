@@ -175,9 +175,10 @@ def get_active_base() -> type[DeclarativeBase]:
     """
     if _active_base is None:
         raise RuntimeError(
-            "JAFAAL's models are not mapped yet. Call jafaal.map_models(YourBase) "
-            "(or jafaal.map_models() to use jafaal.orm.Base) once at startup — after "
-            "defining your Users model and before create_auth_router() or any DB use."
+            "JAFAAL's models are not mapped yet. Call "
+            "jafaal.map_models(YourBase, user_model=YourUserClass) once at startup — after "
+            "defining your user model and before create_auth_router() or any DB use. "
+            "Omit the base to use jafaal.orm.Base."
         )
     return _active_base
 

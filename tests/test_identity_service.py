@@ -13,7 +13,7 @@ import jafaal.exceptions as exc
 from jafaal._internal.internal_dependencies import validate_access_token_or_api_key
 from jafaal._internal.password_hasher import get_password_hasher
 from jafaal._internal.token_manager import TokenType, get_token_manager
-from jafaal.identity_service import DefaultIdentityService
+from jafaal.identity_service import DefaultIdentityService, IdentityService, LocalCredentialStore
 
 
 def _svc(db):
@@ -227,3 +227,76 @@ def test_unified_auth_requires_a_credential(db):
                 _request(), _svc(db), access_token=None, api_key_header=None, api_key_query=None
             )
         )
+
+
+# --------------------------------------------------------------------------- #
+# The boundary is a boundary, not a table of contents
+# --------------------------------------------------------------------------- #
+
+
+def _protocol_methods(protocol: type) -> set[str]:
+    """Return the method names a Protocol declares."""
+    return {name for name in getattr(protocol, "__protocol_attrs__", set()) if not name.startswith("_")}
+
+
+def test_identity_service_declares_only_the_credential_boundary():
+    """Pin the boundary's shape so it cannot silently re-grow into a facade.
+
+    It once carried 33 methods — MFA enrolment, session listing, password
+    changes, identity-provider links — which meant a host wanting to swap
+    *authentication* had to re-implement two dozen methods that were pure
+    passthroughs to JAFAAL's own services. Anything added here should answer
+    "how do I recognise this caller, and how do I start and stop their session?"
+    """
+    assert _protocol_methods(IdentityService) == {
+        "authenticate_password",
+        "resolve_from_access_token",
+        "resolve_from_api_key",
+        "resolve_from_session_cookie",
+        "issue_token_pair",
+        "revoke_session",
+        "check_scope",
+    }
+
+
+def test_local_credential_store_declares_only_the_password_seam():
+    assert _protocol_methods(LocalCredentialStore) == {
+        "validate_and_hash_password",
+        "hash_password",
+        "verify_password",
+        "get_password_hash",
+        "has_local_password",
+        "set_local_password_hash",
+        "clear_local_password",
+    }
+
+
+def test_the_default_implementation_satisfies_both(db):
+    # Both are runtime_checkable, so a host can assert its own replacement
+    # conforms at startup rather than discovering a missing method on the login
+    # path.
+    svc = _svc(db)
+    assert isinstance(svc, IdentityService)
+    assert isinstance(svc, LocalCredentialStore)
+
+
+def test_the_two_protocols_do_not_overlap():
+    # Disjoint surfaces are what makes them independently swappable: a host can
+    # replace password storage without touching credential resolution.
+    assert not _protocol_methods(IdentityService) & _protocol_methods(LocalCredentialStore)
+
+
+def test_workflow_services_are_reached_directly_not_through_the_boundary():
+    """The application services take a session, not a bound facade.
+
+    This is the shape that let the boundary shrink: a caller that wants to list
+    sessions or enrol MFA imports the service and passes `db`, instead of the
+    boundary carrying a method for it.
+    """
+    import inspect
+
+    import jafaal._internal.services.account_security_service as account_security_service
+    import jafaal._internal.services.mfa_workflow as mfa_workflow
+
+    for fn in (account_security_service.get_user_sessions, mfa_workflow.get_mfa_status):
+        assert "db" in inspect.signature(fn).parameters, fn.__name__

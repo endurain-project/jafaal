@@ -36,7 +36,7 @@ from jafaal.orm import UserId
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from jafaal.identity_service import IdentityService
+    from jafaal.identity_service import LocalCredentialStore
 
 
 def get_mfa_status(
@@ -91,7 +91,7 @@ def setup_mfa(
 def enable_mfa(
     request: mfa_schema.MFASetupRequest,
     token_user_id: UserId,
-    identity_service: IdentityService,
+    identity_service: LocalCredentialStore,
     step_up_store: jafaal_security_stores.StepUpStore,
     db: Session,
     mfa_secret_store: MFASecretStore,
@@ -143,7 +143,7 @@ def enable_mfa(
 def disable_mfa(
     request: mfa_schema.MFADisableRequest,
     token_user_id: UserId,
-    identity_service: IdentityService,
+    identity_service: LocalCredentialStore,
     step_up_store: jafaal_security_stores.StepUpStore,
     db: Session,
 ) -> dict:
@@ -169,7 +169,7 @@ def disable_mfa(
 def verify_mfa(
     request: mfa_schema.MFARequest,
     token_user_id: UserId,
-    identity_service: IdentityService,
+    identity_service: LocalCredentialStore,
     db: Session,
 ) -> dict:
     """Verify an MFA code for the authenticated user."""
@@ -195,7 +195,7 @@ def verify_mfa(
 def generate_backup_codes(
     step_up: jafaal_schema.StepUpVerification,
     token_user_id: UserId,
-    identity_service: IdentityService,
+    identity_service: LocalCredentialStore,
     step_up_store: jafaal_security_stores.StepUpStore,
     db: Session,
 ) -> mfa_backup_codes_schema.MFABackupCodesResponse:

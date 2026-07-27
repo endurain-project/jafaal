@@ -277,7 +277,7 @@ def enable_user_mfa(
     user_id: UserId,
     secret: str,
     mfa_code: str,
-    identity_service: jafaal_identity_service.IdentityService,
+    identity_service: jafaal_identity_service.LocalCredentialStore,
     db: Session,
 ) -> list[str]:
     """
@@ -351,7 +351,7 @@ def disable_user_mfa(user_id: UserId, db: Session) -> None:
 def verify_user_mfa(
     user_id: UserId,
     mfa_code: str,
-    identity_service: jafaal_identity_service.IdentityService,
+    identity_service: jafaal_identity_service.LocalCredentialStore,
     db: Session,
 ) -> bool:
     """

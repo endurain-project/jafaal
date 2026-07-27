@@ -18,7 +18,7 @@ import jafaal.password_reset_tokens.schema as password_reset_tokens_schema
 import jafaal.ports as jafaal_ports
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.token_hashing as token_hashing
-from jafaal.identity_service import IdentityService
+from jafaal.identity_service import LocalCredentialStore
 from jafaal.orm import UserId, session_scope
 
 logger = logging.getLogger(__name__)
@@ -107,7 +107,7 @@ async def request_password_reset(email: str, db: Session) -> None:
 def use_password_reset_token(
     token: str,
     new_password: str,
-    identity_service: IdentityService,
+    identity_service: "LocalCredentialStore",
     db: Session,
 ) -> None:
     """

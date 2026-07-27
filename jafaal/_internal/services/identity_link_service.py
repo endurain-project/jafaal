@@ -27,7 +27,7 @@ from jafaal.orm import UserId
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from jafaal.identity_service import IdentityService
+    from jafaal.identity_service import LocalCredentialStore
 
 
 def generate_link_token(
@@ -35,7 +35,7 @@ def generate_link_token(
     link_request: idp_link_token_schema.IdpLinkTokenRequest,
     request: Request,
     token_user_id: UserId,
-    identity_service: IdentityService,
+    identity_service: LocalCredentialStore,
     step_up_store: jafaal_security_stores.StepUpStore,
     db: Session,
 ) -> idp_link_token_schema.IdpLinkTokenResponse:
@@ -78,7 +78,7 @@ def delete_identity_provider_link(
     idp_id: int,
     step_up: jafaal_schema.StepUpVerification,
     token_user_id: UserId,
-    identity_service: IdentityService,
+    identity_service: LocalCredentialStore,
     step_up_store: jafaal_security_stores.StepUpStore,
     db: Session,
 ) -> None:

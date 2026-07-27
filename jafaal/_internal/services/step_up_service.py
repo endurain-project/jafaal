@@ -21,7 +21,7 @@ from jafaal.orm import UserId
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from jafaal.identity_service import IdentityService
+    from jafaal.identity_service import LocalCredentialStore
 
 
 def _step_up_key(user_id: UserId) -> str:
@@ -102,7 +102,7 @@ def verify_step_up_credentials(
     user_id: UserId,
     current_password: str | None,
     mfa_code: str | None,
-    identity_service: IdentityService,
+    identity_service: LocalCredentialStore,
     step_up_store: jafaal_security_stores.StepUpStore,
     db: Session,
     *,

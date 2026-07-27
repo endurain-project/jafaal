@@ -366,7 +366,7 @@ def verify_mfa_and_login(
         Depends(jafaal_security_stores.get_pending_mfa_store),
     ],
     identity_service: Annotated[
-        jafaal_identity_service.IdentityService,
+        jafaal_identity_service.LocalCredentialStore,
         Depends(jafaal_identity_service.get_identity_service),
     ],
     token_manager: Annotated[

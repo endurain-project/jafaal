@@ -19,7 +19,7 @@ import jafaal.token_hashing as token_hashing
 from jafaal.orm import UserId, session_scope
 
 if TYPE_CHECKING:
-    from jafaal.identity_service import IdentityService
+    from jafaal.identity_service import LocalCredentialStore
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +64,7 @@ def create_sign_up_token(user_id: UserId, db: Session) -> tuple[str, datetime]:
 def register_local_user(
     request: jafaal_schema.SignUpRequest,
     signup_config: jafaal_ports.SignupConfig,
-    identity_service: "IdentityService",
+    identity_service: "LocalCredentialStore",
     db: Session,
 ) -> jafaal_ports.UserProtocol:
     """Create a local (password) account during sign-up.

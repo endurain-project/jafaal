@@ -21,7 +21,7 @@ from jafaal.orm import UserId
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from jafaal.identity_service import IdentityService
+    from jafaal.identity_service import LocalCredentialStore
 
 
 def get_user_sessions(
@@ -95,7 +95,7 @@ def change_own_password(
     current_password: str,
     new_password: str,
     mfa_code: str | None,
-    identity_service: IdentityService,
+    identity_service: LocalCredentialStore,
     step_up_store: jafaal_security_stores.StepUpStore,
     db: Session,
     revoke_other_sessions: bool = False,
@@ -166,7 +166,7 @@ def change_own_password(
 def change_managed_user_password(
     user_id: UserId,
     new_password: str,
-    identity_service: IdentityService,
+    identity_service: LocalCredentialStore,
     db: Session,
 ) -> None:
     """

@@ -115,19 +115,8 @@ def test_delete_user_session(db, make_user):
 def test_delete_other_user_sessions(db, make_user):
     user = make_user()
     session_utils.create_session("keep", user, _request(), "a", db)
-    session_utils.create_session("drop", user, _request(), "b", db)
-    revoked = account_svc.delete_other_user_sessions(user.id, "keep", db)
-    assert revoked == 1
-    assert {s.id for s in sessions_crud.get_user_sessions(user.id, db)} == {"keep"}
-
-
-def test_identity_service_delete_other_sessions_returns_count(db, make_user):
-    # The DefaultIdentityService wrapper surfaces the revoked-session count from
-    # the underlying service (it previously dropped it).
-    user = make_user()
-    session_utils.create_session("keep", user, _request(), "a", db)
     session_utils.create_session("drop-1", user, _request(), "b", db)
     session_utils.create_session("drop-2", user, _request(), "c", db)
-    revoked = _svc(db).delete_other_user_sessions(user.id, "keep")
+    revoked = account_svc.delete_other_user_sessions(user.id, "keep", db)
     assert revoked == 2
     assert {s.id for s in sessions_crud.get_user_sessions(user.id, db)} == {"keep"}

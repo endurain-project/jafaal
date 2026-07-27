@@ -83,7 +83,7 @@ itself is not a direct API: query it through JAFAAL, not with your own SQL.
 |---|---|
 | `jafaal._core.*`, `jafaal._internal.*` | Leading underscore. Implementation detail; changes in any release. |
 | Any module-level name starting with `_` | Same. |
-| CRUD modules (`jafaal.sessions.crud`, …) | Reachable, but the supported entry points are `IdentityService`, the ports, and the routers. |
+| CRUD modules (`jafaal.sessions.crud`, …) | Reachable, but the supported entry points are `IdentityService`, `LocalCredentialStore`, the ports, and the routers. |
 | ORM model classes | Mapped into the host's registry, but their attributes are internal. |
 | Log message text | Only the `jafaal.audit` structured fields are contractual. |
 | Exact `detail` strings | Human-readable; use `code`. |
