@@ -14,12 +14,14 @@ from fastapi import (
     Security,
     status,
 )
+from fastapi.responses import RedirectResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 import jafaal._internal.internal_dependencies as jafaal_internal_dependencies
 import jafaal._internal.password_hasher as jafaal_password_hasher
 import jafaal._internal.security_stores as jafaal_security_stores
+import jafaal._internal.services.authorization_code_service as authorization_code_service
 import jafaal._internal.services.token_admin_service as token_admin_service
 import jafaal._internal.token_manager as jafaal_token_manager
 import jafaal._internal.user_guards as jafaal_user_guards
@@ -632,48 +634,21 @@ def verify_mfa_and_login(
     )
 
 
-@router.post(
-    "/refresh",
-    response_model=(jafaal_schema.TokenResponseWeb | jafaal_schema.TokenResponseMobile),
-)
-@jafaal_rate_limit.limit(jafaal_rate_limit.WRITE)
-async def refresh_token(
+async def _grant_refresh_token(
     response: Response,
     request: Request,
     background_tasks: BackgroundTasks,
-    refresh: Annotated[
-        jafaal_internal_dependencies.ValidatedRefreshToken,
-        Depends(jafaal_internal_dependencies.get_validated_refresh_token),
-    ],
-    token_manager: Annotated[
-        jafaal_token_manager.TokenManager,
-        Depends(jafaal_token_manager.get_token_manager),
-    ],
-    db: Annotated[
-        Session,
-        Depends(jafaal_orm.get_db),
-    ],
-    client_type: Annotated[
-        jafaal_internal_dependencies.ClientType,
-        Depends(jafaal_internal_dependencies.get_refresh_client_type),
-    ],
-    x_csrf_token: Annotated[str | None, Depends(jafaal_internal_dependencies.header_csrf_token_scheme)] = None,
-):
-    """
-    Exchange a refresh token for a new token bundle (RFC 6749 §6 token endpoint).
+    refresh: jafaal_internal_dependencies.ValidatedRefreshToken,
+    token_manager: jafaal_token_manager.TokenManager,
+    db: Session,
+    client_type: jafaal_internal_dependencies.ClientType,
+    x_csrf_token: str | None,
+) -> dict:
+    """Rotate a refresh token and return a fresh token bundle.
 
-    This is the one endpoint JAFAAL advertises as an OAuth ``token_endpoint`` in
-    its RFC 8414 discovery document, and ``refresh_token`` is the only grant it
-    implements — JAFAAL is a first-party issuer with no authorization endpoint
-    and no client registry.
-
-    Two request shapes are accepted:
-
-    * **RFC 6749 §6** — ``grant_type=refresh_token&refresh_token=...`` as a form
-      body, so a stock OAuth client can drive the refresh. ``X-Client-Type`` is
-      then optional (a token in the body means a non-browser client).
-    * **JAFAAL native** — the ``HttpOnly`` refresh cookie (web) or an
-      ``Authorization`` header (native), with ``X-Client-Type`` set.
+    The implementation behind both ``/auth/token`` (with
+    ``grant_type=refresh_token``) and the ``/auth/refresh`` alias, so the two
+    paths cannot drift.
 
     Every refresh rotates the token; presenting an already-rotated one past a
     short grace window is treated as theft and invalidates the token family.
@@ -689,11 +664,11 @@ async def refresh_token(
     Args:
         response: The HTTP response object.
         request: The HTTP request object.
+        background_tasks: Used to defer the opportunistic IdP token refresh.
         refresh: The validated refresh token and its ``sub`` / ``sid`` claims.
         token_manager: Utility for creating tokens.
         db: Database session.
-        client_type: Client type (\"web\" or \"mobile\"), inferred as mobile for
-            an RFC 6749 form request.
+        client_type: Client type (``"web"`` or ``"mobile"``).
         x_csrf_token: CSRF token header (web clients only, optional on page reload).
 
     Returns:
@@ -884,6 +859,309 @@ async def refresh_token(
         new_refresh_token,
         new_refresh_token_exp,
         new_csrf_token,
+    )
+
+
+@router.get(
+    "/authorize",
+    status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+    summary="OAuth 2.0 authorization endpoint (RFC 6749 §4.1, PKCE required)",
+    description=(
+        "Starts the authorization-code flow for a **registered public client** (RFC 8252 native app).\n\n"
+        "The user is sent to the selected identity provider; when they come back, JAFAAL redirects the "
+        "browser to the client's registered `redirect_uri` with `code` and `state`, which the client "
+        "redeems at `/auth/token` with `grant_type=authorization_code` and its `code_verifier`.\n\n"
+        "PKCE is mandatory (`code_challenge_method=S256`), `response_type=code` is the only supported "
+        "response type, and `redirect_uri` must match one registered for the `client_id` **exactly**."
+    ),
+)
+@jafaal_rate_limit.limit(jafaal_rate_limit.SENSITIVE)
+async def authorize(
+    request: Request,
+    db: Annotated[Session, Depends(jafaal_orm.get_db)],
+    response_type: Annotated[str, Query(description="Must be 'code'.")],
+    client_id: Annotated[str, Query(description="A client registered via AuthSettings.oauth_clients.")],
+    redirect_uri: Annotated[str, Query(description="Must exactly match one of the client's registered URIs.")],
+    code_challenge: Annotated[str, Query(description="PKCE challenge, base64url SHA-256 (43-128 chars).")],
+    code_challenge_method: Annotated[str, Query(description="Must be 'S256'.")],
+    idp: Annotated[str, Query(description="Slug of the identity provider to authenticate with.")],
+    state: Annotated[str | None, Query(description="Opaque value echoed back with the code.")] = None,
+):
+    """Start an RFC 6749 authorization-code flow for a registered public client.
+
+    Args:
+        request: The incoming HTTP request.
+        db: Database session.
+        response_type: Must be ``code``.
+        client_id: The registered client making the request.
+        redirect_uri: Where to deliver the authorization code.
+        code_challenge: PKCE challenge (RFC 7636).
+        code_challenge_method: PKCE method; only ``S256``.
+        idp: Slug of the identity provider to authenticate against.
+        state: Opaque client value, returned unmodified with the code.
+
+    Returns:
+        A redirect to the identity provider's authorization endpoint.
+
+    Raises:
+        JafaalError: 400 if the request is malformed, the client is unregistered,
+            or the redirect URI is not registered for it; 404 if the identity
+            provider is unknown or disabled.
+    """
+    # Validated before anything is persisted or redirected. RFC 6749 §4.1.2.1
+    # requires an unregistered client_id / redirect_uri to be reported to the
+    # user agent rather than redirected — an unvalidated redirect target must
+    # never be used, precisely because that is the open-redirect that leaks the
+    # code.
+    authorization_code_service.validate_authorization_request(response_type, code_challenge, code_challenge_method)
+    authorization_code_service.validate_client_and_redirect_uri(client_id, redirect_uri)
+
+    authorization_url = await idp_utils.begin_idp_authorization(
+        idp_slug=idp,
+        request=request,
+        db=db,
+        code_challenge=code_challenge,
+        code_challenge_method=code_challenge_method,
+        # A registered client redeems its own code over HTTP; it never receives
+        # the refresh token as a browser cookie.
+        client_type="mobile",
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+        client_state=state,
+    )
+    return RedirectResponse(url=authorization_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+
+
+@router.post(
+    "/token",
+    response_model=(jafaal_schema.TokenResponseWeb | jafaal_schema.TokenResponseMobile),
+    summary="OAuth 2.0 token endpoint (RFC 6749 §4.1.3 and §6)",
+    description=(
+        "Implements two grants:\n\n"
+        "* `authorization_code` — redeem a code from `/auth/authorize` with the PKCE `code_verifier`, "
+        "`client_id`, and the same `redirect_uri`.\n"
+        "* `refresh_token` — rotate a refresh token.\n\n"
+        "`/auth/refresh` is an alias that serves the refresh grant plus JAFAAL's native cookie/header "
+        "request shape."
+    ),
+)
+@jafaal_rate_limit.limit(jafaal_rate_limit.WRITE)
+async def token_endpoint(
+    response: Response,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    token_manager: Annotated[
+        jafaal_token_manager.TokenManager,
+        Depends(jafaal_token_manager.get_token_manager),
+    ],
+    db: Annotated[Session, Depends(jafaal_orm.get_db)],
+    grant_type: Annotated[str, Form(description="'authorization_code' or 'refresh_token'.")],
+    refresh: Annotated[
+        jafaal_internal_dependencies.ValidatedRefreshToken | None,
+        Depends(jafaal_internal_dependencies.get_validated_refresh_token_optional),
+    ] = None,
+    client_type: Annotated[
+        jafaal_internal_dependencies.ClientType,
+        Depends(jafaal_internal_dependencies.get_refresh_client_type_optional),
+    ] = jafaal_internal_dependencies.ClientType.MOBILE,
+    code: Annotated[str | None, Form(description="Authorization code from /auth/authorize.")] = None,
+    code_verifier: Annotated[str | None, Form(description="PKCE verifier for the code.")] = None,
+    redirect_uri: Annotated[str | None, Form(description="Must equal the authorization request's.")] = None,
+    client_id: Annotated[str | None, Form(description="The client redeeming the code.")] = None,
+    x_csrf_token: Annotated[str | None, Depends(jafaal_internal_dependencies.header_csrf_token_scheme)] = None,
+):
+    """Serve the OAuth token endpoint for both supported grants.
+
+    Args:
+        response: The HTTP response object.
+        request: The HTTP request object.
+        background_tasks: Used by the refresh grant for deferred IdP work.
+        token_manager: Utility for minting tokens.
+        db: Database session.
+        grant_type: The requested grant.
+        refresh: Validated refresh token, present only for the refresh grant.
+        client_type: Resolved delivery mode.
+        code: The authorization code (code grant).
+        code_verifier: The PKCE verifier (code grant).
+        redirect_uri: The redirect URI from the authorization request (code grant).
+        client_id: The redeeming client (code grant).
+        x_csrf_token: CSRF header, honoured by the refresh grant for web clients.
+
+    Returns:
+        The token-response body for the resolved client type.
+
+    Raises:
+        JafaalError: 400 for an unsupported grant or a malformed/invalid code;
+            401 if a refresh token is required but absent or invalid.
+    """
+    if grant_type == authorization_code_service.GRANT_AUTHORIZATION_CODE:
+        return _grant_authorization_code(
+            response=response,
+            request=request,
+            code=code,
+            code_verifier=code_verifier,
+            redirect_uri=redirect_uri,
+            client_id=client_id,
+            token_manager=token_manager,
+            db=db,
+        )
+
+    if grant_type == jafaal_internal_dependencies.REFRESH_TOKEN_GRANT:
+        if refresh is None:
+            raise jafaal_exceptions.InvalidRequestError(
+                "invalid_request: 'refresh_token' is required when "
+                f"grant_type={jafaal_internal_dependencies.REFRESH_TOKEN_GRANT!r}."
+            )
+        return await _grant_refresh_token(
+            response,
+            request,
+            background_tasks,
+            refresh,
+            token_manager,
+            db,
+            client_type,
+            x_csrf_token,
+        )
+
+    raise jafaal_exceptions.InvalidRequestError(
+        f"unsupported_grant_type: this token endpoint implements "
+        f"{authorization_code_service.GRANT_AUTHORIZATION_CODE!r} and "
+        f"{jafaal_internal_dependencies.REFRESH_TOKEN_GRANT!r} (got {grant_type!r})."
+    )
+
+
+def _grant_authorization_code(
+    *,
+    response: Response,
+    request: Request,
+    code: str | None,
+    code_verifier: str | None,
+    redirect_uri: str | None,
+    client_id: str | None,
+    token_manager: jafaal_token_manager.TokenManager,
+    db: Session,
+) -> dict:
+    """Redeem an authorization code for a token bundle (RFC 6749 §4.1.3).
+
+    Args:
+        response: HTTP response, used to set the web refresh cookie.
+        request: The incoming HTTP request.
+        code: The authorization code.
+        code_verifier: The PKCE verifier.
+        redirect_uri: The redirect URI from the authorization request.
+        client_id: The redeeming client.
+        token_manager: Utility for minting tokens.
+        db: Database session.
+
+    Returns:
+        The token-response body.
+
+    Raises:
+        JafaalError: 400 if a required parameter is missing or the code does not
+            verify; 409 if it was already redeemed.
+    """
+    missing = [
+        name
+        for name, value in (
+            ("code", code),
+            ("code_verifier", code_verifier),
+            ("redirect_uri", redirect_uri),
+            ("client_id", client_id),
+        )
+        if not value
+    ]
+    if missing:
+        raise jafaal_exceptions.InvalidRequestError(
+            f"invalid_request: {', '.join(missing)} required when "
+            f"grant_type={authorization_code_service.GRANT_AUTHORIZATION_CODE!r}."
+        )
+    # Narrowed by the check above; restated for the type checker.
+    assert code and code_verifier and redirect_uri and client_id  # noqa: S101
+
+    session_obj, oauth_state = authorization_code_service.resolve_authorization_code(code, client_id, redirect_uri, db)
+    client_type = authorization_code_service.resolve_client_type(oauth_state, request.headers.get("X-Client-Type"))
+    if client_type == "web":
+        network.reject_off_site_request(request, operation="Token exchange")
+
+    body = authorization_code_service.complete_pkce_exchange(
+        session_obj=session_obj,
+        oauth_state=oauth_state,
+        code_verifier=code_verifier,
+        client_type=client_type,
+        response=response,
+        token_manager=token_manager,
+        db=db,
+    )
+    jafaal_audit.record(
+        jafaal_audit.Event.AUTHORIZATION_CODE_REDEEMED,
+        user_id=session_obj.user_id,
+        session_id=session_obj.id,
+        client_id=client_id,
+        ip=network.get_ip_address(request),
+    )
+    return body
+
+
+@router.post(
+    "/refresh",
+    response_model=(jafaal_schema.TokenResponseWeb | jafaal_schema.TokenResponseMobile),
+    summary="Refresh-token alias of the token endpoint",
+    description=(
+        "Serves `grant_type=refresh_token` plus JAFAAL's native request shape: the `HttpOnly` refresh "
+        "cookie (web) or an `Authorization` header (native), with `X-Client-Type` set. Standards-based "
+        "clients should use `/auth/token`."
+    ),
+)
+@jafaal_rate_limit.limit(jafaal_rate_limit.WRITE)
+async def refresh_token(
+    response: Response,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    refresh: Annotated[
+        jafaal_internal_dependencies.ValidatedRefreshToken,
+        Depends(jafaal_internal_dependencies.get_validated_refresh_token),
+    ],
+    token_manager: Annotated[
+        jafaal_token_manager.TokenManager,
+        Depends(jafaal_token_manager.get_token_manager),
+    ],
+    db: Annotated[
+        Session,
+        Depends(jafaal_orm.get_db),
+    ],
+    client_type: Annotated[
+        jafaal_internal_dependencies.ClientType,
+        Depends(jafaal_internal_dependencies.get_refresh_client_type),
+    ],
+    x_csrf_token: Annotated[str | None, Depends(jafaal_internal_dependencies.header_csrf_token_scheme)] = None,
+):
+    """Rotate a refresh token using JAFAAL's native or the RFC 6749 §6 shape.
+
+    Args:
+        response: The HTTP response object.
+        request: The HTTP request object.
+        background_tasks: Used to defer the opportunistic IdP token refresh.
+        refresh: The validated refresh token and its ``sub`` / ``sid`` claims.
+        token_manager: Utility for creating tokens.
+        db: Database session.
+        client_type: Client type, inferred as mobile for an RFC 6749 form request.
+        x_csrf_token: CSRF token header (web clients only, optional on page reload).
+
+    Returns:
+        The token-response body for the client type.
+
+    Raises:
+        JafaalError: If the session or refresh token is invalid.
+    """
+    return await _grant_refresh_token(
+        response,
+        request,
+        background_tasks,
+        refresh,
+        token_manager,
+        db,
+        client_type,
+        x_csrf_token,
     )
 
 

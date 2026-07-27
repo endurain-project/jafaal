@@ -10,13 +10,86 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 import jafaal.exceptions as jafaal_exceptions
+import jafaal.identity_providers.crud as idp_crud
 import jafaal.identity_providers.links.crud as jafaal_identity_links_crud
 import jafaal.identity_providers.schema as idp_schema
 import jafaal.identity_providers.service as idp_service
+import jafaal.oauth_state.crud as oauth_state_crud
+import jafaal.oauth_state.utils as oauth_state_utils
 import jafaal.settings as jafaal_settings
+from jafaal._core import network
 from jafaal.orm import UserId, session_scope, unit_of_work
 
 logger = logging.getLogger(__name__)
+
+
+async def begin_idp_authorization(
+    *,
+    idp_slug: str,
+    request: Any,
+    db: Session,
+    code_challenge: str,
+    code_challenge_method: str,
+    client_type: str,
+    redirect_path: str | None = None,
+    client_id: str | None = None,
+    redirect_uri: str | None = None,
+    client_state: str | None = None,
+) -> str:
+    """Mint an OAuth state and build the identity provider's authorization URL.
+
+    The shared body of both entry points into an SSO login — the standards-based
+    ``/auth/authorize`` and JAFAAL's native ``/public/idp/login/{slug}`` — so the
+    two cannot drift in what they validate or persist. Everything security
+    relevant (PKCE validation, state/nonce generation, upstream PKCE) happens
+    here exactly once.
+
+    Args:
+        idp_slug: Slug of the identity provider to authenticate against.
+        request: The incoming HTTP request (source IP, forwarded headers).
+        db: Active database session.
+        code_challenge: The client's PKCE challenge.
+        code_challenge_method: The client's PKCE method (``S256``).
+        client_type: Token-delivery mode to record for the later exchange.
+        redirect_path: Native-flow frontend return path, if any.
+        client_id: Registered client, for the standards-based flow.
+        redirect_uri: Exact redirect URI, for the standards-based flow.
+        client_state: The client's opaque ``state``, echoed back with the code.
+
+    Returns:
+        The identity provider's authorization URL to redirect the browser to.
+
+    Raises:
+        JafaalError: 404 if the provider is unknown or disabled; 400 if the PKCE
+            parameters are malformed.
+    """
+    idp = idp_crud.get_identity_provider_by_slug(idp_slug, db)
+    if not idp or not idp.enabled:
+        raise jafaal_exceptions.NotFoundError("Identity provider not found or disabled")
+
+    # PKCE is REQUIRED for all clients (RFC 7636 / RFC 9700 §2.1.1).
+    validate_pkce_challenge(code_challenge, code_challenge_method)
+
+    state_id, nonce = oauth_state_utils.create_state_id_and_nonce()
+
+    oauth_state_crud.create_oauth_state(
+        db=db,
+        state_id=state_id,
+        idp_id=idp.id,
+        nonce=nonce,
+        client_type=client_type,
+        ip_address=network.get_ip_address(request),
+        redirect_path=redirect_path,
+        code_challenge=code_challenge,
+        code_challenge_method=code_challenge_method,
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+        client_state=client_state,
+    )
+
+    logger.debug(f"OAuth state created: {state_id[:8]}... for IdP {idp.slug} (client_type={client_type})")
+
+    return await idp_service.idp_service.initiate_login(idp, request, db, redirect_path, oauth_state_id=state_id)
 
 
 def validate_redirect_url(redirect: str | None) -> None:

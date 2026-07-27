@@ -129,6 +129,9 @@ def create_oauth_state(
     code_challenge_method: str | None = None,
     user_id: UserId | None = None,
     purpose: str = "login",
+    client_id: str | None = None,
+    redirect_uri: str | None = None,
+    client_state: str | None = None,
 ) -> oauth_state_models.OAuthState:
     """Create and persist a new OAuth state with a 10-minute expiry.
 
@@ -149,6 +152,11 @@ def create_oauth_state(
         code_challenge_method: PKCE method (S256).
         user_id: User ID for link mode.
         purpose: Flow purpose (``login``, ``link``, or ``stepup``).
+        client_id: Registered public client, when the flow was started at
+            ``/auth/authorize``.
+        redirect_uri: Exact redirect URI from the authorization request.
+        client_state: The client's opaque ``state``, echoed back with the code.
+
     Returns:
         The persisted OAuthState instance.
 
@@ -170,6 +178,9 @@ def create_oauth_state(
         purpose=purpose,
         expires_at=expires_at,
         used=False,
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+        client_state=client_state,
     )
 
     db.add(oauth_state)
@@ -179,6 +190,68 @@ def create_oauth_state(
     logger.debug(f"OAuth state created: {state_id[:8]}... for IdP {idp_id}, client_type={client_type}")
 
     return oauth_state
+
+
+@db_errors.handle_db_errors
+def attach_authorization_code(state_id: str, code_hash: str, db: Session) -> bool:
+    """Bind a freshly minted authorization code's digest to an OAuth state.
+
+    Written as a conditional UPDATE that only matches a state with no code yet,
+    so a state can never be made to issue two live codes — the same
+    claim-don't-check discipline the rest of the flow uses.
+
+    Args:
+        state_id: The OAuth state the code belongs to.
+        code_hash: Keyed digest of the issued code (never the plaintext).
+        db: SQLAlchemy database session.
+
+    Returns:
+        ``True`` when the code was attached, ``False`` when the state was
+        missing, expired, or already carries a code.
+
+    Raises:
+        JafaalError: 500 error if the database update fails.
+    """
+    stmt = (
+        sa_update(oauth_state_models.OAuthState)
+        .where(
+            oauth_state_models.OAuthState.id == state_id,
+            oauth_state_models.OAuthState.authorization_code_hash.is_(None),
+            oauth_state_models.OAuthState.expires_at > datetime.now(UTC),
+        )
+        .values(authorization_code_hash=code_hash)
+        .execution_options(synchronize_session=False)
+    )
+    result = cast(CursorResult[Any], db.execute(stmt))
+    return result.rowcount == 1
+
+
+@db_errors.handle_db_errors
+def get_oauth_state_by_authorization_code_hashes(
+    code_hashes: tuple[str, ...],
+    db: Session,
+) -> oauth_state_models.OAuthState | None:
+    """Look up the unexpired OAuth state carrying any of ``code_hashes``.
+
+    Takes every digest the code *could* have been stored under — the primary
+    subkey plus one per ``secret_key_fallbacks`` entry — so a rotation mid-flight
+    does not strand an authorization code that was minted seconds earlier.
+
+    Args:
+        code_hashes: Candidate digests, primary first.
+        db: SQLAlchemy database session.
+
+    Returns:
+        The matching OAuthState, or ``None`` when unknown or expired.
+
+    Raises:
+        JafaalError: 500 error if the database query fails.
+    """
+    stmt = select(oauth_state_models.OAuthState).where(
+        oauth_state_models.OAuthState.authorization_code_hash.in_(code_hashes),
+        oauth_state_models.OAuthState.expires_at > datetime.now(UTC),
+    )
+    return db.execute(stmt).scalar_one_or_none()
 
 
 @db_errors.handle_db_errors

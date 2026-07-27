@@ -18,26 +18,30 @@ like the JWKS route — it serves the document at the API root instead. A
 deployment that needs the strict issuer-derived URL should mount the pure
 function's output itself; the payload is identical.
 
-**Scope of the document.** JAFAAL is **not an OAuth 2.0 authorization server**:
-it has no client registry, no authorization endpoint, and no consent screen, and
-it issues tokens only for the host's own resource servers — never to third-party
-clients. What it *is*, to a resource server, is a JWT issuer with a JWKS, an
-introspection endpoint, and a revocation endpoint. This document advertises
-exactly that and nothing more:
+**Scope of the document.** JAFAAL is **not a general-purpose OAuth 2.0
+authorization server**: there is no consent screen, no client secret, no dynamic
+registration, and it issues tokens only for the host's own first-party apps —
+never to third-party clients. What it *is* is an RFC 8252 authorization server
+for its own public clients, plus a JWT issuer with a JWKS, an introspection
+endpoint, and a revocation endpoint. This document advertises exactly that:
 
-* ``refresh_token`` is the only advertised grant, and ``token_endpoint`` points
-  at ``/auth/refresh``, which implements the RFC 6749 §6 request shape. RFC 8414
-  §2 requires ``authorization_endpoint`` only when a supported grant uses one, so
-  omitting it here is conformant.
+* ``authorization_endpoint`` (``/auth/authorize``) starts the authorization-code
+  flow for a client registered via :attr:`~jafaal.AuthSettings.oauth_clients`.
+  PKCE is mandatory and ``code`` is the only response type — the implicit and
+  hybrid flows are omitted because OAuth 2.1 removes them.
+* ``token_endpoint`` (``/auth/token``) implements ``authorization_code`` and
+  ``refresh_token``. ``/auth/refresh`` remains as an alias serving the refresh
+  grant plus JAFAAL's native cookie/header shape.
 * ``/auth/login`` is deliberately **not** advertised. It authenticates an end
-  user directly and returns JAFAAL's own session tokens (and may return a
-  ``202`` MFA challenge instead); it is a first-party login endpoint, not an
-  OAuth token endpoint. Advertising it as one would invite a client to attempt
-  the resource-owner password-credentials grant, which OAuth 2.1 removes and
+  user directly with a password and returns JAFAAL's own session tokens (and may
+  return a ``202`` MFA challenge instead); it is a first-party login endpoint,
+  not an OAuth endpoint. Advertising it would invite a client to attempt the
+  resource-owner password-credentials grant, which OAuth 2.1 removes and
   RFC 9700 §2.4 discourages.
 * ``token_endpoint_auth_methods_supported`` is ``["none"]``. Stating it matters,
   because RFC 8414 §2 makes ``client_secret_basic`` the default when the field is
-  absent, and JAFAAL authenticates the *user*, never a client credential.
+  absent, and JAFAAL's clients are public: PKCE, not a client credential, is what
+  binds a code to its requester.
 
 **Non-standard requirement.** JAFAAL's native request shape additionally uses an
 ``X-Client-Type`` header (``web`` or ``mobile``), because refresh-token delivery
@@ -94,31 +98,28 @@ def get_authorization_server_metadata(*, api_root: str, auth_prefix: str = "/aut
     return {
         "issuer": settings.resolved_issuer,
         "jwks_uri": _join_url(api_root, "/.well-known/jwks.json"),
-        # The only endpoint implementing an OAuth grant. /auth/login is NOT
-        # advertised: it is a first-party login endpoint, not a token endpoint.
-        "token_endpoint": _join_url(auth_root, "/refresh"),
+        "authorization_endpoint": _join_url(auth_root, "/authorize"),
+        "token_endpoint": _join_url(auth_root, "/token"),
         "introspection_endpoint": _join_url(auth_root, "/introspect"),
         "revocation_endpoint": _join_url(auth_root, "/revoke"),
-        "grant_types_supported": ["refresh_token"],
-        # No authorization endpoint means no response type can be requested.
-        # RFC 8414 §2 still requires the member, so it is advertised as empty
-        # rather than omitted.
-        "response_types_supported": [],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "response_types_supported": ["code"],
+        "response_modes_supported": ["query"],
         "scopes_supported": sorted(jafaal_scopes.get_scope_catalog().admin),
-        # First-party public clients: the token endpoint authenticates the *user*,
-        # never a client credential.
+        # First-party public clients (RFC 8252): the token endpoint
+        # authenticates the *user* and binds the code with PKCE, never a client
+        # credential.
         "token_endpoint_auth_methods_supported": ["none"],
         # RFC 7662 §2.1 permits protecting introspection with a separate access
         # token; JAFAAL requires one carrying the ``auth:introspect`` scope.
         "introspection_endpoint_auth_methods_supported": ["bearer"],
         # RFC 7009: possession of the token is the authorisation to revoke it.
         "revocation_endpoint_auth_methods_supported": ["none"],
-        # Mobile clients may bind a login to a PKCE challenge (RFC 7636) and
-        # redeem the resulting session for tokens with the verifier.
+        # PKCE is mandatory, and ``plain`` is refused.
         "code_challenge_methods_supported": ["S256"],
         # Extension member (RFC 8414 §2 permits additional metadata). Headers a
-        # client sending JAFAAL's *native* request shape must set — the standard
-        # RFC 6749 form request needs none of them.
+        # client sending JAFAAL's *native* request shape must set — a standard
+        # authorization-code or refresh request needs none of them.
         "jafaal_required_request_headers": {
             "X-Client-Type": ["web", "mobile"],
         },

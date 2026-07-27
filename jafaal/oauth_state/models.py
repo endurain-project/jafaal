@@ -42,6 +42,12 @@ class OAuthState(Base):
         created_at: Timestamp for expiry calculation.
         expires_at: Hard expiry at 10 minutes.
         used: Prevents replay attacks.
+        client_id: Registered public client, when the flow was started at
+            ``/auth/authorize`` (null for JAFAAL's own frontend flow).
+        redirect_uri: Exact redirect URI from the authorization request,
+            re-checked at token exchange (RFC 6749 §4.1.3).
+        client_state: The client's opaque ``state``, echoed back with the code.
+        authorization_code_hash: Keyed digest of the issued authorization code.
         identity_provider: Relationship to IdentityProvider model.
         users: Relationship to Users model (nullable).
         users_sessions: Relationship to UsersSessions model.
@@ -140,6 +146,39 @@ class OAuthState(Base):
         nullable=False,
         index=True,
         comment="True when state is consumed (prevents replay)",
+    )
+
+    # --- RFC 6749 authorization-code flow (registered public clients) ---
+    #
+    # Populated only when the flow was started at ``/auth/authorize`` by a
+    # registered client. A flow started through JAFAAL's own frontend leaves
+    # them null and takes the native (session-id) delivery path instead.
+
+    client_id: Mapped[str | None] = mapped_column(
+        String(128),
+        nullable=True,
+        index=True,
+        comment="Registered public client that initiated the authorization request",
+    )
+
+    redirect_uri: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+        comment="Exact redirect_uri from the authorization request; re-checked at token exchange",
+    )
+
+    client_state: Mapped[str | None] = mapped_column(
+        String(256),
+        nullable=True,
+        comment="Opaque client 'state', echoed back with the authorization code (RFC 6749 4.1.2)",
+    )
+
+    authorization_code_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        unique=True,
+        index=True,
+        comment="HMAC-SHA256 of the issued authorization code (the plaintext is never stored)",
     )
 
     # Relationships

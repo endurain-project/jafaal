@@ -34,7 +34,7 @@ def test_issuer_matches_the_iss_claim_jafaal_mints(doc):
 
 
 def test_advertised_endpoints_exist(client, doc):
-    for key in ("token_endpoint", "introspection_endpoint", "revocation_endpoint"):
+    for key in ("token_endpoint", "introspection_endpoint", "revocation_endpoint", "authorization_endpoint"):
         path = doc[key].removeprefix("https://app.test")
         # 405 would mean the path resolves but rejects GET; 404 means the URL is
         # a lie. Anything but 404 proves the route is mounted where advertised.
@@ -47,19 +47,25 @@ def test_endpoint_urls_follow_custom_router_prefixes():
         api_root="https://app.test/api/v2",
         auth_prefix=prefixes.auth,
     )
-    assert document["token_endpoint"] == "https://app.test/api/v2/identity/refresh"
+    assert document["token_endpoint"] == "https://app.test/api/v2/identity/token"
+    assert document["authorization_endpoint"] == "https://app.test/api/v2/identity/authorize"
     assert document["revocation_endpoint"] == "https://app.test/api/v2/identity/revoke"
     assert document["jwks_uri"] == "https://app.test/api/v2/.well-known/jwks.json"
 
 
 def test_client_auth_is_declared_so_the_spec_default_does_not_apply(doc):
     # Omitting this member means ``client_secret_basic`` per RFC 8414 §2, which
-    # would send clients hunting for a secret JAFAAL never issues.
+    # would send clients hunting for a secret JAFAAL never issues: its clients
+    # are public and bind their code with PKCE instead.
     assert doc["token_endpoint_auth_methods_supported"] == ["none"]
-    assert doc["grant_types_supported"] == ["refresh_token"]
-    # RFC 8414 §2 requires ``authorization_endpoint`` only when a supported grant
-    # uses one; ``refresh_token`` does not, so omitting it stays conformant.
-    assert "authorization_endpoint" not in doc
+    assert set(doc["grant_types_supported"]) == {"authorization_code", "refresh_token"}
+
+
+def test_only_the_code_response_type_is_offered(doc):
+    # The implicit and hybrid flows return tokens in a redirect; OAuth 2.1
+    # removes them and RFC 9700 §2.1.2 recommends against them.
+    assert doc["response_types_supported"] == ["code"]
+    assert doc["code_challenge_methods_supported"] == ["S256"]
 
 
 def test_password_grant_is_never_advertised(doc):
@@ -103,7 +109,7 @@ def test_origin_falls_back_to_the_request_when_base_url_is_unset(client):
     jafaal.configure(replace_settings(original, base_url="", issuer="https://issuer.test"))
     try:
         document = client.get(METADATA_URL).json()
-        assert document["token_endpoint"] == "http://testserver/api/v1/auth/refresh"
+        assert document["token_endpoint"] == "http://testserver/api/v1/auth/token"
     finally:
         jafaal.configure(original)
 

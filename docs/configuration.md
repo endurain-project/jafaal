@@ -57,6 +57,73 @@ jafaal.configure(
 )
 ```
 
+## Native apps: the authorization-code flow
+
+A native app authenticates through the standard RFC 6749 §4.1 authorization-code
+flow with PKCE, which every OAuth client library already speaks — AppAuth-iOS,
+AppAuth-Android, `openid-client`, MSAL. Register the app first:
+
+```python
+jafaal.configure(
+    jafaal.AuthSettings(
+        secrets=jafaal.Secrets(secret_key=..., fernet_key=...),
+        base_url="https://app.example.com",
+        oauth_clients=(
+            jafaal.OAuthClient(
+                client_id="com.example.app",
+                redirect_uris=("com.example.app://oauth/callback",),
+                name="Example for iOS",
+            ),
+        ),
+    )
+)
+```
+
+Registration is not bureaucracy — it is what makes **exact `redirect_uri`
+matching** possible, which RFC 9700 §4.1 requires and which is the control that
+stops an authorization code being steered to an attacker's target. Matching is
+byte-for-byte: no prefixes, wildcards, or sub-paths. Clients are *public*
+(RFC 8252): a native app cannot keep a secret, so PKCE — not client
+authentication — binds the code to the requester.
+
+The flow:
+
+```text
+GET  /auth/authorize?response_type=code
+                    &client_id=com.example.app
+                    &redirect_uri=com.example.app://oauth/callback
+                    &code_challenge=<S256>&code_challenge_method=S256
+                    &state=<opaque>&idp=<provider-slug>
+  → 307 to the identity provider
+  → (IdP returns to /public/idp/callback/<slug>)
+  → 307 to com.example.app://oauth/callback?code=…&state=…
+
+POST /auth/token
+     grant_type=authorization_code&code=…&code_verifier=…
+     &redirect_uri=com.example.app://oauth/callback&client_id=com.example.app
+  → {"access_token": …, "refresh_token": …, "token_type": "bearer", "expires_in": …}
+```
+
+Four bindings must all hold for a code to be redeemed, and each closes a
+published attack: PKCE, `client_id`, exact `redirect_uri`, and single use. Only
+the digest of a code is stored, so database read access alone does not yield a
+redeemable one.
+
+`/auth/token` serves both grants — `authorization_code` and `refresh_token` — so
+a standard client needs exactly one token URL. `/auth/refresh` remains as an
+alias that also accepts JAFAAL's native cookie/header shape, which is what the
+first-party web frontend uses.
+
+!!! note "Scope"
+    `/auth/authorize` authenticates through an identity provider (`idp=`).
+    Password login has no browser authorization endpoint because JAFAAL ships no
+    login UI — a first-party app posts to `/auth/login` directly, optionally
+    binding the result to a PKCE challenge.
+
+Everything is advertised in the RFC 8414 discovery document at
+`/.well-known/oauth-authorization-server`, so a client can be configured from a
+single issuer URL.
+
 Every component reads the installed settings through
 [`jafaal.get_settings`][jafaal.get_settings]. Re-calling `configure()` replaces
 the settings and invalidates settings-derived caches (e.g. the token manager).

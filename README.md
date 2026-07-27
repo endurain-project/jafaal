@@ -39,21 +39,25 @@ roles, and implements the standards that govern each:
 |---|---|
 | **JWT issuer** for your own resource servers | RFC 9068 (`at+jwt` access tokens), RFC 7519, RFC 7517 / 7638 (JWKS + `kid` thumbprints), RFC 8414 (discovery) |
 | **Bearer-token resource server** | RFC 6750 (header extraction, `WWW-Authenticate` challenges incl. `insufficient_scope`) |
-| **OAuth client / OIDC Relying Party** for SSO | RFC 6749 *client* role, RFC 7636 (PKCE S256), OIDC Core 1.0 (`nonce`, `azp`, `at_hash`), RFC 9700 (Security BCP) |
+| **Authorization server for your own native apps** | RFC 6749 §4.1 (authorization code), RFC 7636 (PKCE S256), RFC 8252 (native apps / public clients), RFC 9700 (exact redirect-URI matching) |
+| **OAuth client / OIDC Relying Party** for SSO | RFC 6749 *client* role, RFC 7636, OIDC Core 1.0 (`nonce`, `azp`, `at_hash`, userinfo `sub` check), RFC 9700 |
 | **Credential authority** | NIST SP 800-63B (password policy + breach screening), RFC 6238 (TOTP), W3C WebAuthn L2 (passkeys), RFC 7662 (introspection), RFC 7009 (revocation) |
 
 > [!IMPORTANT]
-> **JAFAAL is not an OAuth 2.0 authorization server or an OpenID Provider.** It
-> has no client registry, no authorization endpoint, and no consent screen, and
-> it never issues tokens to third-party clients. For SSO it acts as an OAuth
+> **JAFAAL is not a general-purpose authorization server or an OpenID Provider.**
+> There is no consent screen, no client secret, and no dynamic registration, and
+> it never issues tokens to *third-party* clients. For SSO it acts as an OAuth
 > *client* against your IdP — it does not become one. If you need to *be* an
 > identity provider, put a real authorization server in front of JAFAAL.
 >
-> `POST /auth/login` therefore authenticates a first-party user directly; it is
-> **not** the (OAuth 2.1-removed) resource-owner password-credentials grant, and
-> JAFAAL's discovery document deliberately does not advertise it as a
-> `token_endpoint`. The only endpoint advertised as one is `/auth/refresh`, which
-> accepts the standard RFC 6749 §6 request.
+> What it does implement, for **your own** apps, is the authorization-code flow
+> with PKCE (`/auth/authorize` → `/auth/token`), so any standard OAuth client
+> library can drive it. Clients are public (RFC 8252) and registered only so
+> their redirect URIs can be matched exactly.
+>
+> `POST /auth/login` authenticates a first-party user directly; it is **not** the
+> (OAuth 2.1-removed) resource-owner password-credentials grant, and the
+> discovery document deliberately does not advertise it.
 
 Both **web and mobile** clients are first-class. They differ only in refresh-token
 delivery: browsers get an `HttpOnly`, `SameSite=Strict` cookie (so page script
@@ -256,6 +260,13 @@ configure_scopes(DEFAULT_SCOPE_CATALOG.extend(
 
 # Opt each scope an API key may carry in explicitly (empty by default):
 configure_api_key_scopes(["reports:read"])
+
+# Native apps use the standard RFC 6749 authorization-code flow with PKCE.
+# Register each one so redirect URIs can be matched exactly (RFC 9700 §4.1):
+# jafaal.AuthSettings(..., oauth_clients=(
+#     jafaal.OAuthClient(client_id="com.example.app",
+#                       redirect_uris=("com.example.app://oauth/callback",)),
+# ))
 
 # Richer authorisation than the built-in is_superuser two tiers? Implement the
 # ScopeResolver port and JAFAAL stamps whatever you return into its tokens:

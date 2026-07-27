@@ -1,7 +1,6 @@
 """Public (unauthenticated) HTTP routes for identity provider SSO flows."""
 
 import logging
-from datetime import UTC, datetime
 from typing import Annotated, cast
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
@@ -11,6 +10,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 import jafaal._internal.password_hasher as jafaal_password_hasher
+import jafaal._internal.services.authorization_code_service as authorization_code_service
 import jafaal._internal.token_manager as jafaal_token_manager
 import jafaal._internal.user_guards as jafaal_user_guards
 import jafaal.audit as jafaal_audit
@@ -21,14 +21,11 @@ import jafaal.identity_providers.service as idp_service
 import jafaal.identity_providers.utils as idp_utils
 import jafaal.oauth_state.crud as oauth_state_crud
 import jafaal.oauth_state.models as oauth_state_models
-import jafaal.oauth_state.utils as oauth_state_utils
 import jafaal.orm as jafaal_orm
-import jafaal.ports as jafaal_ports
 import jafaal.rate_limit as jafaal_rate_limit
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.utils as jafaal_sessions_utils
 import jafaal.settings as jafaal_settings
-import jafaal.utils as jafaal_utils
 from jafaal._core import network
 
 logger = logging.getLogger(__name__)
@@ -190,20 +187,6 @@ async def initiate_login(
         JafaalError: If the identity provider is not found, disabled, or PKCE validation fails.
     """
     try:
-        # Get the identity provider
-        idp = idp_crud.get_identity_provider_by_slug(idp_slug, db)
-        if not idp or not idp.enabled:
-            raise jafaal_exceptions.NotFoundError("Identity provider not found or disabled")
-
-        # PKCE is REQUIRED for all clients (RFC 7636 / RFC 9700 §2.1.1)
-        if not code_challenge:
-            raise jafaal_exceptions.InvalidRequestError("code_challenge is required (PKCE mandatory for all clients)")
-        if not code_challenge_method or code_challenge_method != "S256":
-            raise jafaal_exceptions.InvalidRequestError("code_challenge_method must be S256")
-
-        # Validate PKCE challenge format
-        idp_utils.validate_pkce_challenge(code_challenge, code_challenge_method)
-
         # Validate redirect URL to prevent open redirect vulnerability
         idp_utils.validate_redirect_url(redirect)
 
@@ -218,30 +201,14 @@ async def initiate_login(
             if client_type not in ["web", "mobile"]:
                 client_type = "web"  # Default to web if invalid
 
-        # Generate OAuth state and nonce
-        state_id, nonce = oauth_state_utils.create_state_id_and_nonce()
-
-        # Get client IP address
-        client_ip = network.get_ip_address(request)
-
-        # Create and store OAuth state in database (replaces cookie-based state)
-        oauth_state_crud.create_oauth_state(
+        authorization_url = await idp_utils.begin_idp_authorization(
+            idp_slug=idp_slug,
+            request=request,
             db=db,
-            state_id=state_id,
-            idp_id=idp.id,
-            nonce=nonce,
-            client_type=client_type,
-            ip_address=client_ip,
-            redirect_path=redirect,
             code_challenge=code_challenge,
             code_challenge_method=code_challenge_method,
-        )
-
-        logger.debug(f"OAuth state created: {state_id} for IdP {idp.slug} (client_type={client_type})")
-
-        # Initiate the OAuth flow with database state ID (no cookies)
-        authorization_url = await idp_service.idp_service.initiate_login(
-            idp, request, db, redirect, oauth_state_id=state_id
+            client_type=client_type,
+            redirect_path=redirect,
         )
 
         return RedirectResponse(url=authorization_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
@@ -425,6 +392,25 @@ async def handle_callback(
         # ``/dashboard&session_id=<attacker>`` would otherwise inject extra
         # parameters into the URL the frontend parses.
         settings = jafaal_settings.get_settings()
+
+        # A flow started at /auth/authorize by a registered client gets the
+        # standard RFC 6749 §4.1.2 response instead: an authorization code and
+        # the client's own ``state``, delivered to the exact redirect_uri the
+        # client registered. This is what lets a stock OAuth library (AppAuth,
+        # openid-client, MSAL) drive JAFAAL without bespoke code.
+        if oauth_state.client_id and oauth_state.redirect_uri:
+            authorization_code = authorization_code_service.issue_authorization_code(oauth_state.id, db)
+            params = {"code": authorization_code}
+            if oauth_state.client_state:
+                params["state"] = oauth_state.client_state
+            logger.info(
+                f"SSO login successful for user {user.username} via {idp.name} (client_id={oauth_state.client_id})"
+            )
+            return RedirectResponse(
+                url=_append_query_params(oauth_state.redirect_uri, params),
+                status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+            )
+
         params = {"sso": "success", "session_id": session_id}
 
         redirect_path = result.get("redirect_path")
@@ -453,7 +439,16 @@ async def handle_callback(
         # A failed LINK returns the browser to its originating page with an error
         # flag; a failed LOGIN falls back to the login page. Link attempts are
         # identified by the user_id stored on the OAuth state at initiation.
-        if oauth_state is not None and oauth_state.user_id is not None:
+        if oauth_state is not None and oauth_state.client_id and oauth_state.redirect_uri:
+            # RFC 6749 §4.1.2.1: a failure *after* the redirect_uri has been
+            # validated is reported back to the client at that URI. Without this
+            # a native app sits on its callback listener until it times out,
+            # with no way to tell a denial from a crash.
+            error_params = {"error": "server_error"}
+            if oauth_state.client_state:
+                error_params["state"] = oauth_state.client_state
+            error_url = _append_query_params(oauth_state.redirect_uri, error_params)
+        elif oauth_state is not None and oauth_state.user_id is not None:
             error_url = _build_link_result_url(oauth_state.redirect_path, None, success=False)
         else:
             settings = jafaal_settings.get_settings()
@@ -532,79 +527,28 @@ def exchange_tokens_for_session(
             logger.warning(f"Token exchange failed: session {session_id[:8]}... has no OAuth state")
             raise jafaal_exceptions.NotFoundError("Session not eligible for PKCE token exchange")
 
-        # Check if tokens have already been exchanged (prevent replay).
-        # This is a fast-path informational check; the authoritative
-        # protection is the atomic conditional UPDATE below, which
-        # closes a TOCTOU race that two concurrent exchanges with the
-        # same code_verifier would otherwise win.
+        # A flow started at /auth/authorize is redeemed at /auth/token with its
+        # authorization code, not here. Accepting the session id as well would
+        # give that flow a second, weaker redemption path — one that skips the
+        # client_id and redirect_uri bindings entirely.
+        if oauth_state.client_id:
+            logger.warning(f"Session {session_id[:8]}... belongs to an authorization-code flow")
+            raise jafaal_exceptions.InvalidRequestError(
+                "This session was created by /auth/authorize; redeem its authorization code at "
+                "/auth/token with grant_type=authorization_code."
+            )
+
+        # Fast-path informational check; the authoritative protection is the
+        # atomic conditional UPDATE inside complete_pkce_exchange, which closes
+        # the TOCTOU race two concurrent exchanges would otherwise win.
         if session_obj.tokens_exchanged:
             logger.warning(f"Token exchange replay attempt for session {session_id[:8]}...")
             raise jafaal_exceptions.ConflictError("Tokens already exchanged for this session")
 
-        # Verify PKCE code_verifier matches code_challenge
-        if not oauth_state.code_challenge or not oauth_state.code_challenge_method:
-            logger.error(f"Token exchange failed: OAuth state {oauth_state.id[:8]}... missing PKCE data")
-            raise jafaal_exceptions.InvalidRequestError("OAuth state missing PKCE data")
-
-        # Validate code_verifier and verify it matches the challenge
-        idp_utils.validate_pkce_verifier(
-            code_verifier=token_exchange.code_verifier,
-            code_challenge=oauth_state.code_challenge,
-            code_challenge_method=oauth_state.code_challenge_method,
-        )
-
-        # Determine client_type for this token exchange before minting
-        # tokens or claiming the one-shot session. A mismatched
-        # X-Client-Type must not be able to burn an otherwise valid
-        # PKCE session by flipping tokens_exchanged first.
-        #
-        # Authority order:
-        #   1. ``oauth_state.client_type`` — set when the IdP flow was
-        #      initiated by an authenticated client that DID send
-        #      ``X-Client-Type``. When this is non-None it represents
-        #      the original, server-recorded intent and the exchange
-        #      caller MUST NOT override it.
-        #   2. ``X-Client-Type`` header on the exchange request —
-        #      only consulted when ``oauth_state.client_type`` is None,
-        #      which is the genuine system-browser case (the OS
-        #      browser carries no custom headers when opening
-        #      ``/initiate_login``, so the original intent could not
-        #      be recorded).
-        #
-        # Previously the header was preferred unconditionally
-        # (`request.headers.get("X-Client-Type", stored or "web")`),
-        # which let the exchange caller switch between the
-        # cookie-set ``web`` shape and the body-only ``mobile`` shape
-        # at will — bypassing the cookie-set decision and the
-        # response shape that should follow from how the flow was
-        # actually initiated.
-        stored_client_type = oauth_state.client_type
-        header_client_type = request.headers.get("X-Client-Type")
-        if header_client_type not in ("web", "mobile"):
-            header_client_type = None
-
-        if stored_client_type in ("web", "mobile"):
-            # Recorded intent wins. If the caller declared a
-            # different value, reject the exchange — this is either
-            # a misbehaving client or an attacker trying to flip the
-            # response shape. We do NOT silently downgrade.
-            if header_client_type is not None and header_client_type != stored_client_type:
-                logger.warning(
-                    "Token exchange client_type mismatch for session "
-                    f"{session_id[:8]}...: stored={stored_client_type}, "
-                    f"header={header_client_type}"
-                )
-                raise jafaal_exceptions.InvalidRequestError("client_type does not match the OAuth state")
-            client_type = stored_client_type
-        else:
-            # Genuine system-browser flow — fall back to the header,
-            # defaulting to ``web`` when the header is absent.
-            client_type = header_client_type or "web"
-
-        # PKCE verification successful - retrieve user and create tokens
-        user = cast(jafaal_ports.UserProtocol, session_obj.users)
-        # Validate that the user is still active before minting tokens
-        jafaal_user_guards.check_user_is_active(user)
+        # Resolved before minting tokens or claiming the one-shot session, so a
+        # mismatched X-Client-Type cannot burn an otherwise valid PKCE session
+        # by flipping tokens_exchanged first.
+        client_type = authorization_code_service.resolve_client_type(oauth_state, request.headers.get("X-Client-Type"))
 
         # A web exchange plants an HttpOnly refresh cookie, so it carries the
         # same off-site rejection as /auth/login and /auth/refresh. Checked only
@@ -613,82 +557,27 @@ def exchange_tokens_for_session(
         if client_type == "web":
             network.reject_off_site_request(request, operation="Token exchange")
 
-        # Create JWT tokens (now that PKCE is verified)
-        (
-            _,
-            access_token_exp,
-            access_token,
-            refresh_token_exp,
-            refresh_token,
-            csrf_token,
-        ) = jafaal_utils.create_tokens(user, token_manager, session_id)
-
-        # Calculate expires_in from access token expiration
-        expires_in = int((access_token_exp - datetime.now(UTC)).total_seconds())
-
-        # Calculate refresh_token_expires_in from refresh token expiration
-        refresh_token_expires_in = int((refresh_token_exp - datetime.now(UTC)).total_seconds())
-
-        # Update session with the actual hashed refresh token AND
-        # mark tokens as exchanged in a single atomic conditional
-        # UPDATE. This closes the check-then-act race where two
-        # concurrent exchanges with the correct verifier could both
-        # pass the ``tokens_exchanged`` guard, both mint refresh
-        # tokens, and the second overwrite the first — handing the
-        # second caller a working refresh token while invalidating
-        # the first.
-        # Note: csrf_token_hash is NOT stored here (page-reload
-        # bootstrap). The first /refresh call after page
-        # reload establishes the CSRF binding.
-        claimed = jafaal_sessions_crud.claim_session_for_token_exchange(
-            session_id,
-            jafaal_sessions_utils.hash_refresh_token(refresh_token),
-            db,
-        )
-        if not claimed:
-            logger.warning(f"Token exchange lost race for session {session_id[:8]}...")
-            raise jafaal_exceptions.ConflictError("Tokens already exchanged for this session")
-
-        # Set refresh token cookie for web clients (enables logout).
-        # Cookie attributes (Secure, SameSite, Path, expiry) are
-        # centralised in jafaal_utils.set_refresh_token_cookie so this
-        # SSO flow stays in lockstep with password login and /refresh
-        # — previously this site used FRONTEND_PROTOCOL and could
-        # issue a non-Secure refresh cookie when that env var was
-        # missing or mis-set in production.
-        if client_type == "web":
-            jafaal_utils.set_refresh_token_cookie(response, refresh_token)
-
-        # Note: tokens_exchanged was flipped atomically together
-        # with the refresh-token hash above, so no second write is
-        # needed here. The atomic claim also detached the OAuth
-        # state row for cleanup.
-
-        logger.info(
-            f"Token exchange successful for session {session_id[:8]}... (user={user.username}, client_type={client_type})"
+        body = authorization_code_service.complete_pkce_exchange(
+            session_obj=session_obj,
+            oauth_state=oauth_state,
+            code_verifier=token_exchange.code_verifier,
+            client_type=client_type,
+            response=response,
+            token_manager=token_manager,
+            db=db,
         )
 
-        # Return response based on client type (matches complete_login behavior)
-        if client_type == "web":
-            # Web: access_token and csrf_token in body, refresh_token in cookie only
-            return idp_schema.TokenExchangeResponse(
-                session_id=session_id,
-                access_token=access_token,
-                csrf_token=csrf_token,
-                expires_in=expires_in,
-                refresh_token_expires_in=refresh_token_expires_in,
-                token_type="Bearer",
-            )
-        else:
-            # Mobile: all tokens in body (no cookies)
-            return idp_schema.TokenExchangeResponse(
-                session_id=session_id,
-                access_token=access_token,
-                refresh_token=refresh_token,
-                expires_in=expires_in,
-                refresh_token_expires_in=refresh_token_expires_in,
-                token_type="Bearer",
-            )
+        logger.info(f"Token exchange successful for session {session_id[:8]}... (client_type={client_type})")
+
+        return idp_schema.TokenExchangeResponse(
+            session_id=session_id,
+            access_token=cast(str, body["access_token"]),
+            refresh_token=cast("str | None", body.get("refresh_token")),
+            csrf_token=cast("str | None", body.get("csrf_token")),
+            expires_in=cast(int, body["expires_in"]),
+            refresh_token_expires_in=cast(int, body["refresh_token_expires_in"]),
+            token_type="Bearer",
+        )
 
     except jafaal_exceptions.JafaalError:
         raise

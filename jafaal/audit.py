@@ -114,6 +114,7 @@ class Event:
     SIGNUP_CONFIRMED: Final = "signup.confirmed"
 
     # --- tokens & sessions ---
+    AUTHORIZATION_CODE_REDEEMED: Final = "authorization_code.redeemed"
     TOKEN_REUSE_GRACE: Final = "token.reuse_grace"
     TOKEN_THEFT_DETECTED: Final = "token.theft_detected"
     TOKEN_REFRESHED: Final = "token.refreshed"

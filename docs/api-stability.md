@@ -43,11 +43,13 @@ minor release when a status becomes more accurate.
 Route paths, methods, request shapes, and response fields of the routers
 assembled by `create_auth_router`, including:
 
+- the OAuth 2.0 authorization endpoint (`/auth/authorize`) and token endpoint
+  (`/auth/token`), their parameters, and the `authorization_code` /
+  `refresh_token` grants;
 - the token response body (`access_token`, `token_type`, `expires_in`,
   `refresh_token_expires_in`, `session_id`, and `csrf_token` / `refresh_token`
   by client type);
 - the `X-Client-Type`, `X-CSRF-Token`, and `X-API-Key` header contracts;
-- the RFC 6749 §6 form shape accepted at `/auth/refresh`;
 - the RFC 7662 introspection and RFC 7009 revocation responses; and
 - the RFC 8414 metadata document and the JWKS document.
 

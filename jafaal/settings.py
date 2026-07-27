@@ -37,6 +37,7 @@ misconfiguration fails fast, and every key-bearing field is redacted from
 
 from __future__ import annotations
 
+import hmac
 from dataclasses import dataclass, field, fields
 from typing import Any
 from urllib.parse import urlparse
@@ -57,6 +58,7 @@ __all__ = [
     "AuthSettings",
     "MfaSettings",
     "NetworkSettings",
+    "OAuthClient",
     "PasswordSettings",
     "RateLimitSettings",
     "Secrets",
@@ -580,6 +582,74 @@ class AuditSettings:
 
 
 # ===========================================================================
+# OAuth clients (RFC 8252 public clients)
+# ===========================================================================
+
+
+@dataclass(frozen=True)
+class OAuthClient:
+    """A registered public client that may drive the authorization-code flow.
+
+    JAFAAL is not an authorization server for *third parties* — there are no
+    client secrets, no consent screen, and no dynamic registration. What this
+    registry exists for is the one thing RFC 9700 §4.1 makes mandatory and that
+    cannot be done without it: **exact** ``redirect_uri`` matching. Without a
+    registered list there is nothing to match a redirect against, and an
+    authorization code can be steered to an attacker-controlled target.
+
+    Registering a client is therefore a security control, not bureaucracy, and it
+    replaces the weaker scheme-level allow-list it supersedes: permitting the
+    ``myapp`` scheme lets *any* ``myapp://…`` target receive a code, while
+    registering ``myapp://callback`` permits exactly that one.
+
+    Clients are public (RFC 8252): a native app cannot keep a secret, so PKCE —
+    not client authentication — is what binds the code to the requester.
+
+    Attributes:
+        client_id: The identifier the client sends as ``client_id``. Any stable
+            opaque string; a reverse-DNS name (``com.example.app``) is
+            conventional for native apps.
+        redirect_uris: Every URI the client may receive an authorization code
+            at, matched **exactly** (byte-for-byte, per RFC 9700 §4.1.3 — no
+            prefix, wildcard, or path-suffix matching). Include each variant the
+            app actually uses.
+        name: Human-readable label, used in logs and audit records.
+    """
+
+    client_id: str
+    redirect_uris: tuple[str, ...]
+    name: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.client_id:
+            raise ValueError("OAuthClient.client_id is required")
+        if not self.redirect_uris:
+            raise ValueError(
+                f"OAuthClient(client_id={self.client_id!r}) must register at least one redirect_uri: "
+                "the authorization endpoint matches the requested redirect_uri exactly against this "
+                "list, so a client with none can never complete a flow."
+            )
+        for uri in self.redirect_uris:
+            if not uri or "#" in uri:
+                raise ValueError(
+                    f"OAuthClient(client_id={self.client_id!r}) redirect_uri {uri!r} is invalid: it must be "
+                    "non-empty and carry no fragment (RFC 6749 §3.1.2)."
+                )
+
+    def permits(self, redirect_uri: str) -> bool:
+        """Return whether ``redirect_uri`` is registered for this client.
+
+        Compared in constant time and byte-for-byte. RFC 9700 §4.1.3 requires
+        exact matching precisely because every relaxation (prefix, wildcard,
+        sub-path) has been used to exfiltrate authorization codes.
+        """
+        matched = False
+        for registered in self.redirect_uris:
+            matched |= hmac.compare_digest(registered, redirect_uri)
+        return matched
+
+
+# ===========================================================================
 # Root
 # ===========================================================================
 
@@ -647,6 +717,13 @@ class AuthSettings:
     store_key_prefix: str = "jafaal:auth"
     login_token_url: str = "/api/v1/auth/login"
 
+    # --- registered public clients (RFC 8252) ---
+    # Empty by default: a deployment that only serves its own first-party web
+    # frontend needs none. Register one per native app that drives the
+    # authorization-code flow; the authorization endpoint refuses any
+    # client_id / redirect_uri pair not listed here.
+    oauth_clients: tuple[OAuthClient, ...] = ()
+
     # --- deployment-wide security toggles ---
     login_ip_lockout_enabled: bool = True
     allow_in_memory_state_store_when_deployed: bool = False
@@ -699,6 +776,28 @@ class AuthSettings:
                 f"tokens.algorithm={self.tokens.algorithm!r} is symmetric (HS256). Use an asymmetric "
                 "algorithm (e.g. RS256 / ES256) or remove the keys."
             )
+        seen_client_ids: set[str] = set()
+        for client in self.oauth_clients:
+            if client.client_id in seen_client_ids:
+                raise ValueError(
+                    f"AuthSettings.oauth_clients contains duplicate client_id {client.client_id!r}; "
+                    "the first match would silently win and the second's redirect_uris would never apply."
+                )
+            seen_client_ids.add(client.client_id)
+
+    def oauth_client(self, client_id: str) -> OAuthClient | None:
+        """Return the registered client with ``client_id``, or ``None``.
+
+        Args:
+            client_id: The identifier presented by the caller.
+
+        Returns:
+            The matching :class:`OAuthClient`, or ``None`` when unregistered.
+        """
+        for client in self.oauth_clients:
+            if hmac.compare_digest(client.client_id, client_id):
+                return client
+        return None
 
     def __repr__(self) -> str:
         """Render the settings, delegating secret redaction to each group's repr."""

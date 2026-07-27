@@ -95,6 +95,38 @@ def get_session_by_id_not_expired(
 
 
 @db_errors.handle_db_errors
+def get_sessions_by_oauth_state_id(
+    oauth_state_id: str,
+    db: Session,
+) -> list[jafaal_sessions_models.UsersSessions]:
+    """Return the unexpired sessions created for an OAuth state.
+
+    The reverse of :func:`get_session_with_oauth_state`, used when redeeming an
+    authorization code: there the caller holds the state (resolved from the
+    code's digest) and needs the pending session it produced.
+
+    Args:
+        oauth_state_id: The OAuth state to look up sessions for.
+        db: SQLAlchemy database session.
+
+    Returns:
+        Matching sessions, newest first. Normally at most one — a state produces
+        a single session — but returned as a list so a caller never has to
+        assume that.
+
+    Raises:
+        JafaalError: If database error occurs.
+    """
+    stmt = (
+        select(jafaal_sessions_models.UsersSessions)
+        .where(jafaal_sessions_models.UsersSessions.oauth_state_id == oauth_state_id)
+        .where(jafaal_sessions_models.UsersSessions.expires_at > datetime.now(UTC))
+        .order_by(jafaal_sessions_models.UsersSessions.created_at.desc())
+    )
+    return list(db.execute(stmt).scalars().all())
+
+
+@db_errors.handle_db_errors
 def get_session_with_oauth_state(
     session_id: str,
     db: Session,
