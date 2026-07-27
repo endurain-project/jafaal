@@ -12,7 +12,7 @@ import hashlib
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
-from conftest import replace_settings
+from conftest import NATIVE_CLIENT_ID, WEB_CLIENT_ID, replace_settings
 
 import jafaal.orm as jafaal_orm
 import jafaal.sessions.utils as session_utils
@@ -21,7 +21,6 @@ from jafaal._internal.token_manager import TokenType, get_token_manager
 from jafaal.sessions.models import UsersSessions
 from jafaal.sessions.rotated_refresh_tokens.models import RotatedRefreshToken
 
-WEB = {"X-Client-Type": "web"}
 REFRESH = "/api/v1/auth/refresh"
 COOKIE = "jafaal_refresh_token"
 COOKIE_PATH = "/api/v1/auth"
@@ -30,16 +29,14 @@ COOKIE_PATH = "/api/v1/auth"
 def _login(client, username="alice", password="Str0ng!Pass"):
     return client.post(
         "/api/v1/auth/login",
-        data={"username": username, "password": password},
-        headers=WEB,
+        data={"username": username, "password": password, "client_id": WEB_CLIENT_ID},
     )
 
 
 def _login_mobile(client, username="alice", password="Str0ng!Pass"):
     return client.post(
         "/api/v1/auth/login",
-        data={"username": username, "password": password},
-        headers={"X-Client-Type": "mobile"},
+        data={"username": username, "password": password, "client_id": NATIVE_CLIENT_ID},
     )
 
 
@@ -91,7 +88,7 @@ def test_refresh_rotates_the_refresh_cookie(client, make_user):
     _login(client)
     original = _refresh_cookie(client)
 
-    resp = client.post(REFRESH, headers=WEB)
+    resp = client.post(REFRESH)
 
     assert resp.status_code == 200
     rotated = _refresh_cookie(client)
@@ -100,7 +97,7 @@ def test_refresh_rotates_the_refresh_cookie(client, make_user):
 
 
 def test_refresh_without_cookie_is_unauthorized(client):
-    resp = client.post(REFRESH, headers=WEB)
+    resp = client.post(REFRESH)
     assert resp.status_code == 401
 
 
@@ -108,11 +105,11 @@ def test_refresh_after_logout_finds_no_session(client, make_user):
     make_user(username="alice")
     _login(client)
     valid_cookie = _refresh_cookie(client)
-    assert client.post("/api/v1/auth/logout", headers=WEB).status_code == 200
+    assert client.post("/api/v1/auth/logout").status_code == 200
 
     # Re-present the (now-deleted) session's refresh token.
     _set_refresh_cookie(client, valid_cookie)
-    resp = client.post(REFRESH, headers=WEB)
+    resp = client.post(REFRESH)
     assert resp.status_code in (401, 404)
 
 
@@ -127,19 +124,19 @@ def test_reuse_after_grace_is_theft_and_kills_the_family(client, make_user):
     stolen = _refresh_cookie(client)
 
     # Legitimate rotation → the presented token is now the *old* one.
-    assert client.post(REFRESH, headers=WEB).status_code == 200
+    assert client.post(REFRESH).status_code == 200
     current = _refresh_cookie(client)
 
     # Past the grace window, re-presenting the old token is treated as theft.
     _force_rotated_tokens_past_grace()
     _set_refresh_cookie(client, stolen)
-    theft = client.post(REFRESH, headers=WEB)
+    theft = client.post(REFRESH)
     assert theft.status_code == 401
     assert "reuse" in theft.json()["detail"].lower()
 
     # Theft invalidates the whole family: even the legitimate current token dies.
     _set_refresh_cookie(client, current)
-    assert client.post(REFRESH, headers=WEB).status_code in (401, 404)
+    assert client.post(REFRESH).status_code in (401, 404)
 
 
 def test_theft_emits_security_event(client, make_user, event_sink):
@@ -149,10 +146,10 @@ def test_theft_emits_security_event(client, make_user, event_sink):
     _login(client)
     stolen = _refresh_cookie(client)
 
-    assert client.post(REFRESH, headers=WEB).status_code == 200  # legitimate rotation
+    assert client.post(REFRESH).status_code == 200  # legitimate rotation
     _force_rotated_tokens_past_grace()
     _set_refresh_cookie(client, stolen)
-    assert client.post(REFRESH, headers=WEB).status_code == 401  # theft detected
+    assert client.post(REFRESH).status_code == 401  # theft detected
 
     theft = [e for e in event_sink.events if isinstance(e, RefreshTokenTheftDetected)]
     assert len(theft) == 1
@@ -164,14 +161,14 @@ def test_in_grace_replay_is_idempotent(client, make_user):
     _login(client)
     old = _refresh_cookie(client)
 
-    assert client.post(REFRESH, headers=WEB).status_code == 200
+    assert client.post(REFRESH).status_code == 200
     replacement = _refresh_cookie(client)
     assert replacement != old
 
     # Re-presenting the just-rotated token *within* grace replays the same
     # replacement (a lost response / racing retry converges, no new rotation).
     _set_refresh_cookie(client, old)
-    replay = client.post(REFRESH, headers=WEB)
+    replay = client.post(REFRESH)
     assert replay.status_code == 200
     assert _refresh_cookie(client) == replacement
 
@@ -187,7 +184,7 @@ def test_refresh_rejects_session_owner_mismatch(client, make_user):
     _exp, forged = token_manager.create_token(alice_sid, bob, TokenType.REFRESH)
 
     _set_refresh_cookie(client, forged)
-    resp = client.post(REFRESH, headers=WEB)
+    resp = client.post(REFRESH)
     assert resp.status_code == 401
 
 
@@ -202,7 +199,7 @@ def test_refresh_rejects_deactivated_user(client, make_user, db):
     row.is_active = False
     db.commit()
 
-    resp = client.post(REFRESH, headers=WEB)
+    resp = client.post(REFRESH)
     assert resp.status_code in (401, 403)
 
 
@@ -215,16 +212,16 @@ def test_csrf_not_required_on_first_refresh_bootstrap(client, make_user):
     make_user(username="alice")
     _login(client)  # login does NOT bind a CSRF hash to the session
     # First refresh with no CSRF header must succeed (page-reload bootstrap).
-    assert client.post(REFRESH, headers=WEB).status_code == 200
+    assert client.post(REFRESH).status_code == 200
 
 
 def test_wrong_csrf_header_is_rejected_once_bound(client, make_user):
     make_user(username="alice")
     _login(client)
     # First refresh binds a CSRF hash to the session.
-    client.post(REFRESH, headers=WEB)
+    client.post(REFRESH)
 
-    resp = client.post(REFRESH, headers={**WEB, "X-CSRF-Token": "totally-wrong"})
+    resp = client.post(REFRESH, headers={"X-CSRF-Token": "totally-wrong"})
     assert resp.status_code == 403
     assert "csrf" in resp.json()["detail"].lower()
 
@@ -232,20 +229,20 @@ def test_wrong_csrf_header_is_rejected_once_bound(client, make_user):
 def test_correct_csrf_header_is_accepted(client, make_user):
     make_user(username="alice")
     _login(client)
-    bound = client.post(REFRESH, headers=WEB).json()
+    bound = client.post(REFRESH).json()
     csrf = bound["csrf_token"]
 
-    resp = client.post(REFRESH, headers={**WEB, "X-CSRF-Token": csrf})
+    resp = client.post(REFRESH, headers={"X-CSRF-Token": csrf})
     assert resp.status_code == 200
 
 
 def test_missing_csrf_header_still_allowed_after_binding(client, make_user):
     make_user(username="alice")
     _login(client)
-    client.post(REFRESH, headers=WEB)  # binds CSRF
+    client.post(REFRESH)  # binds CSRF
 
     # Omitting the header on a later reload must still bootstrap (no lockout).
-    assert client.post(REFRESH, headers=WEB).status_code == 200
+    assert client.post(REFRESH).status_code == 200
 
 
 # --------------------------------------------------------------------------- #
@@ -262,7 +259,7 @@ def test_cross_site_refresh_is_rejected_even_without_a_csrf_header(client, make_
     make_user(username="alice")
     _login(client)
 
-    resp = client.post(REFRESH, headers={**WEB, "Sec-Fetch-Site": "cross-site"})
+    resp = client.post(REFRESH, headers={"Sec-Fetch-Site": "cross-site"})
     assert resp.status_code == 403
     assert "origin" in resp.json()["detail"].lower()
 
@@ -270,11 +267,11 @@ def test_cross_site_refresh_is_rejected_even_without_a_csrf_header(client, make_
 def test_cross_site_refresh_is_rejected_even_with_a_valid_csrf_token(client, make_user):
     make_user(username="alice")
     _login(client)
-    csrf = client.post(REFRESH, headers=WEB).json()["csrf_token"]
+    csrf = client.post(REFRESH).json()["csrf_token"]
 
     resp = client.post(
         REFRESH,
-        headers={**WEB, "X-CSRF-Token": csrf, "Sec-Fetch-Site": "cross-site"},
+        headers={"X-CSRF-Token": csrf, "Sec-Fetch-Site": "cross-site"},
     )
     assert resp.status_code == 403
 
@@ -285,7 +282,7 @@ def test_sibling_subdomain_refresh_is_rejected(client, make_user):
     make_user(username="alice")
     _login(client)
 
-    resp = client.post(REFRESH, headers={**WEB, "Sec-Fetch-Site": "same-site"})
+    resp = client.post(REFRESH, headers={"Sec-Fetch-Site": "same-site"})
     assert resp.status_code == 403
 
 
@@ -294,14 +291,14 @@ def test_same_origin_and_direct_navigation_are_allowed(client, make_user):
     _login(client)
 
     for fetch_site in ("same-origin", "none"):
-        assert client.post(REFRESH, headers={**WEB, "Sec-Fetch-Site": fetch_site}).status_code == 200
+        assert client.post(REFRESH, headers={"Sec-Fetch-Site": fetch_site}).status_code == 200
 
 
 def test_mismatched_origin_header_is_rejected(client, make_user):
     make_user(username="alice")
     _login(client)
 
-    resp = client.post(REFRESH, headers={**WEB, "Origin": "https://evil.test"})
+    resp = client.post(REFRESH, headers={"Origin": "https://evil.test"})
     assert resp.status_code == 403
 
 
@@ -311,7 +308,7 @@ def test_trusted_origin_header_is_accepted(client, make_user):
     make_user(username="alice")
     _login(client)
 
-    assert client.post(REFRESH, headers={**WEB, "Origin": "https://app.test"}).status_code == 200
+    assert client.post(REFRESH, headers={"Origin": "https://app.test"}).status_code == 200
 
 
 def test_explicit_csrf_trusted_origins_enable_a_split_origin_frontend(client, make_user):
@@ -321,21 +318,20 @@ def test_explicit_csrf_trusted_origins_enable_a_split_origin_frontend(client, ma
     _login(client)
 
     with _override_settings(csrf_trusted_origins=("https://spa.test",)):
-        assert client.post(REFRESH, headers={**WEB, "Origin": "https://spa.test"}).status_code == 200
+        assert client.post(REFRESH, headers={"Origin": "https://spa.test"}).status_code == 200
         # base_url no longer implicitly trusted once an explicit list is set.
-        assert client.post(REFRESH, headers={**WEB, "Origin": "https://app.test"}).status_code == 403
+        assert client.post(REFRESH, headers={"Origin": "https://app.test"}).status_code == 403
 
 
-def test_mobile_clients_are_not_subject_to_the_origin_check(client, make_user):
-    # Mobile clients send the refresh token in the Authorization header, not a
-    # cookie, so they are not a CSRF target.
+def test_body_delivery_clients_are_not_subject_to_the_origin_check(client, make_user):
+    # A body-delivery client holds the refresh token itself instead of relying
+    # on a cookie, so it is not a CSRF target.
     make_user(username="alice")
-    mobile = {"X-Client-Type": "mobile"}
     refresh_token = _login_mobile(client).json()["refresh_token"]
 
     resp = client.post(
         REFRESH,
-        headers={**mobile, "Authorization": f"Bearer {refresh_token}", "Sec-Fetch-Site": "cross-site"},
+        headers={"Authorization": f"Bearer {refresh_token}", "Sec-Fetch-Site": "cross-site"},
     )
     assert resp.status_code == 200
 
@@ -400,7 +396,7 @@ def test_refresh_rejects_a_session_whose_digest_does_not_match(client, make_user
     finally:
         session.close()
 
-    assert client.post(REFRESH, headers=WEB).status_code == 401
+    assert client.post(REFRESH).status_code == 401
 
 
 def test_refresh_rejects_a_malformed_stored_digest_without_a_500(client, make_user):
@@ -417,16 +413,15 @@ def test_refresh_rejects_a_malformed_stored_digest_without_a_500(client, make_us
     finally:
         session.close()
 
-    assert client.post(REFRESH, headers=WEB).status_code == 401
+    assert client.post(REFRESH).status_code == 401
 
 
 # --------------------------------------------------------------------------- #
 # RFC 6749 §6 token-endpoint request shape
 #
-# /auth/refresh is the one endpoint JAFAAL advertises as an OAuth
-# ``token_endpoint``, so it must accept the standard request a stock OAuth client
-# sends — including the parts such a client has no way to know about
-# (X-Client-Type).
+# /auth/refresh accepts the standard request a stock OAuth client sends, with no
+# JAFAAL-specific header of any kind. Delivery mode is read from the token's own
+# ``client_id`` claim, so the caller has no say in it at rotation time.
 # --------------------------------------------------------------------------- #
 
 
@@ -442,41 +437,53 @@ def test_standard_grant_request_returns_a_new_token_bundle(client, make_user):
     assert response.status_code == 200
     body = response.json()
     # RFC 6749 §5.1 shape, plus JAFAAL's extras (which the RFC permits).
-    assert body["token_type"] == "bearer"
+    assert body["token_type"] == "Bearer"
     assert isinstance(body["expires_in"], int)
     assert body["access_token"]
     assert body["refresh_token"] != refresh_token  # rotated
 
 
-def test_standard_grant_request_needs_no_client_type_header(client, make_user):
-    # A stock OAuth client cannot know about X-Client-Type. Carrying the token in
-    # the body is itself proof this is not a cookie-bearing browser, so the
-    # mobile delivery mode (token in body, no CSRF) is inferred.
+def test_delivery_mode_follows_the_token_not_the_request(client, make_user):
+    # A body-delivery client's refresh always returns the token in the body,
+    # whichever carrier the request used. The client is fixed when the session is
+    # created; a request cannot switch it and move where the next refresh token
+    # lands.
     make_user()
     refresh_token = _login_mobile(client).json()["refresh_token"]
 
-    body = client.post(
-        REFRESH,
-        data={"grant_type": "refresh_token", "refresh_token": refresh_token},
-    ).json()
+    via_form = client.post(REFRESH, data={"grant_type": "refresh_token", "refresh_token": refresh_token}).json()
+    assert via_form["refresh_token"]
+    assert "csrf_token" not in via_form
 
-    assert "refresh_token" in body
-    assert "csrf_token" not in body
+    via_header = client.post(REFRESH, headers={"Authorization": f"Bearer {via_form['refresh_token']}"}).json()
+    assert via_header["refresh_token"]
+    assert "csrf_token" not in via_header
 
 
-def test_explicit_client_type_header_wins_over_the_inference(client, make_user):
+def test_a_cookie_client_keeps_cookie_delivery_through_the_standard_grant(client, make_user):
+    # The mirror image: a cookie client that sends its token in the RFC 6749 form
+    # body still gets cookie delivery back, because the registration says so.
     make_user()
-    refresh_token = _login_mobile(client).json()["refresh_token"]
+    _login(client)
+    cookie_token = client.cookies.get(COOKIE)
 
-    body = client.post(
-        REFRESH,
-        data={"grant_type": "refresh_token", "refresh_token": refresh_token},
-        headers=WEB,
-    ).json()
+    body = client.post(REFRESH, data={"grant_type": "refresh_token", "refresh_token": cookie_token}).json()
 
-    # Web delivery: refresh token goes back as a cookie, CSRF token in the body.
     assert "refresh_token" not in body
     assert body["csrf_token"]
+
+
+def test_a_token_from_a_deregistered_client_stops_rotating(client, make_user):
+    # If the host withdraws a client, its sessions must stop: continuing would
+    # mean guessing a delivery mode and scope ceiling that no longer exist.
+    make_user()
+    refresh_token = _login_mobile(client).json()["refresh_token"]
+
+    with _override_settings(oauth_clients=()):
+        assert (
+            client.post(REFRESH, data={"grant_type": "refresh_token", "refresh_token": refresh_token}).status_code
+            == 401
+        )
 
 
 def test_unsupported_grant_type_is_rejected(client, make_user):
@@ -489,7 +496,7 @@ def test_unsupported_grant_type_is_rejected(client, make_user):
     )
 
     assert response.status_code == 400
-    assert "unsupported_grant_type" in response.json()["detail"]
+    assert response.json()["error"] == "unsupported_grant_type"
 
 
 def test_standard_grant_without_a_token_is_a_malformed_request(client, make_user):
@@ -499,7 +506,7 @@ def test_standard_grant_without_a_token_is_a_malformed_request(client, make_user
     response = client.post(REFRESH, data={"grant_type": "refresh_token"})
 
     assert response.status_code == 400
-    assert "invalid_request" in response.json()["detail"]
+    assert response.json()["code"] == "invalid_request"
 
 
 def test_standard_grant_rejects_a_forged_token(client, make_user):
@@ -514,13 +521,11 @@ def test_standard_grant_rejects_a_forged_token(client, make_user):
     assert response.status_code == 401
 
 
-def test_native_shape_still_requires_the_client_type_header(client, make_user):
-    # Without the standard grant there is nothing to infer from, so the header
-    # stays mandatory for JAFAAL's own request shape.
+def test_a_request_carrying_no_token_at_all_is_unauthenticated(client, make_user):
+    # No cookie, no header, no form body: there is no credential to validate.
     make_user()
-    _login(client)
 
-    assert client.post(REFRESH).status_code == 403
+    assert client.post(REFRESH).status_code == 401
 
 
 def test_standard_grant_rotates_the_token(client, make_user):

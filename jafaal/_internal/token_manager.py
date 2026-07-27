@@ -466,6 +466,7 @@ class TokenManager:
         session_id: str,
         user: jafaal_ports.UserProtocol,
         token_type: TokenType,
+        client: jafaal_settings.OAuthClient | None = None,
     ) -> tuple[datetime, str]:
         """
         Creates a JWT token for a user session with appropriate access scope
@@ -477,6 +478,10 @@ class TokenManager:
                 details.
             token_type (TokenType): The type of token to create (access or
                 refresh).
+            client: The registered client the token is being issued to. Its
+                scope ceiling narrows the user's grants and its ``client_id``
+                becomes the RFC 9068 §2.2 ``client_id`` claim. ``None`` falls
+                back to the deployment-wide identifier.
 
         Returns:
             tuple[datetime, str]: A tuple containing the token's expiration
@@ -488,8 +493,11 @@ class TokenManager:
         # Scopes come from the host's ScopeResolver port (the built-in default
         # is the catalog's is_superuser two-tier mapping), so an application
         # with a richer authorisation model stamps its own grants without
-        # patching the token minter.
+        # patching the token minter. The registered client's ceiling then
+        # narrows that set: a token can never carry more than both allow.
         scope = jafaal_ports.get_scope_resolver().scopes_for(user)
+        if client is not None:
+            scope = client.narrow(scope)
 
         # Set now
         issued_at = datetime.now(UTC)
@@ -517,7 +525,7 @@ class TokenManager:
             # to the host user table's primary-key type on the way in.
             "sub": str(user.id),
             "scope": " ".join(scope),
-            "client_id": self.client_id,
+            "client_id": client.client_id if client is not None else self.client_id,
             TOKEN_USE_CLAIM: token_type.value,
         }
         # The media type goes in the JOSE ``typ`` header, not a payload claim.

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from conftest import replace_settings
+from conftest import WEB_CLIENT_ID, replace_settings
 
 import jafaal
 import jafaal.audit as audit
@@ -87,8 +87,7 @@ def test_login_failure_emits_audit_event(client, make_user, caplog):
     with caplog.at_level(logging.INFO, logger=audit.AUDIT_LOGGER_NAME):
         resp = client.post(
             "/api/v1/auth/login",
-            data={"username": "bob", "password": "wrong-password"},
-            headers={"X-Client-Type": "web"},
+            data={"username": "bob", "password": "wrong-password", "client_id": WEB_CLIENT_ID},
         )
 
     assert resp.status_code == 401
@@ -103,8 +102,7 @@ def test_login_success_emits_audit_event(client, make_user, caplog):
     with caplog.at_level(logging.INFO, logger=audit.AUDIT_LOGGER_NAME):
         resp = client.post(
             "/api/v1/auth/login",
-            data={"username": "carol", "password": "Str0ng!Pass"},
-            headers={"X-Client-Type": "web"},
+            data={"username": "carol", "password": "Str0ng!Pass", "client_id": WEB_CLIENT_ID},
         )
 
     assert resp.status_code == 200
@@ -121,8 +119,7 @@ def test_lockout_emits_audit_event(client, make_user, caplog):
         for _ in range(5):
             client.post(
                 "/api/v1/auth/login",
-                data={"username": "dave", "password": "wrong-password"},
-                headers={"X-Client-Type": "web"},
+                data={"username": "dave", "password": "wrong-password", "client_id": WEB_CLIENT_ID},
             )
 
     lockouts = [r for r in _audit_records(caplog) if r.event == "lockout.applied"]

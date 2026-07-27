@@ -32,13 +32,11 @@ try:
 except ImportError:  # pragma: no cover
     fakeredis = None  # type: ignore[assignment]
 
-from conftest import replace_settings
+from conftest import WEB_CLIENT_ID, replace_settings
 
 from jafaal.adapters import RedisStateStore
 
 requires_fakeredis = pytest.mark.skipif(fakeredis is None, reason="fakeredis not installed")
-
-WEB = {"X-Client-Type": "web"}
 
 
 # --------------------------------------------------------------------------- #
@@ -140,8 +138,7 @@ class TestSqlAlchemyUserRepository:
 
             login = client.post(
                 "/api/v1/auth/login",
-                data={"username": "erin", "password": "Str0ng!Pass"},
-                headers=WEB,
+                data={"username": "erin", "password": "Str0ng!Pass", "client_id": WEB_CLIENT_ID},
             )
             assert login.status_code == 200
         finally:
@@ -437,8 +434,7 @@ class TestRedisStateStore:
 def _login(client, username="alice", password="Str0ng!Pass"):
     return client.post(
         "/api/v1/auth/login",
-        data={"username": username, "password": password},
-        headers=WEB,
+        data={"username": username, "password": password, "client_id": WEB_CLIENT_ID},
     )
 
 

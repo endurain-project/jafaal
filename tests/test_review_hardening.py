@@ -10,7 +10,7 @@ import logging
 from contextlib import contextmanager
 
 import pytest
-from conftest import replace_settings
+from conftest import NATIVE_CLIENT_ID, WEB_CLIENT_ID, replace_settings
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -21,7 +21,6 @@ import jafaal.ports as ports
 import jafaal.scopes as scopes
 import jafaal.settings as settings_mod
 
-WEB = {"X-Client-Type": "web"}
 PASSWORD = "Str0ng!Pass"
 
 
@@ -38,8 +37,7 @@ def _settings(**overrides):
 def _login(client, username, password=PASSWORD):
     return client.post(
         "/api/v1/auth/login",
-        data={"username": username, "password": password},
-        headers=WEB,
+        data={"username": username, "password": password, "client_id": WEB_CLIENT_ID},
     )
 
 
@@ -70,7 +68,7 @@ def test_scope_denial_over_http_sends_the_challenge(client, make_user):
     # ``sessions:read`` is an admin-tier scope a regular user never holds.
     response = client.get(
         "/api/v1/auth/sessions/user/1",
-        headers={**WEB, "Authorization": f"Bearer {access}"},
+        headers={"Authorization": f"Bearer {access}"},
     )
     assert response.status_code == 403
     challenge = response.headers["WWW-Authenticate"]
@@ -89,8 +87,7 @@ def test_over_long_password_is_rejected_without_hashing(client, make_user):
     over_limit = "x" * (jafaal.get_settings().passwords.max_length + 1)
     response = client.post(
         "/api/v1/auth/login",
-        data={"username": "longpw", "password": over_limit},
-        headers=WEB,
+        data={"username": "longpw", "password": over_limit, "client_id": WEB_CLIENT_ID},
     )
     assert response.status_code == 401
     # Indistinguishable from any other bad credential: the bound must not become
@@ -130,12 +127,17 @@ def test_validated_refresh_token_is_the_only_source_of_refresh_claims():
 
 def test_access_token_is_rejected_as_a_refresh_token(client, make_user):
     make_user(username="mixup", password=PASSWORD)
-    access = _login(client, "mixup").json()["access_token"]
-    # Present an ACCESS token on the mobile refresh path: the token_use claim
-    # must not be honoured as a refresh token.
+    # A body-delivery client, so there is no refresh cookie to satisfy the
+    # request and the presented token is the one actually evaluated.
+    access = client.post(
+        "/api/v1/auth/login",
+        data={"username": "mixup", "password": PASSWORD, "client_id": NATIVE_CLIENT_ID},
+    ).json()["access_token"]
+    # Present an ACCESS token on the refresh path: the token_use claim must not
+    # be honoured as a refresh token.
     response = client.post(
         "/api/v1/auth/refresh",
-        headers={"X-Client-Type": "mobile", "Authorization": f"Bearer {access}"},
+        headers={"Authorization": f"Bearer {access}"},
     )
     assert response.status_code == 401
 
@@ -148,7 +150,7 @@ def test_access_token_is_rejected_as_a_refresh_token(client, make_user):
 def test_demotion_takes_effect_immediately_when_reauthorizing(client, make_user, db):
     user = make_user(username="demoted", password=PASSWORD, is_superuser=True)
     access = _login(client, "demoted").json()["access_token"]
-    admin_headers = {**WEB, "Authorization": f"Bearer {access}"}
+    admin_headers = {"Authorization": f"Bearer {access}"}
 
     # The admin token works while the account is still an admin.
     assert client.get(f"/api/v1/auth/sessions/user/{user.id}", headers=admin_headers).status_code == 200
@@ -240,9 +242,11 @@ def test_create_auth_router_verifies_configuration_by_default():
 # --------------------------------------------------------------------------- #
 
 
-def test_metadata_advertises_the_required_client_type_header():
+def test_metadata_carries_no_extension_members():
+    # Every field a client needs is a standard one. A bespoke member would mean
+    # an endpoint that cannot be driven by a stock OAuth library.
     doc = metadata.get_authorization_server_metadata(api_root="https://app.test/api/v1")
-    assert doc["jafaal_required_request_headers"]["X-Client-Type"] == ["web", "mobile"]
+    assert not [key for key in doc if key.startswith("jafaal")]
 
 
 def test_metadata_declares_no_client_authentication():
@@ -258,7 +262,7 @@ def test_metadata_declares_no_client_authentication():
 # --------------------------------------------------------------------------- #
 
 
-def test_mfa_challenge_uses_202_for_web_and_200_for_mobile(client, make_user):
+def test_mfa_challenge_uses_202_for_cookie_clients_and_200_for_body_clients(client, make_user):
     import pyotp
 
     import jafaal.mfa.crud as mfa_crud
@@ -274,28 +278,30 @@ def test_mfa_challenge_uses_202_for_web_and_200_for_mobile(client, make_user):
     finally:
         session.close()
 
+    # A browser client gets 202: the password was right but the login is not
+    # finished, and 200 would be indistinguishable from a completed login to a
+    # client that only reads the status code.
     web = _login(client, "mfauser")
     assert web.status_code == 202
     assert web.json()["mfa_required"] is True
 
-    mobile = client.post(
+    native = client.post(
         "/api/v1/auth/login",
-        data={"username": "mfauser", "password": PASSWORD},
-        headers={"X-Client-Type": "mobile"},
+        data={"username": "mfauser", "password": PASSWORD, "client_id": NATIVE_CLIENT_ID},
     )
-    assert mobile.status_code == 200
+    assert native.status_code == 200
     # Both shapes come from one model, so the fields cannot drift apart.
-    assert set(mobile.json()) == set(web.json())
+    assert set(native.json()) == set(web.json())
 
 
-def test_client_type_header_is_validated(client, make_user):
+def test_an_unregistered_client_cannot_open_a_pending_mfa_login(client, make_user):
     make_user(username="badclient", password=PASSWORD)
     response = client.post(
         "/api/v1/auth/login",
-        data={"username": "badclient", "password": PASSWORD},
-        headers={"X-Client-Type": "desktop"},
+        data={"username": "badclient", "password": PASSWORD, "client_id": "desktop"},
     )
-    assert response.status_code == 400
+    assert response.status_code == 401
+    assert response.json()["error"] == "invalid_client"
 
 
 # --------------------------------------------------------------------------- #

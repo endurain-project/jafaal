@@ -18,7 +18,6 @@ user exists and is active). Use that instead.
 
 import logging
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import Annotated, Final
 
 from fastapi import (
@@ -53,63 +52,9 @@ oauth2_scheme = OAuth2PasswordBearer(
     auto_error=False,
 )
 
-# Define the API key header for the client type
-header_client_type_scheme = APIKeyHeader(name="X-Client-Type")
-
-# Same header, but optional: the RFC 6749 §6 refresh request has no way to carry
-# it, so the token endpoint infers the client type instead of demanding it.
-header_client_type_optional_scheme = APIKeyHeader(name="X-Client-Type", auto_error=False)
-
-#: The only ``grant_type`` JAFAAL's token endpoint implements (RFC 6749 §6).
+#: The only ``grant_type`` JAFAAL's token endpoint implements for rotation
+#: (RFC 6749 §6).
 REFRESH_TOKEN_GRANT: Final = "refresh_token"  # noqa: S105 - a grant-type name, not a credential
-
-
-class ClientType(StrEnum):
-    """The validated set of ``X-Client-Type`` values.
-
-    A :class:`~enum.StrEnum`, so members compare and interpolate as their plain
-    string value (``ClientType.WEB == "web"``) — keeping every existing
-    ``== "web"`` / ``== "mobile"`` comparison working — while callers can rely on
-    the value being exactly one of these two options once it has passed through
-    :func:`get_client_type`.
-    """
-
-    WEB = "web"
-    MOBILE = "mobile"
-
-
-def _parse_client_type(value: str) -> ClientType:
-    """Coerce a raw ``X-Client-Type`` value, rejecting anything unrecognised."""
-    try:
-        return ClientType(value)
-    except ValueError as err:
-        raise jafaal_exceptions.InvalidRequestError(
-            f"Invalid X-Client-Type header: expected 'web' or 'mobile', got {value!r}."
-        ) from err
-
-
-def get_client_type(
-    client_type: Annotated[str, Depends(header_client_type_scheme)],
-) -> ClientType:
-    """Validate the ``X-Client-Type`` header at the request boundary.
-
-    This is the single validation point for the client type: the header is
-    required (a missing one is rejected as 401/403 by the underlying scheme),
-    and a present-but-unrecognised value is rejected here with a 400. Every
-    downstream handler can therefore rely on the client type being exactly
-    ``web`` or ``mobile`` instead of guessing (e.g. treating any non-``web``
-    value as mobile).
-
-    Args:
-        client_type: The raw ``X-Client-Type`` header value.
-
-    Returns:
-        The validated :class:`ClientType`.
-
-    Raises:
-        JafaalError: 400 if the header value is not ``web`` or ``mobile``.
-    """
-    return _parse_client_type(client_type)
 
 
 def get_grant_type(
@@ -117,9 +62,9 @@ def get_grant_type(
 ) -> str | None:
     """Validate the optional RFC 6749 ``grant_type`` form field.
 
-    Present only on JAFAAL's token endpoint (``/auth/refresh``), which accepts
-    the standard RFC 6749 §6 request shape in addition to its own cookie/header
-    form. Absent means the caller is using JAFAAL's native shape.
+    Present on the ``/auth/refresh`` alias, which accepts the standard RFC 6749
+    §6 request shape in addition to its own cookie/header form. Absent means the
+    caller is using JAFAAL's native shape.
 
     Args:
         grant_type: The ``grant_type`` form field, if supplied.
@@ -128,56 +73,18 @@ def get_grant_type(
         The validated grant type, or ``None`` when not supplied.
 
     Raises:
-        JafaalError: 400 (``unsupported_grant_type``) for any other grant. JAFAAL
-            is a first-party issuer with no authorization endpoint, so
-            ``refresh_token`` is the only grant it implements.
+        UnsupportedGrantTypeError: For any other grant. This alias serves only
+            the refresh grant; the authorization-code grant lives on
+            ``/auth/token``.
     """
     if grant_type is None:
         return None
     if grant_type != REFRESH_TOKEN_GRANT:
-        raise jafaal_exceptions.InvalidRequestError(
-            f"unsupported_grant_type: this token endpoint implements only {REFRESH_TOKEN_GRANT!r} "
-            f"(got {grant_type!r}). JAFAAL is a first-party issuer and has no authorization endpoint."
+        raise jafaal_exceptions.UnsupportedGrantTypeError(
+            f"This endpoint implements only {REFRESH_TOKEN_GRANT!r} (got {grant_type!r}). "
+            "Use /auth/token for the authorization-code grant."
         )
     return grant_type
-
-
-def get_refresh_client_type(
-    client_type: Annotated[str | None, Depends(header_client_type_optional_scheme)] = None,
-    grant_type: Annotated[str | None, Depends(get_grant_type)] = None,
-) -> ClientType:
-    """Resolve the client type for the token endpoint, inferring it when absent.
-
-    ``X-Client-Type`` is a JAFAAL-specific header that a stock OAuth client has
-    no way to send. When the caller uses the RFC 6749 §6 request shape the header
-    is therefore optional: carrying the refresh token in the request body is
-    itself proof that the caller is not relying on the browser cookie, so the
-    ``mobile`` delivery mode (tokens in the response body, no CSRF token) is the
-    correct and only sensible interpretation.
-
-    An explicit header always wins, so a native client can still ask for the web
-    delivery mode.
-
-    Args:
-        client_type: The raw ``X-Client-Type`` header value, if sent.
-        grant_type: The validated RFC 6749 ``grant_type``, if sent.
-
-    Returns:
-        The resolved :class:`ClientType`.
-
-    Raises:
-        JafaalError: 400 if the header is present but unrecognised; 403 if
-            neither the header nor a standard grant request identifies the
-            client.
-    """
-    if client_type is not None:
-        return _parse_client_type(client_type)
-    if grant_type == REFRESH_TOKEN_GRANT:
-        return ClientType.MOBILE
-    raise jafaal_exceptions.AuthorizationError(
-        "X-Client-Type header is required (expected 'web' or 'mobile'), or use the "
-        f"RFC 6749 form request with grant_type={REFRESH_TOKEN_GRANT!r}."
-    )
 
 
 # Define the API key header for third-party API key auth
@@ -242,62 +149,15 @@ def _resolve_and_cache_principal(
     return principal
 
 
-def get_token(
-    non_cookie_token: Annotated[str | None, Depends(oauth2_scheme)],
-    cookie_token: str | None,
-    client_type: ClientType,
-    token_type: jafaal_token_manager.TokenType,
-) -> str | None:
-    """
-    Retrieves the authentication token based on client type and token type.
-
-    Args:
-        non_cookie_token (str | None): Token provided via Authorization header.
-        cookie_token (str | None): Token provided via cookie.
-        client_type (str): Type of client requesting the token ("web" or "mobile").
-        token_type (TokenType): Type of token being requested (ACCESS or REFRESH).
-
-    Returns:
-        str: The authentication token appropriate for the client type and token type.
-
-    Raises:
-        JafaalError: If the required token is missing, or if the client type is invalid.
-    """
-    # Access tokens always come from the Authorization header (all clients), per
-    # RFC 6750 §2.1 — never a cookie, so they are not sent ambiently.
-    if token_type == jafaal_token_manager.TokenType.ACCESS:
-        if non_cookie_token is None:
-            raise jafaal_exceptions.AuthenticationError("Access token missing from Authorization header")
-        return non_cookie_token
-
-    # Refresh tokens: cookie (web) or Authorization header (mobile)
-    if token_type == jafaal_token_manager.TokenType.REFRESH:
-        if client_type == "web":
-            if cookie_token is None:
-                raise jafaal_exceptions.AuthenticationError("Refresh token missing from cookie")
-            return cookie_token
-        if client_type == "mobile":
-            if non_cookie_token is None:
-                raise jafaal_exceptions.AuthenticationError("Refresh token missing from Authorization header")
-            return non_cookie_token
-
-    raise jafaal_exceptions.AuthorizationError(
-        "Invalid client type or token type",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-
-
 ## ACCESS TOKEN VALIDATION
 def get_access_token(
     access_token: Annotated[str | None, Depends(oauth2_scheme)],
-    _client_type: str = Depends(header_client_type_scheme),
 ) -> str:
     """
     Retrieves the access token from the Authorization header.
 
     Args:
         access_token (str | None): Access token provided via the Authorization header (OAuth2 scheme).
-        _client_type (str): The type of client making the request, extracted from a custom header.
 
     Returns:
         str: The access token from the Authorization header.
@@ -336,32 +196,6 @@ def _validate_access_token_impl(
             extra={"access_token": "[REDACTED]"},
         )
         raise jafaal_exceptions.InternalError("Internal server error during token validation") from err
-
-
-def validate_access_token_expiration(
-    access_token: Annotated[str, Depends(get_access_token)],
-    token_manager: Annotated[
-        jafaal_token_manager.TokenManager,
-        Depends(jafaal_token_manager.get_token_manager),
-    ],
-) -> None:
-    """FastAPI dependency that validates only the *expiration* (and signature)
-    of the access token from the Authorization header.
-
-    This is the lightweight, expiry-only gate. It does **not** resolve the
-    user, load the account, or check active status. Non-auth routers that need
-    full identity resolution must use
-    :func:`jafaal.dependencies.validate_access_token` (the principal-resolving
-    validator) instead.
-
-    Args:
-        access_token (str): The access token to be validated.
-        token_manager (jafaal_token_manager.TokenManager): The token manager instance used for validation.
-
-    Raises:
-        JafaalError: If the token is expired or invalid.
-    """
-    _validate_access_token_impl(access_token, token_manager)
 
 
 def get_sub_from_access_token(
@@ -432,12 +266,10 @@ def get_sid_from_access_token(
 def get_refresh_token(
     request: Request,
     non_cookie_refresh_token: Annotated[str | None, Depends(oauth2_scheme)],
-    client_type: Annotated[ClientType, Depends(get_refresh_client_type)],
     grant_type: Annotated[str | None, Depends(get_grant_type)] = None,
     form_refresh_token: Annotated[str | None, Form(alias="refresh_token")] = None,
 ) -> str | None:
-    """
-    Retrieves the refresh token from the request, in RFC 6749 order of preference.
+    """Retrieve the refresh token from whichever carrier the request used.
 
     Three carriers are accepted, because the same endpoint serves three kinds of
     caller:
@@ -445,14 +277,18 @@ def get_refresh_token(
     1. the RFC 6749 §6 form body (``grant_type=refresh_token&refresh_token=...``),
        so a stock OAuth client can drive the refresh without knowing anything
        JAFAAL-specific;
-    2. the refresh-token cookie, for web clients (the token is ``HttpOnly`` and
-       never handed to page script); and
-    3. the ``Authorization`` header, for native clients using JAFAAL's own shape.
+    2. the refresh-token cookie, for clients registered with
+       ``token_delivery="cookie"`` (the token is ``HttpOnly`` and never handed to
+       page script); and
+    3. the ``Authorization`` header, for clients that hold the token themselves.
+
+    The carrier is *not* used to decide anything about the response: delivery
+    mode comes from the registered client named in the token's ``client_id``
+    claim. This is only about finding the credential.
 
     Args:
         request: The incoming request, used to read the refresh-token cookie.
         non_cookie_refresh_token: The refresh token provided via the Authorization header (if present).
-        client_type: The resolved client type.
         grant_type: The validated RFC 6749 ``grant_type``, if supplied.
         form_refresh_token: The RFC 6749 ``refresh_token`` form field, if supplied.
 
@@ -460,21 +296,29 @@ def get_refresh_token(
         str: The resolved refresh token.
 
     Raises:
-        JafaalError: If no valid refresh token is found or the client type is invalid.
+        JafaalError: If no refresh token is present in any carrier.
     """
     if grant_type == REFRESH_TOKEN_GRANT:
         # Standard request shape: the token is in the body and nowhere else, so a
         # missing one is a malformed request rather than a missing credential.
         if not form_refresh_token:
             raise jafaal_exceptions.InvalidRequestError(
-                f"invalid_request: 'refresh_token' is required when grant_type={REFRESH_TOKEN_GRANT!r}."
+                f"'refresh_token' is required when grant_type={REFRESH_TOKEN_GRANT!r}."
             )
         return form_refresh_token
 
     cookie_refresh_token = request.cookies.get(jafaal_settings.get_settings().effective_refresh_cookie_name)
-    return get_token(
-        non_cookie_refresh_token, cookie_refresh_token, client_type, jafaal_token_manager.TokenType.REFRESH
-    )
+    # Cookie first. A browser SPA routinely attaches its *access* token to every
+    # request, so preferring the Authorization header would make /refresh pick
+    # the wrong token on the most common front-end setup. A client that holds its
+    # own refresh token has no cookie, so this order never shadows its credential.
+    token = cookie_refresh_token or non_cookie_refresh_token
+    if token is None:
+        raise jafaal_exceptions.AuthenticationError(
+            "Refresh token missing: send it in the refresh cookie, the Authorization header, or as an "
+            f"RFC 6749 form request with grant_type={REFRESH_TOKEN_GRANT!r}."
+        )
+    return token
 
 
 def _validate_refresh_token_impl(
@@ -525,33 +369,6 @@ def _validate_refresh_token_impl(
         raise jafaal_exceptions.InternalError("Internal server error during token validation") from err
 
 
-def validate_refresh_token(
-    refresh_token: Annotated[str, Depends(get_refresh_token)],
-    token_manager: Annotated[
-        jafaal_token_manager.TokenManager,
-        Depends(jafaal_token_manager.get_token_manager),
-    ],
-) -> None:
-    """
-    Validates the expiration of a refresh token using the provided token manager.
-
-    Prefer :func:`get_validated_refresh_token`, which performs the same checks
-    and hands back the validated claims, so an endpoint cannot read ``sub`` /
-    ``sid`` without having validated the token first.
-
-    Args:
-        refresh_token (str): The refresh token to be validated, extracted via dependency injection.
-        token_manager (jafaal_token_manager.TokenManager): The token manager instance used to validate the token, injected via dependency.
-
-    Raises:
-        JafaalError: If the refresh token is expired or invalid, or if an unexpected error occurs during validation.
-
-    Logs:
-        Errors and unexpected exceptions are logged with context, including a redacted refresh token.
-    """
-    _validate_refresh_token_impl(refresh_token, token_manager)
-
-
 @dataclass(frozen=True)
 class ValidatedRefreshToken:
     """A refresh token that has passed full validation, with its claims.
@@ -568,11 +385,16 @@ class ValidatedRefreshToken:
         token: The raw refresh-token JWT as presented.
         user_id: The ``sub`` claim, coerced to the host's primary-key type.
         session_id: The ``sid`` claim.
+        client: The registered client named by the ``client_id`` claim
+            (RFC 9068 §2.2). Read from the signed token rather than the request,
+            so the caller cannot switch delivery mode or widen scope at rotation
+            time — the client is fixed when the session is created.
     """
 
     token: str
     user_id: jafaal_orm.UserId
     session_id: str
+    client: jafaal_settings.OAuthClient
 
 
 def _validate_and_read_refresh_token(
@@ -593,7 +415,7 @@ def _validate_and_read_refresh_token(
 
     Raises:
         JafaalError: 401 if the token is invalid, expired, not a refresh token,
-            or carries a malformed ``sub`` / ``sid``.
+            or carries a malformed ``sub`` / ``sid`` / ``client_id``.
     """
     _validate_refresh_token_impl(refresh_token, token_manager)
 
@@ -612,7 +434,19 @@ def _validate_and_read_refresh_token(
     if not isinstance(sid, str):
         raise jafaal_exceptions.InvalidTokenError("Invalid token: 'sid' claim must be a string")
 
-    return ValidatedRefreshToken(token=refresh_token, user_id=user_id, session_id=sid)
+    client_id = claims.get("client_id")
+    if not isinstance(client_id, str):
+        raise jafaal_exceptions.InvalidTokenError("Invalid token: 'client_id' claim must be a string")
+    client = jafaal_settings.get_settings().oauth_client(client_id)
+    if client is None:
+        # The client was de-registered (or renamed) since the token was issued.
+        # Its sessions must stop rotating: continuing would mean guessing a
+        # delivery mode and scope ceiling that the host has withdrawn.
+        raise jafaal_exceptions.InvalidTokenError(
+            "Invalid token: it was issued to a client that is no longer registered"
+        )
+
+    return ValidatedRefreshToken(token=refresh_token, user_id=user_id, session_id=sid, client=client)
 
 
 def get_validated_refresh_token(
@@ -640,35 +474,6 @@ def get_validated_refresh_token(
             or carries a malformed ``sub`` / ``sid``.
     """
     return _validate_and_read_refresh_token(refresh_token, token_manager)
-
-
-def get_refresh_client_type_optional(
-    client_type: Annotated[str | None, Depends(header_client_type_optional_scheme)] = None,
-) -> ClientType:
-    """Resolve the delivery mode on the multi-grant token endpoint.
-
-    ``/auth/token`` serves both the authorization-code and refresh grants, and
-    only the latter has a native cookie shape that needs a declared client type.
-    Demanding the header unconditionally (as
-    :func:`get_refresh_client_type` does) would reject a perfectly well-formed
-    ``grant_type=authorization_code`` request from a stock OAuth client, which
-    has no reason to know about a JAFAAL-specific header. An absent header
-    therefore means ``mobile`` — body delivery, no cookie, no CSRF token — which
-    is the only sensible reading of a caller that is not relying on the browser
-    cookie.
-
-    Args:
-        client_type: The raw ``X-Client-Type`` header value, if sent.
-
-    Returns:
-        The resolved :class:`ClientType`.
-
-    Raises:
-        JafaalError: 400 if the header is present but unrecognised.
-    """
-    if client_type is None:
-        return ClientType.MOBILE
-    return _parse_client_type(client_type)
 
 
 def get_validated_refresh_token_optional(

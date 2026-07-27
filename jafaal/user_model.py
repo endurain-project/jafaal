@@ -20,7 +20,7 @@ into that base with :func:`jafaal.map_models`::
         ...  # the host owns the base (naming conventions, schema, other models)
 
 
-    class Users(IntPKUserMixin, Base):
+    class Account(IntPKUserMixin, Base):
         __tablename__ = "users"
 
         # Application-specific profile columns:
@@ -28,15 +28,17 @@ into that base with :func:`jafaal.map_models`::
         city: Mapped[str | None] = mapped_column(String(250))
 
 
-    jafaal.map_models(Base)  # map JAFAAL's tables into the host's registry
+    jafaal.map_models(Base, user_model=Account)
 
 For a UUID primary key, subclass :class:`UUIDPKUserMixin` instead.
 
-**Conventions (required).** JAFAAL's companion tables resolve their
-relationships and foreign keys by name, so the host model **must** be the class
-``Users`` mapped to the ``users`` table, built on the base passed to
-:func:`jafaal.map_models` (so JAFAAL's tables share the host's single registry —
-see :mod:`jafaal.orm`). The reverse
+**Conventions.** The class may be called anything — ``Account``, ``Member``,
+``Person`` — because it is handed to :func:`jafaal.map_models` explicitly rather
+than discovered by name. Two things are still required, and both are schema, not
+naming: it must be built on the base passed to :func:`jafaal.map_models` (so
+JAFAAL's tables share the host's single registry — see :mod:`jafaal.orm`), and it
+must map to the ``users`` table, which is what JAFAAL's foreign keys reference.
+The reverse
 relationships to JAFAAL's tables (``users_sessions``, ``local_credential``,
 ``auth_mfa`` …) and the ``mfa_enabled`` property are supplied by the mixin; the
 host does not declare them.
@@ -48,8 +50,14 @@ auth layer:
 * ``username`` — unique login handle
 * ``email`` — unique e-mail address
 * ``is_active`` — whether the account may authenticate
-* ``is_superuser`` — whether the account holds administrative scope
 * ``is_verified`` — whether the e-mail address has been verified
+
+``is_superuser`` ships on the mixin as a convenience, but nothing in the auth
+layer requires it: it feeds only the default
+:class:`~jafaal.ports.TieredScopeResolver` and the admin password-length policy,
+both of which read it defensively. A host with a richer authorisation model
+implements :class:`~jafaal.ports.ScopeResolver` and can ignore the column
+entirely.
 
 Password hashes are **not** stored on the user model. They live in the
 auth-owned ``users_local_credentials`` table (see :mod:`jafaal.credentials`),

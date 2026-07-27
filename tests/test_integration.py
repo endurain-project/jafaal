@@ -5,24 +5,19 @@ object-level authorization guard on the session endpoints.
 """
 
 import pyotp
-import pytest
+from conftest import LIMITED_CLIENT_ID, NATIVE_CLIENT_ID, WEB_CLIENT_ID
 
 import jafaal
-import jafaal.exceptions as exc
 import jafaal.mfa.crud as mfa_crud
 import jafaal.orm as jafaal_orm
 from jafaal import scopes as scopes_mod
 from jafaal._core import crypto
-from jafaal._internal.internal_dependencies import ClientType, get_client_type
-
-WEB = {"X-Client-Type": "web"}
 
 
 def _login(client, username="alice", password="Str0ng!Pass"):
     return client.post(
         "/api/v1/auth/login",
-        data={"username": username, "password": password},
-        headers=WEB,
+        data={"username": username, "password": password, "client_id": WEB_CLIENT_ID},
     )
 
 
@@ -42,7 +37,7 @@ def test_login_success_web(client, make_user):
     body = resp.json()
     assert body["access_token"]
     assert body["csrf_token"]  # web clients get a CSRF token in the body
-    assert body["token_type"] == "bearer"
+    assert body["token_type"] == "Bearer"
     # Refresh token delivered as an httpOnly cookie, not in the body.
     assert "refresh_token" not in body
     assert "jafaal_refresh_token" in resp.cookies
@@ -71,8 +66,7 @@ def test_login_ip_lockout_blocks_spray_across_usernames(client, make_user):
     # the IP failure) and trips the per-IP backoff.
     first = client.post(
         "/api/v1/auth/login",
-        data={"username": "u-50", "password": "whatever"},
-        headers=WEB,
+        data={"username": "u-50", "password": "whatever", "client_id": WEB_CLIENT_ID},
     )
     assert first.status_code == 401  # auth failed; the IP is now locked
 
@@ -80,8 +74,7 @@ def test_login_ip_lockout_blocks_spray_across_usernames(client, make_user):
     # the IP backoff bounds cross-account spray independently of per-account state.
     blocked = client.post(
         "/api/v1/auth/login",
-        data={"username": "u-51", "password": "whatever"},
-        headers=WEB,
+        data={"username": "u-51", "password": "whatever", "client_id": WEB_CLIENT_ID},
     )
     assert blocked.status_code == 429
     assert "network" in blocked.json()["detail"].lower()
@@ -104,55 +97,77 @@ def test_successful_login_resets_ip_backoff(client, make_user):
     assert store.is_ip_locked_out("testclient") is False
 
 
-def test_login_missing_client_type_header_rejected(client, make_user):
+def test_login_without_client_id_rejected(client, make_user):
+    # Delivery mode and scope ceiling are properties of the registration, so a
+    # login that names no client has no policy to apply. Refused rather than
+    # defaulted: a default here is a silent choice about where the refresh token
+    # goes.
     make_user(username="alice")
     resp = client.post("/api/v1/auth/login", data={"username": "alice", "password": "Str0ng!Pass"})
-    assert resp.status_code in (401, 403)
+    assert resp.status_code == 401
+    assert resp.json()["error"] == "invalid_client"
 
 
-def test_login_invalid_client_type_header_rejected(client, make_user):
-    # A present-but-unrecognised X-Client-Type is rejected at the boundary (400),
-    # not silently treated as mobile or stopped only by a downstream guard.
+def test_login_with_unregistered_client_id_rejected(client, make_user):
     make_user(username="alice")
     resp = client.post(
         "/api/v1/auth/login",
-        data={"username": "alice", "password": "Str0ng!Pass"},
-        headers={"X-Client-Type": "desktop"},
+        data={"username": "alice", "password": "Str0ng!Pass", "client_id": "not-registered"},
     )
-    assert resp.status_code == 400
-    assert resp.json()["code"] == "invalid_request"
+    assert resp.status_code == 401
+    assert resp.json()["error"] == "invalid_client"
 
 
-def test_login_invalid_client_type_rejected_before_mfa(client, make_user):
-    # An MFA-enabled account with an invalid client type is rejected at the
-    # boundary before any handler logic runs, closing the old fall-through where
-    # an unrecognised client type slipped past the MFA branch to complete_login.
+def test_unregistered_client_rejected_before_mfa(client, make_user):
+    # An MFA-enabled account with an unregistered client is refused before any
+    # handler logic runs, so an unknown client can never reach the MFA branch
+    # and open a pending login.
     user = make_user(username="mfauser")
     _enable_mfa(user.id, pyotp.random_base32())
     resp = client.post(
         "/api/v1/auth/login",
-        data={"username": "mfauser", "password": "Str0ng!Pass"},
-        headers={"X-Client-Type": "Web"},  # wrong case -> invalid, not "web"
+        data={"username": "mfauser", "password": "Str0ng!Pass", "client_id": "ghost-client"},
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 401
     assert "access_token" not in resp.json()
+    assert "mfa_token" not in resp.json()
 
 
-def test_get_client_type_dependency_validates():
-    # web/mobile map to the enum; anything else (incl. wrong case / whitespace)
-    # is rejected. A StrEnum, so members still compare as their string value.
-    assert get_client_type("web") is ClientType.WEB
-    assert get_client_type("mobile") is ClientType.MOBILE
-    assert ClientType.WEB == "web"
-    for bad in ("desktop", "Web", "MOBILE", "", "web "):
-        with pytest.raises(exc.InvalidRequestError):
-            get_client_type(bad)
+def test_native_client_gets_refresh_token_in_body(client, make_user):
+    # The registration decides delivery: a body-delivery client gets the literal
+    # RFC 6749 §5.1 response and no cookie, with no per-request say in it.
+    make_user(username="alice")
+    resp = client.post(
+        "/api/v1/auth/login",
+        data={"username": "alice", "password": "Str0ng!Pass", "client_id": NATIVE_CLIENT_ID},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["refresh_token"]
+    assert "csrf_token" not in body
+    assert "jafaal_refresh_token" not in resp.cookies
+
+
+def test_client_scope_ceiling_narrows_the_token(client, make_user):
+    # A registered ceiling can only ever remove scopes, never add them.
+    make_user(username="alice", is_superuser=True)
+    full = client.post(
+        "/api/v1/auth/login",
+        data={"username": "alice", "password": "Str0ng!Pass", "client_id": NATIVE_CLIENT_ID},
+    ).json()
+    limited = client.post(
+        "/api/v1/auth/login",
+        data={"username": "alice", "password": "Str0ng!Pass", "client_id": LIMITED_CLIENT_ID},
+    ).json()
+
+    assert limited["scope"] == scopes_mod.PROFILE
+    assert set(limited["scope"].split()) < set(full["scope"].split())
 
 
 def test_refresh_rotates_tokens(client, make_user):
     make_user(username="alice")
     first = _login(client).json()
-    resp = client.post("/api/v1/auth/refresh", headers=WEB)
+    resp = client.post("/api/v1/auth/refresh")
     assert resp.status_code == 200
     body = resp.json()
     assert body["access_token"]
@@ -164,7 +179,7 @@ def test_refresh_rotates_tokens(client, make_user):
 def test_logout(client, make_user):
     make_user(username="alice")
     _login(client)
-    resp = client.post("/api/v1/auth/logout", headers=WEB)
+    resp = client.post("/api/v1/auth/logout")
     assert resp.status_code == 200
 
 
@@ -195,7 +210,7 @@ def test_object_level_auth_blocks_cross_user_access(client, make_user):
     bob = make_user(username="bob")
 
     access = _login(client, username="alice").json()["access_token"]
-    auth = {"Authorization": f"Bearer {access}", **WEB}
+    auth = {"Authorization": f"Bearer {access}"}
 
     # Alice may read her own sessions.
     own = client.get(f"/api/v1/auth/sessions/user/{alice.id}", headers=auth)
@@ -212,7 +227,7 @@ def test_superuser_bypasses_object_level_guard(client, make_user):
     victim = make_user(username="victim")
 
     access = _login(client, username="root").json()["access_token"]
-    auth = {"Authorization": f"Bearer {access}", **WEB}
+    auth = {"Authorization": f"Bearer {access}"}
 
     resp = client.get(f"/api/v1/auth/sessions/user/{victim.id}", headers=auth)
     assert resp.status_code == 200
@@ -222,6 +237,6 @@ def test_missing_scope_forbidden(client, make_user):
     # Without the extended catalog, a regular user lacks sessions:read entirely.
     alice = make_user(username="alice")
     access = _login(client, username="alice").json()["access_token"]
-    auth = {"Authorization": f"Bearer {access}", **WEB}
+    auth = {"Authorization": f"Bearer {access}"}
     resp = client.get(f"/api/v1/auth/sessions/user/{alice.id}", headers=auth)
     assert resp.status_code == 403

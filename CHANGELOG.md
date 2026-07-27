@@ -44,16 +44,28 @@ First release.
 - HS256 by default, or asymmetric signing (RS/PS/ES 256/384/512) with the public
   key published at a JWKS endpoint for stateless verification.
 - RFC 8414 authorization-server metadata at
-  `/.well-known/oauth-authorization-server`, so a resource server discovers the
-  issuer, JWKS, and endpoint URLs instead of hard-coding them. It advertises only
-  what JAFAAL genuinely implements: `refresh_token` is the sole grant and
-  `token_endpoint` points at `/auth/refresh`. `/auth/login` is deliberately **not**
-  advertised — it authenticates a first-party user directly and is not the
-  (OAuth 2.1-removed) resource-owner password-credentials grant.
-- `/auth/refresh` accepts the standard RFC 6749 §6 request
-  (`grant_type=refresh_token&refresh_token=…`) alongside JAFAAL's cookie/header
-  shape, so a stock OAuth client can drive the refresh. `X-Client-Type` is
-  optional for that shape (a token in the body implies a non-browser client).
+  `/.well-known/oauth-authorization-server`, so a client discovers the issuer,
+  JWKS, and endpoint URLs instead of hard-coding them. It carries **no extension
+  members**: everything needed to drive JAFAAL is a standard field. `/auth/login`
+  is deliberately **not** advertised — it authenticates a first-party user
+  directly and is not the (OAuth 2.1-removed) resource-owner password-credentials
+  grant.
+- RFC 6749 §4.1 authorization-code flow with mandatory PKCE (`/auth/authorize` →
+  `/auth/token`), driven by registered public clients
+  ([`OAuthClient`][jafaal.OAuthClient]). Four bindings must hold for a code to be
+  redeemed — PKCE, `client_id`, byte-for-byte `redirect_uri`, and single use —
+  and every redemption failure returns the same `invalid_grant` so the endpoint
+  is not an oracle. Errors follow §5.2 (`{"error", "error_description"}`) and,
+  once the redirect URI validates, §4.1.2.1 (reported *at* that URI).
+- **The registered client is the unit of policy.** `token_delivery`
+  (`body` per RFC 6749 §5.1, or `cookie` per RFC 9700 §7.2) and an optional scope
+  ceiling are properties of the registration, never of the request. On refresh
+  the client is read from the token's own `client_id` claim, so a caller cannot
+  switch delivery mode or widen scope at rotation time. A plain-`http` redirect
+  URI is accepted only for loopback (RFC 8252 §7.3).
+- `/auth/token` serves both grants; `/auth/refresh` is an alias for the refresh
+  grant that additionally accepts the token from the `HttpOnly` cookie or an
+  `Authorization` header.
 - Zero-downtime rotation of both the signing key and the at-rest encryption key,
   via verify-/decrypt-only fallbacks. The overlap covers the stored token digests
   too (sessions, API keys, CSRF, password-reset, sign-up, IdP-link, rotated

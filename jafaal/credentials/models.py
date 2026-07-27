@@ -7,19 +7,19 @@ Rows are written and read through ``jafaal.credentials.crud``.
 """
 
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import DateTime, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
-from jafaal.orm import UserId, get_active_base
+from jafaal.orm import UserId, get_active_base, host_user_model
 
 # JAFAAL's models bind to the host-owned declarative base at map_models() time.
 Base = get_active_base()
 
 if TYPE_CHECKING:
-    from jafaal.user_model import UserMixin as Users
+    pass
 
 
 class LocalCredential(Base):
@@ -61,4 +61,4 @@ class LocalCredential(Base):
         nullable=False,
     )
 
-    users: Mapped["Users"] = relationship(back_populates="local_credential")
+    users: Mapped[Any] = relationship(host_user_model, back_populates="local_credential")

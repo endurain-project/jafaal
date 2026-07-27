@@ -14,10 +14,10 @@ Exports:
     - Schemas: IdentityProvider, IdentityProviderBase,
       IdentityProviderCreate, IdentityProviderUpdate,
       IdentityProviderPublic, IdentityProviderTemplate,
-      TokenExchangeRequest, TokenExchangeResponse
+      StepUpReauthRequest
     - Models: IdentityProvider (ORM model)
     - Service: idp_service, IdentityProviderService, TokenAction
-    - Utils: validate_redirect_url, validate_pkce_challenge,
+    - Utils: append_query_params, validate_pkce_challenge,
       validate_pkce_verifier, get_idp_templates, get_idp_template,
       refresh_idp_tokens_if_needed, clear_all_idp_tokens
 """
@@ -40,8 +40,6 @@ from .schema import (
     IdentityProviderPublic,
     IdentityProviderTemplate,
     IdentityProviderUpdate,
-    TokenExchangeRequest,
-    TokenExchangeResponse,
 )
 from .service import IdentityProviderService, TokenAction, idp_service
 from .utils import (
@@ -51,7 +49,6 @@ from .utils import (
     refresh_idp_tokens_if_needed,
     validate_pkce_challenge,
     validate_pkce_verifier,
-    validate_redirect_url,
 )
 
 __all__ = [
@@ -67,8 +64,6 @@ __all__ = [
     "IdentityProviderTemplate",
     "IdentityProviderUpdate",
     "TokenAction",
-    "TokenExchangeRequest",
-    "TokenExchangeResponse",
     "clear_all_idp_tokens",
     "create_identity_provider",
     "delete_identity_provider",
@@ -86,5 +81,4 @@ __all__ = [
     "validate_pkce_challenge",
     "validate_pkce_verifier",
     # Utilities
-    "validate_redirect_url",
 ]

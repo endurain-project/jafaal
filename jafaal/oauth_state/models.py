@@ -1,13 +1,13 @@
 """SQLAlchemy ORM model for OAuth/SSO flow state persistence."""
 
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
-from jafaal.orm import UserId, get_active_base
+from jafaal.orm import UserId, get_active_base, host_user_model
 
 # JAFAAL's models bind to the host-owned declarative base at map_models() time.
 Base = get_active_base()
@@ -15,7 +15,6 @@ Base = get_active_base()
 if TYPE_CHECKING:
     from jafaal.identity_providers.models import IdentityProvider
     from jafaal.sessions.models import UsersSessions
-    from jafaal.user_model import UserMixin as Users
 
 
 class OAuthState(Base):
@@ -36,16 +35,15 @@ class OAuthState(Base):
         upstream_code_verifier: Encrypted PKCE code_verifier JAFAAL replays to
             the upstream IdP token endpoint (RFC 7636).
         nonce: OIDC nonce for ID token validation.
-        redirect_path: Frontend path after login.
-        client_type: web or mobile.
         ip_address: Client IP for optional validation.
         created_at: Timestamp for expiry calculation.
         expires_at: Hard expiry at 10 minutes.
         used: Prevents replay attacks.
-        client_id: Registered public client, when the flow was started at
-            ``/auth/authorize`` (null for JAFAAL's own frontend flow).
-        redirect_uri: Exact redirect URI from the authorization request,
-            re-checked at token exchange (RFC 6749 §4.1.3).
+        client_id: The registered public client that started the flow.
+        redirect_uri: Exact redirect URI from the authorization request, already
+            matched against the client's registration and re-checked at token
+            exchange (RFC 6749 §4.1.3). Every browser redirect the flow emits
+            targets this URI and nothing else.
         client_state: The client's opaque ``state``, echoed back with the code.
         authorization_code_hash: Keyed digest of the issued authorization code.
         identity_provider: Relationship to IdentityProvider model.
@@ -106,18 +104,6 @@ class OAuthState(Base):
         String(64),
         nullable=False,
         comment="OIDC nonce for ID token validation",
-    )
-
-    redirect_path: Mapped[str | None] = mapped_column(
-        String(500),
-        nullable=True,
-        comment="Frontend path after login",
-    )
-
-    client_type: Mapped[str] = mapped_column(
-        String(10),
-        nullable=False,
-        comment="Client type: web or mobile",
     )
 
     ip_address: Mapped[str | None] = mapped_column(
@@ -185,5 +171,5 @@ class OAuthState(Base):
     identity_provider: Mapped["IdentityProvider | None"] = relationship(
         "IdentityProvider", back_populates="oauth_states"
     )
-    users: Mapped["Users | None"] = relationship("Users", back_populates="oauth_states")
+    users: Mapped[Any] = relationship(host_user_model, back_populates="oauth_states")
     users_sessions: Mapped[list["UsersSessions"]] = relationship("UsersSessions", back_populates="oauth_state")

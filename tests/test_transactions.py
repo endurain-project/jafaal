@@ -59,7 +59,6 @@ def test_crud_writes_are_invisible_until_the_caller_commits(concurrent_db):
             db=writer,
             state_id=state_id,
             nonce=nonce,
-            client_type="web",
             ip_address=None,
             user_id=concurrent_db.user_id,
         )
@@ -86,7 +85,6 @@ def test_host_can_roll_back_a_jafaal_write_with_its_own(make_user):
                 db=session,
                 state_id=state_id,
                 nonce=nonce,
-                client_type="web",
                 ip_address=None,
                 user_id=user.id,
             )
@@ -111,7 +109,6 @@ def test_unit_of_work_is_reentrant(make_user):
                     db=session,
                     state_id=state_id,
                     nonce=nonce,
-                    client_type="web",
                     ip_address=None,
                     user_id=user.id,
                 )
@@ -321,7 +318,6 @@ def test_autonomous_session_commits_independently(make_user):
                     db=inner,
                     state_id=state_id,
                     nonce=nonce,
-                    client_type="web",
                     ip_address=None,
                     user_id=user.id,
                 )
@@ -352,7 +348,6 @@ def test_oauth_state_claim_has_one_winner_under_real_concurrency(concurrent_db):
             db=setup,
             state_id=state_id,
             nonce=nonce,
-            client_type="web",
             ip_address=None,
             user_id=concurrent_db.user_id,
         )

@@ -1,12 +1,12 @@
 """Auth-owned session database models (table: ``users_sessions``)."""
 
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import DateTime, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from jafaal.orm import UserId, get_active_base
+from jafaal.orm import UserId, get_active_base, host_user_model
 
 # JAFAAL's models bind to the host-owned declarative base at map_models() time.
 Base = get_active_base()
@@ -16,7 +16,6 @@ if TYPE_CHECKING:
     from jafaal.sessions.rotated_refresh_tokens.models import (
         RotatedRefreshToken,
     )
-    from jafaal.user_model import UserMixin as Users
 
 
 class UsersSessions(Base):
@@ -152,7 +151,7 @@ class UsersSessions(Base):
     )
 
     # Relationship to Users model
-    users: Mapped["Users"] = relationship(back_populates="users_sessions")
+    users: Mapped[Any] = relationship(host_user_model, back_populates="users_sessions")
 
     # Relationship to OAuthState model
     oauth_state: Mapped["OAuthState | None"] = relationship(back_populates="users_sessions")

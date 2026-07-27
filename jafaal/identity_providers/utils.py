@@ -6,6 +6,7 @@ import hmac
 import logging
 import re
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from sqlalchemy.orm import Session
 
@@ -16,7 +17,6 @@ import jafaal.identity_providers.schema as idp_schema
 import jafaal.identity_providers.service as idp_service
 import jafaal.oauth_state.crud as oauth_state_crud
 import jafaal.oauth_state.utils as oauth_state_utils
-import jafaal.settings as jafaal_settings
 from jafaal._core import network
 from jafaal.orm import UserId, session_scope, unit_of_work
 
@@ -30,19 +30,15 @@ async def begin_idp_authorization(
     db: Session,
     code_challenge: str,
     code_challenge_method: str,
-    client_type: str,
-    redirect_path: str | None = None,
-    client_id: str | None = None,
-    redirect_uri: str | None = None,
+    client_id: str,
+    redirect_uri: str,
     client_state: str | None = None,
 ) -> str:
     """Mint an OAuth state and build the identity provider's authorization URL.
 
-    The shared body of both entry points into an SSO login — the standards-based
-    ``/auth/authorize`` and JAFAAL's native ``/public/idp/login/{slug}`` — so the
-    two cannot drift in what they validate or persist. Everything security
-    relevant (PKCE validation, state/nonce generation, upstream PKCE) happens
-    here exactly once.
+    The body of ``GET /auth/authorize``, the single entry point into an SSO
+    login. Everything security relevant — PKCE validation, state/nonce
+    generation, the upstream PKCE binding — happens here exactly once.
 
     Args:
         idp_slug: Slug of the identity provider to authenticate against.
@@ -50,10 +46,9 @@ async def begin_idp_authorization(
         db: Active database session.
         code_challenge: The client's PKCE challenge.
         code_challenge_method: The client's PKCE method (``S256``).
-        client_type: Token-delivery mode to record for the later exchange.
-        redirect_path: Native-flow frontend return path, if any.
-        client_id: Registered client, for the standards-based flow.
-        redirect_uri: Exact redirect URI, for the standards-based flow.
+        client_id: The registered client, already resolved.
+        redirect_uri: The client's redirect URI, already matched exactly against
+            its registration.
         client_state: The client's opaque ``state``, echoed back with the code.
 
     Returns:
@@ -77,9 +72,7 @@ async def begin_idp_authorization(
         state_id=state_id,
         idp_id=idp.id,
         nonce=nonce,
-        client_type=client_type,
         ip_address=network.get_ip_address(request),
-        redirect_path=redirect_path,
         code_challenge=code_challenge,
         code_challenge_method=code_challenge_method,
         client_id=client_id,
@@ -87,78 +80,29 @@ async def begin_idp_authorization(
         client_state=client_state,
     )
 
-    logger.debug(f"OAuth state created: {state_id[:8]}... for IdP {idp.slug} (client_type={client_type})")
+    logger.debug(f"OAuth state created: {state_id[:8]}... for IdP {idp.slug} (client={client_id})")
 
-    return await idp_service.idp_service.initiate_login(idp, request, db, redirect_path, oauth_state_id=state_id)
+    return await idp_service.idp_service.initiate_login(idp, request, db, oauth_state_id=state_id)
 
 
-def validate_redirect_url(redirect: str | None) -> None:
-    """
-    Validate the redirect URL to prevent open redirect vulnerabilities.
+def append_query_params(url: str, params: dict[str, str]) -> str:
+    """Append query parameters to a URL, preserving any existing query.
 
-    Allows only relative paths (starting with '/') and custom URI
-    schemes explicitly configured via ALLOWED_REDIRECT_SCHEMES.
-    External HTTP/HTTPS URLs are always rejected.
+    Every value is percent-encoded. Redirect URLs are never built by string
+    concatenation: a value carrying ``&`` or ``#`` would otherwise inject extra
+    parameters into the URL the receiving client parses.
 
     Args:
-        redirect: The redirect URL string to validate, or None.
+        url: The base URL or path.
+        params: Parameters to add or overwrite.
 
-    Raises:
-        JafaalError: 400 Bad Request if the redirect URL is
-            invalid, uses a disallowed scheme, is an external
-            HTTP/HTTPS URL, or contains path traversal sequences.
+    Returns:
+        The URL with the parameters applied.
     """
-    if not redirect or not redirect.strip():
-        return
-
-    value = redirect.strip()
-
-    # Reject external HTTP/HTTPS URLs (open redirect prevention)
-    if value.startswith("http://") or value.startswith("https://"):
-        raise jafaal_exceptions.InvalidRequestError(
-            "External HTTP redirects are not allowed. Use a relative path or a configured custom scheme."
-        )
-
-    # Handle custom URI schemes (e.g., gadgetbridge://callback)
-    if "://" in value:
-        scheme = value.split("://", 1)[0].lower()
-        allowed = jafaal_settings.get_settings().sso.allowed_redirect_schemes
-        if scheme not in allowed:
-            raise jafaal_exceptions.InvalidRequestError(
-                f"Redirect scheme '{scheme}' is not allowed. "
-                "Configure ALLOWED_REDIRECT_SCHEMES to permit "
-                "custom URI schemes."
-            )
-        # Custom scheme is allowed — no further checks needed
-        return
-
-    # Relative paths must start with '/'
-    if not value.startswith("/"):
-        raise jafaal_exceptions.InvalidRequestError(
-            "Redirect must be a relative path starting with '/' or a configured custom URI scheme."
-        )
-
-    # Reject path traversal sequences
-    if ".." in value or "\\" in value or value.startswith("//"):
-        raise jafaal_exceptions.InvalidRequestError("Redirect path contains disallowed sequences.")
-
-
-def is_custom_scheme_redirect(redirect: str | None) -> bool:
-    """Return ``True`` when the redirect is a validated custom URI scheme.
-
-    This preserves mobile intent across the browser-based OAuth round trip.
-    The browser leg cannot reliably carry ``X-Client-Type``, so the validated
-    redirect target becomes the authoritative signal.
-    """
-    if not redirect or not redirect.strip():
-        return False
-
-    value = redirect.strip()
-
-    if value.startswith("http://") or value.startswith("https://"):
-        return False
-
-    return "://" in value
+    parts = urlsplit(url)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    query.update(params)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 
 def validate_pkce_challenge(code_challenge: str, code_challenge_method: str) -> None:

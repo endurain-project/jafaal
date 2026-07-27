@@ -12,6 +12,7 @@ import jafaal._internal.services.step_up_service as step_up_service
 import jafaal._internal.user_guards as jafaal_user_guards
 import jafaal.audit as jafaal_audit
 import jafaal.password_policy as jafaal_password_policy
+import jafaal.ports as jafaal_ports
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.schema as jafaal_sessions_schema
 import jafaal.settings as jafaal_settings
@@ -136,7 +137,7 @@ def change_own_password(
     db_user = jafaal_user_guards.get_user_by_id_or_404(user_id, db)
     hashed_password = jafaal_password_policy.validate_and_hash_for_user(
         identity_service,
-        db_user.is_superuser,
+        jafaal_ports.is_superuser(db_user),
         new_password,
     )
     identity_service.set_local_password_hash(user_id, hashed_password)
@@ -186,7 +187,7 @@ def change_managed_user_password(
     db_user = jafaal_user_guards.get_user_by_id_or_404(user_id, db)
     hashed_password = jafaal_password_policy.validate_and_hash_for_user(
         identity_service,
-        db_user.is_superuser,
+        jafaal_ports.is_superuser(db_user),
         new_password,
     )
     identity_service.set_local_password_hash(user_id, hashed_password)

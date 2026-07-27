@@ -46,21 +46,46 @@ logger = logging.getLogger(__name__)
 class UserProtocol(Protocol):
     """The user attributes JAFAAL reads across the boundary.
 
-    Satisfied by a host user model built on :class:`jafaal.UserMixin` (Phase 3):
-    ``id``, ``username``, ``email``, ``is_active``, ``is_superuser``,
-    ``is_verified``, and the ``mfa_enabled`` property. JAFAAL never reads
-    app-specific profile fields.
+    Satisfied by a host user model built on :class:`jafaal.UserMixin`: ``id``,
+    ``username``, ``email``, ``is_active``, ``is_verified``, and the
+    ``mfa_enabled`` property. JAFAAL never reads app-specific profile fields.
+
+    ``is_superuser`` is deliberately **not** here. It is an authorisation
+    concept, and authorisation is the host's domain: it is read only by the
+    default :class:`TieredScopeResolver`, which is one swappable implementation
+    of the :class:`ScopeResolver` port. A host whose model has no such flag —
+    because it uses roles, organisations, or per-tenant grants — supplies its own
+    resolver and never needs the column. Requiring it on the protocol would have
+    made a two-tier authorisation model a condition of using the library.
     """
 
     id: Any
     username: str
     email: str
     is_active: bool
-    is_superuser: bool
     is_verified: bool
 
     @property
     def mfa_enabled(self) -> bool: ...
+
+
+def is_superuser(user: UserProtocol) -> bool:
+    """Read the optional ``is_superuser`` flag from a host user model.
+
+    The single place JAFAAL touches that attribute, so a host model without it
+    simply reads as non-privileged everywhere instead of raising in whichever
+    code path happens to look first. Authorisation proper belongs to the
+    :class:`ScopeResolver` port; this flag only feeds the two conveniences that
+    predate it (the default resolver's tiers and the admin password-length
+    policy).
+
+    Args:
+        user: The host user object.
+
+    Returns:
+        ``True`` when the model defines a truthy ``is_superuser``.
+    """
+    return bool(getattr(user, "is_superuser", False))
 
 
 @dataclass(frozen=True)
@@ -382,9 +407,12 @@ class ScopeResolver(Protocol):
 class TieredScopeResolver:
     """Default resolver: the :class:`~jafaal.scopes.ScopeCatalog`'s two tiers.
 
-    Returns the catalog's ``admin`` tuple for a superuser and ``regular``
-    otherwise — the behaviour JAFAAL has always had, now expressed as a
-    swappable adapter rather than a hardcoded branch inside the token minter.
+    Returns the catalog's ``admin`` tuple for a user whose ``is_superuser``
+    attribute is truthy and ``regular`` otherwise. A model without that attribute
+    gets ``regular``, so the two-tier default is a *convenience* rather than a
+    schema requirement — the host adds the column if it wants the split, or
+    installs its own resolver if its authorisation model is richer than a
+    boolean.
     """
 
     def scopes_for(self, user: UserProtocol) -> tuple[str, ...]:
@@ -392,7 +420,7 @@ class TieredScopeResolver:
         import jafaal.scopes as jafaal_scopes
 
         catalog = jafaal_scopes.get_scope_catalog()
-        return catalog.admin if user.is_superuser else catalog.regular
+        return catalog.admin if is_superuser(user) else catalog.regular
 
 
 # ===========================================================================

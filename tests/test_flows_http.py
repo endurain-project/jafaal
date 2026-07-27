@@ -5,6 +5,7 @@ import time
 from contextlib import contextmanager
 
 import pyotp
+from conftest import NATIVE_CLIENT_ID, NATIVE_REDIRECT_URI, WEB_CLIENT_ID
 
 import jafaal
 import jafaal.identity_providers.crud as idp_crud
@@ -14,8 +15,6 @@ import jafaal.mfa.crud as mfa_crud
 import jafaal.orm as jafaal_orm
 import jafaal.ports as ports
 from jafaal._core import crypto
-
-WEB = {"X-Client-Type": "web"}
 
 
 class _SignupProvider:
@@ -56,14 +55,13 @@ def _enable_mfa(user_id, secret):
 def _login(client, username, password):
     return client.post(
         "/api/v1/auth/login",
-        data={"username": username, "password": password},
-        headers=WEB,
+        data={"username": username, "password": password, "client_id": WEB_CLIENT_ID},
     )
 
 
 def _auth_headers(client, username, password):
     access = _login(client, username, password).json()["access_token"]
-    return {"X-Client-Type": "web", "Authorization": f"Bearer {access}"}
+    return {"Authorization": f"Bearer {access}"}
 
 
 def _create_linked_idp(user_id, *, slug, link=True):
@@ -95,6 +93,7 @@ def test_step_up_reauth_initiate_returns_authorization_url(client, make_user):
     idp_id = _create_linked_idp(user.id, slug="reauth")
     r = client.post(
         f"/api/v1/auth/idp/step-up/reauth/{idp_id}",
+        json={"client_id": NATIVE_CLIENT_ID, "redirect_uri": NATIVE_REDIRECT_URI},
         headers=_auth_headers(client, "ssoinit", "Str0ng!Pass"),
     )
     assert r.status_code == 200
@@ -104,12 +103,28 @@ def test_step_up_reauth_initiate_returns_authorization_url(client, make_user):
     assert "max_age=300" in url
 
 
+def test_step_up_reauth_initiate_requires_a_registered_redirect_uri(client, make_user):
+    # A step-up round trip ends in a browser redirect, so it gets the same
+    # exact-match gate as /auth/authorize. There is no weaker rule for
+    # "internal" redirects.
+    user = make_user(username="ssoopen", password="Str0ng!Pass")
+    idp_id = _create_linked_idp(user.id, slug="openredir")
+    r = client.post(
+        f"/api/v1/auth/idp/step-up/reauth/{idp_id}",
+        json={"client_id": NATIVE_CLIENT_ID, "redirect_uri": "https://evil.test/steal"},
+        headers=_auth_headers(client, "ssoopen", "Str0ng!Pass"),
+    )
+    assert r.status_code == 400
+    assert r.json()["error"] == "invalid_request"
+
+
 def test_step_up_reauth_initiate_requires_link(client, make_user):
     # You can only re-authenticate an identity provider you are linked to.
     user = make_user(username="nolink", password="Str0ng!Pass")
     idp_id = _create_linked_idp(user.id, slug="unlinked", link=False)
     r = client.post(
         f"/api/v1/auth/idp/step-up/reauth/{idp_id}",
+        json={"client_id": NATIVE_CLIENT_ID, "redirect_uri": NATIVE_REDIRECT_URI},
         headers=_auth_headers(client, "nolink", "Str0ng!Pass"),
     )
     assert r.status_code == 400
@@ -215,8 +230,7 @@ def test_mfa_verify_login_flow(client, make_user):
     code = pyotp.TOTP(secret).now()
     verify = client.post(
         "/api/v1/auth/mfa/verify",
-        json={"mfa_token": mfa_token, "mfa_code": code},
-        headers=WEB,
+        json={"mfa_token": mfa_token, "mfa_code": code, "client_id": WEB_CLIENT_ID},
     )
     assert verify.status_code == 200
     assert verify.json()["access_token"]
@@ -231,8 +245,7 @@ def test_mfa_verify_rejects_wrong_code(client, make_user):
     wrong = pyotp.TOTP(secret).at(int(time.time()) - 300)
     verify = client.post(
         "/api/v1/auth/mfa/verify",
-        json={"mfa_token": mfa_token, "mfa_code": wrong},
-        headers=WEB,
+        json={"mfa_token": mfa_token, "mfa_code": wrong, "client_id": WEB_CLIENT_ID},
     )
     assert verify.status_code == 400
 
@@ -257,8 +270,7 @@ def test_mfa_verify_rejects_a_valid_code_without_the_ticket(client, make_user):
     for guess in ("victim", "", "not-a-real-ticket", secrets.token_urlsafe(32)):
         attacker = client.post(
             "/api/v1/auth/mfa/verify",
-            json={"mfa_token": guess, "mfa_code": code},
-            headers=WEB,
+            json={"mfa_token": guess, "mfa_code": code, "client_id": WEB_CLIENT_ID},
         )
         assert attacker.status_code in (400, 422)
         assert "access_token" not in attacker.json()
@@ -267,7 +279,6 @@ def test_mfa_verify_rejects_a_valid_code_without_the_ticket(client, make_user):
     legacy = client.post(
         "/api/v1/auth/mfa/verify",
         json={"username": "victim", "mfa_code": code},
-        headers=WEB,
     )
     assert legacy.status_code == 422
 
@@ -278,10 +289,10 @@ def test_mfa_ticket_is_single_use(client, make_user):
     _enable_mfa(user.id, secret)
     mfa_token = _login(client, "onceuser", "Str0ng!Pass").json()["mfa_token"]
 
-    payload = {"mfa_token": mfa_token, "mfa_code": pyotp.TOTP(secret).now()}
-    assert client.post("/api/v1/auth/mfa/verify", json=payload, headers=WEB).status_code == 200
+    payload = {"mfa_token": mfa_token, "mfa_code": pyotp.TOTP(secret).now(), "client_id": WEB_CLIENT_ID}
+    assert client.post("/api/v1/auth/mfa/verify", json=payload).status_code == 200
     # The ticket was consumed: one password step authorises exactly one login.
-    assert client.post("/api/v1/auth/mfa/verify", json=payload, headers=WEB).status_code == 400
+    assert client.post("/api/v1/auth/mfa/verify", json=payload).status_code == 400
 
 
 def test_mfa_tickets_are_not_interchangeable_between_users(client, make_user):
@@ -299,8 +310,7 @@ def test_mfa_tickets_are_not_interchangeable_between_users(client, make_user):
     # Alice's ticket with Bob's code resolves to Alice, whose TOTP rejects it.
     crossed = client.post(
         "/api/v1/auth/mfa/verify",
-        json={"mfa_token": alice_ticket, "mfa_code": pyotp.TOTP(bob_secret).now()},
-        headers=WEB,
+        json={"mfa_token": alice_ticket, "mfa_code": pyotp.TOTP(bob_secret).now(), "client_id": WEB_CLIENT_ID},
     )
     assert crossed.status_code == 400
 
@@ -325,8 +335,7 @@ def test_mfa_verify_login_flow_with_zero_user_id(client, make_user):
     code = pyotp.TOTP(secret).now()
     verify = client.post(
         "/api/v1/auth/mfa/verify",
-        json={"mfa_token": mfa_token, "mfa_code": code},
-        headers=WEB,
+        json={"mfa_token": mfa_token, "mfa_code": code, "client_id": WEB_CLIENT_ID},
     )
     assert verify.status_code == 200
     assert verify.json()["access_token"]

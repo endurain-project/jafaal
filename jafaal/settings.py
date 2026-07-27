@@ -447,17 +447,16 @@ class WebAuthnSettings:
 
 @dataclass(frozen=True)
 class SsoSettings:
-    """Identity-provider flows: redirects, transport policy, and step-up.
+    """Identity-provider flows: transport policy and step-up.
+
+    Notably absent is anything describing *where* to send the browser after a
+    flow. Post-login, post-link and post-step-up targets all come from the
+    initiating request's ``redirect_uri``, matched exactly against the calling
+    :class:`OAuthClient`'s registration. A configured frontend path would be a
+    second, weaker redirect rule sitting beside the exact-match one — and the
+    weaker rule is the one an attacker would use.
 
     Attributes:
-        allowed_redirect_schemes: URL schemes permitted for post-login redirects.
-            Defaults to HTTPS only; add a custom scheme (e.g. ``"myapp"``) to
-            support a native-app hand-off.
-        login_result_path: Host frontend path the SSO callback redirects to on a
-            successful login, joined onto ``base_url``.
-        error_path: Host frontend path the SSO callback redirects to on error.
-        link_result_path: Host frontend path the callback redirects to after an
-            account-link (or step-up) attempt.
         idp_require_https: When ``True`` (default), identity-provider endpoints
             (the browser-facing authorization endpoint and the server-side
             token, userinfo, JWKS, discovery and revocation URLs) must use
@@ -476,10 +475,6 @@ class SsoSettings:
             retry the sensitive operation within this window.
     """
 
-    allowed_redirect_schemes: tuple[str, ...] = ("https",)
-    login_result_path: str = "/login"
-    error_path: str = "/login"
-    link_result_path: str = "/settings/security"
     idp_require_https: bool = True
     step_up_idp_reauth_enabled: bool = True
     step_up_reauth_max_age_seconds: int = 300
@@ -585,25 +580,40 @@ class AuditSettings:
 # OAuth clients (RFC 8252 public clients)
 # ===========================================================================
 
+#: Token-delivery modes a registered client may be configured with.
+#:
+#: ``body`` is the RFC 6749 §5.1 response: every token in the JSON body. It is
+#: the only correct mode for a non-browser client.
+#:
+#: ``cookie`` additionally moves the refresh token into an ``HttpOnly``,
+#: ``SameSite=Strict`` cookie and returns a CSRF token in its place, per
+#: RFC 9700 §7.2's advice not to expose refresh tokens to page script. The
+#: response is then a superset of the RFC 6749 token response minus
+#: ``refresh_token``.
+TOKEN_DELIVERY_MODES: frozenset[str] = frozenset({"body", "cookie"})
+
+#: Loopback hosts RFC 8252 §7.3 permits a plain-``http`` redirect URI to use.
+_LOOPBACK_HOSTS: frozenset[str] = frozenset({"127.0.0.1", "::1", "localhost"})
+
 
 @dataclass(frozen=True)
 class OAuthClient:
-    """A registered public client that may drive the authorization-code flow.
+    """A registered public client, and the policy that applies to its tokens.
 
-    JAFAAL is not an authorization server for *third parties* — there are no
-    client secrets, no consent screen, and no dynamic registration. What this
-    registry exists for is the one thing RFC 9700 §4.1 makes mandatory and that
-    cannot be done without it: **exact** ``redirect_uri`` matching. Without a
-    registered list there is nothing to match a redirect against, and an
-    authorization code can be steered to an attacker-controlled target.
+    The client is the **unit of policy**. Delivery mode and scope ceiling are
+    properties of the registration, never of the request: a value a caller can
+    choose per-request is a value an attacker can choose, and JAFAAL previously
+    carried both in a header (``X-Client-Type``) that had to be defended with
+    mismatch detection. Configuration removes the attack surface instead of
+    guarding it.
 
-    Registering a client is therefore a security control, not bureaucracy, and it
-    replaces the weaker scheme-level allow-list it supersedes: permitting the
-    ``myapp`` scheme lets *any* ``myapp://…`` target receive a code, while
-    registering ``myapp://callback`` permits exactly that one.
+    Registration also supplies the one thing RFC 9700 §4.1 makes mandatory and
+    that is impossible without it: **exact** ``redirect_uri`` matching. Without a
+    registered list there is nothing to match against, and an authorization code
+    can be steered to an attacker-controlled target.
 
-    Clients are public (RFC 8252): a native app cannot keep a secret, so PKCE —
-    not client authentication — is what binds the code to the requester.
+    Clients are public (RFC 8252): a native app or browser cannot keep a secret,
+    so PKCE — not client authentication — binds a code to its requester.
 
     Attributes:
         client_id: The identifier the client sends as ``client_id``. Any stable
@@ -611,30 +621,39 @@ class OAuthClient:
             conventional for native apps.
         redirect_uris: Every URI the client may receive an authorization code
             at, matched **exactly** (byte-for-byte, per RFC 9700 §4.1.3 — no
-            prefix, wildcard, or path-suffix matching). Include each variant the
-            app actually uses.
+            prefix, wildcard, or path-suffix matching). A plain-``http`` URI is
+            accepted only for loopback (RFC 8252 §7.3). Not required for a
+            client that only uses the direct login and refresh endpoints.
+        token_delivery: ``"body"`` (default, RFC 6749 §5.1) or ``"cookie"``
+            (RFC 9700 §7.2 — refresh token as an ``HttpOnly`` cookie, CSRF token
+            in the body). Browser clients want ``cookie``; everything else wants
+            ``body``.
+        scopes: Ceiling on what this client's tokens may carry, intersected with
+            what the host's :class:`~jafaal.ports.ScopeResolver` grants the user.
+            Empty (default) means "whatever the user holds", which is correct for
+            a first-party app that *is* the application. Set it for any client
+            you do not control: without a ceiling, registering a client grants it
+            the user's entire account, and JAFAAL has no consent screen to ask
+            the user about it.
         name: Human-readable label, used in logs and audit records.
     """
 
     client_id: str
-    redirect_uris: tuple[str, ...]
+    redirect_uris: tuple[str, ...] = ()
+    token_delivery: str = "body"
+    scopes: tuple[str, ...] = ()
     name: str = ""
 
     def __post_init__(self) -> None:
         if not self.client_id:
             raise ValueError("OAuthClient.client_id is required")
-        if not self.redirect_uris:
+        if self.token_delivery not in TOKEN_DELIVERY_MODES:
             raise ValueError(
-                f"OAuthClient(client_id={self.client_id!r}) must register at least one redirect_uri: "
-                "the authorization endpoint matches the requested redirect_uri exactly against this "
-                "list, so a client with none can never complete a flow."
+                f"OAuthClient(client_id={self.client_id!r}).token_delivery must be one of "
+                f"{sorted(TOKEN_DELIVERY_MODES)} (got {self.token_delivery!r})."
             )
         for uri in self.redirect_uris:
-            if not uri or "#" in uri:
-                raise ValueError(
-                    f"OAuthClient(client_id={self.client_id!r}) redirect_uri {uri!r} is invalid: it must be "
-                    "non-empty and carry no fragment (RFC 6749 §3.1.2)."
-                )
+            _validate_redirect_uri(self.client_id, uri)
 
     def permits(self, redirect_uri: str) -> bool:
         """Return whether ``redirect_uri`` is registered for this client.
@@ -647,6 +666,61 @@ class OAuthClient:
         for registered in self.redirect_uris:
             matched |= hmac.compare_digest(registered, redirect_uri)
         return matched
+
+    @property
+    def uses_cookie_delivery(self) -> bool:
+        """Whether this client's refresh token is delivered as a cookie.
+
+        The single predicate every delivery decision branches on — cookie write,
+        CSRF binding, off-site rejection, and the ``202`` MFA status — so those
+        four cannot drift apart.
+        """
+        return self.token_delivery == "cookie"
+
+    def narrow(self, granted: tuple[str, ...]) -> tuple[str, ...]:
+        """Intersect ``granted`` with this client's ceiling.
+
+        Strictly narrowing: a client can only ever receive less than the user
+        holds, never more. An empty ceiling means no narrowing.
+
+        Args:
+            granted: The scopes the user is entitled to.
+
+        Returns:
+            The scopes this client's token may carry.
+        """
+        if not self.scopes:
+            return granted
+        ceiling = set(self.scopes)
+        return tuple(scope for scope in granted if scope in ceiling)
+
+
+def _validate_redirect_uri(client_id: str, uri: str) -> None:
+    """Reject a redirect URI that is malformed or transmits a code in cleartext.
+
+    Args:
+        client_id: Owning client, for the error message.
+        uri: The candidate redirect URI.
+
+    Raises:
+        ValueError: If the URI is empty, carries a fragment (RFC 6749 §3.1.2),
+            or uses plain ``http`` for a non-loopback host (RFC 8252 §7.3 allows
+            ``http`` only for loopback, because anything else puts the
+            authorization code on the wire in clear).
+    """
+    if not uri:
+        raise ValueError(f"OAuthClient(client_id={client_id!r}) redirect_uri must not be empty.")
+    if "#" in uri:
+        raise ValueError(
+            f"OAuthClient(client_id={client_id!r}) redirect_uri {uri!r} must not carry a fragment (RFC 6749 §3.1.2)."
+        )
+    parsed = urlparse(uri)
+    if parsed.scheme == "http" and (parsed.hostname or "") not in _LOOPBACK_HOSTS:
+        raise ValueError(
+            f"OAuthClient(client_id={client_id!r}) redirect_uri {uri!r} uses plain http for a non-loopback "
+            f"host. RFC 8252 §7.3 permits http only for loopback ({sorted(_LOOPBACK_HOSTS)}); use https or a "
+            "private-use scheme."
+        )
 
 
 # ===========================================================================

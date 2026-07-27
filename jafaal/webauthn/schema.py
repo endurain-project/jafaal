@@ -69,10 +69,13 @@ class WebAuthnAuthenticationComplete(BaseModel):
         challenge_id: The handle returned by *authenticate/begin*.
         credential: The authenticator assertion response from
             ``navigator.credentials.get()``.
+        client_id: The registered client the tokens are issued to. Its
+            registration decides delivery mode and scope ceiling.
     """
 
     challenge_id: StrictStr = Field(..., description="Opaque challenge handle from begin")
     credential: dict[str, Any] = Field(..., description="Authenticator assertion response")
+    client_id: StrictStr = Field(..., max_length=256, description="Registered client receiving the tokens")
 
 
 class WebAuthnSecondFactorBegin(BaseModel):
@@ -92,10 +95,12 @@ class WebAuthnSecondFactorComplete(BaseModel):
     Attributes:
         mfa_token: The opaque ticket returned by ``/auth/login``.
         credential: The authenticator assertion response.
+        client_id: The registered client the tokens are issued to.
     """
 
     mfa_token: StrictStr = Field(..., max_length=512, description="Pending-login ticket from /auth/login")
     credential: dict[str, Any] = Field(..., description="Authenticator assertion response")
+    client_id: StrictStr = Field(..., max_length=256, description="Registered client receiving the tokens")
 
 
 class WebAuthnCredentialRead(BaseModel):

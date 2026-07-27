@@ -1,18 +1,18 @@
 """Sign-up token database models."""
 
 from datetime import datetime as datetime_type
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import DateTime, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from jafaal.orm import UserId, get_active_base
+from jafaal.orm import UserId, get_active_base, host_user_model
 
 # JAFAAL's models bind to the host-owned declarative base at map_models() time.
 Base = get_active_base()
 
 if TYPE_CHECKING:
-    from jafaal.user_model import UserMixin as Users
+    pass
 
 
 class SignUpToken(Base):
@@ -60,4 +60,4 @@ class SignUpToken(Base):
     )
 
     # Define a relationship to the Users model
-    users: Mapped["Users"] = relationship(back_populates="sign_up_tokens")
+    users: Mapped[Any] = relationship(host_user_model, back_populates="sign_up_tokens")

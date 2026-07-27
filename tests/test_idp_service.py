@@ -206,12 +206,12 @@ def test_is_email_verified():
 def test_prune_expired_caches():
     svc = IdentityProviderService()
     past = datetime.now(UTC) - timedelta(hours=2)
-    svc._discovery_cache[1] = {"x": 1}
-    svc._cache_expiry[1] = past
-    svc._jwks_cache[JWKS_URI] = {"jwks": {}, "cached_at": past}
-    svc._prune_expired_caches()
-    assert 1 not in svc._discovery_cache
-    assert JWKS_URI not in svc._jwks_cache
+    svc.discovery._discovery_cache[1] = {"x": 1}
+    svc.discovery._cache_expiry[1] = past
+    svc.discovery._jwks_cache[JWKS_URI] = {"jwks": {}, "cached_at": past}
+    svc.discovery._prune_expired_caches()
+    assert 1 not in svc.discovery._discovery_cache
+    assert JWKS_URI not in svc.discovery._jwks_cache
 
 
 # --------------------------------------------------------------------------- #
@@ -222,10 +222,10 @@ def test_prune_expired_caches():
 def test_verify_id_token_valid():
     svc = IdentityProviderService()
     key, jwks = _rsa_jwks()
-    svc._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
+    svc.discovery._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
     token = jwt.encode({"alg": "RS256", "kid": "test-key-1"}, _id_token_claims(nonce="n1"), key)
 
-    claims = asyncio.run(svc._verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE, expected_nonce="n1"))
+    claims = asyncio.run(svc.discovery.verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE, expected_nonce="n1"))
     assert claims["sub"] == "idp-subject"
 
 
@@ -234,34 +234,34 @@ def test_verify_id_token_rejects_symmetric_alg():
     oct_key = OctKey.import_key("x" * 32)
     token = jwt.encode({"alg": "HS256", "kid": "test-key-1"}, _id_token_claims(), oct_key)
     with pytest.raises(exc.InvalidTokenError):
-        asyncio.run(svc._verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
+        asyncio.run(svc.discovery.verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
 
 
 def test_verify_id_token_expired():
     svc = IdentityProviderService()
     key, jwks = _rsa_jwks()
-    svc._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
+    svc.discovery._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
     token = jwt.encode({"alg": "RS256", "kid": "test-key-1"}, _id_token_claims(exp_delta=-10), key)
     with pytest.raises(exc.TokenExpiredError):
-        asyncio.run(svc._verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
+        asyncio.run(svc.discovery.verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
 
 
 def test_verify_id_token_wrong_issuer():
     svc = IdentityProviderService()
     key, jwks = _rsa_jwks()
-    svc._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
+    svc.discovery._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
     token = jwt.encode({"alg": "RS256", "kid": "test-key-1"}, _id_token_claims(iss="https://evil.example"), key)
     with pytest.raises(exc.InvalidTokenError):
-        asyncio.run(svc._verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
+        asyncio.run(svc.discovery.verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
 
 
 def test_verify_id_token_nonce_mismatch():
     svc = IdentityProviderService()
     key, jwks = _rsa_jwks()
-    svc._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
+    svc.discovery._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
     token = jwt.encode({"alg": "RS256", "kid": "test-key-1"}, _id_token_claims(nonce="real"), key)
     with pytest.raises(exc.InvalidTokenError):
-        asyncio.run(svc._verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE, expected_nonce="different"))
+        asyncio.run(svc.discovery.verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE, expected_nonce="different"))
 
 
 def test_verify_id_token_unknown_kid_falls_back_to_every_published_key():
@@ -270,9 +270,9 @@ def test_verify_id_token_unknown_kid_falls_back_to_every_published_key():
     # The signature still has to verify against a key the IdP published.
     svc = IdentityProviderService()
     key, jwks = _rsa_jwks(kid="real-kid")
-    svc._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
+    svc.discovery._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
     token = jwt.encode({"alg": "RS256", "kid": "unknown-kid"}, _id_token_claims(), key)
-    claims = asyncio.run(svc._verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
+    claims = asyncio.run(svc.discovery.verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
     assert claims["sub"] == "idp-subject"
 
 
@@ -282,53 +282,53 @@ def test_verify_id_token_unknown_kid_still_rejects_foreign_signature():
     svc = IdentityProviderService()
     _published, jwks = _rsa_jwks(kid="real-kid")
     foreign, _ = _rsa_jwks(kid="attacker-kid")
-    svc._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
+    svc.discovery._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
     token = jwt.encode({"alg": "RS256", "kid": "unknown-kid"}, _id_token_claims(), foreign)
     with pytest.raises(exc.InvalidTokenError):
-        asyncio.run(svc._verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
+        asyncio.run(svc.discovery.verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
 
 
 def test_verify_id_token_azp_mismatch_rejected():
     # A present azp naming a different client must be rejected (OIDC §3.1.3.7).
     svc = IdentityProviderService()
     key, jwks = _rsa_jwks()
-    svc._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
+    svc.discovery._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
     token = jwt.encode({"alg": "RS256", "kid": "test-key-1"}, _id_token_claims(azp="someone-else"), key)
     with pytest.raises(exc.InvalidTokenError, match="azp"):
-        asyncio.run(svc._verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
+        asyncio.run(svc.discovery.verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
 
 
 def test_verify_id_token_azp_match_accepted():
     svc = IdentityProviderService()
     key, jwks = _rsa_jwks()
-    svc._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
+    svc.discovery._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
     token = jwt.encode({"alg": "RS256", "kid": "test-key-1"}, _id_token_claims(azp=AUDIENCE), key)
-    claims = asyncio.run(svc._verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
+    claims = asyncio.run(svc.discovery.verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
     assert claims["azp"] == AUDIENCE
 
 
 def test_verify_id_token_multiple_aud_requires_azp():
     svc = IdentityProviderService()
     key, jwks = _rsa_jwks()
-    svc._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
+    svc.discovery._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
     # Multiple audiences without azp is rejected...
     token = jwt.encode({"alg": "RS256", "kid": "test-key-1"}, _id_token_claims(aud=[AUDIENCE, "other-client"]), key)
     with pytest.raises(exc.InvalidTokenError, match="azp"):
-        asyncio.run(svc._verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
+        asyncio.run(svc.discovery.verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
     # ...but accepted when azp names our client.
     token_ok = jwt.encode(
         {"alg": "RS256", "kid": "test-key-1"},
         _id_token_claims(aud=[AUDIENCE, "other-client"], azp=AUDIENCE),
         key,
     )
-    claims = asyncio.run(svc._verify_id_token(token_ok, JWKS_URI, ISSUER, AUDIENCE))
+    claims = asyncio.run(svc.discovery.verify_id_token(token_ok, JWKS_URI, ISSUER, AUDIENCE))
     assert claims["sub"] == "idp-subject"
 
 
 def test_verify_id_token_at_hash_valid_and_mismatch():
     svc = IdentityProviderService()
     key, jwks = _rsa_jwks()
-    svc._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
+    svc.discovery._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
     access_token = "the-access-token-value"
     # at_hash = base64url(left-most half of SHA-256(access_token)) for RS256.
     digest = hashlib.sha256(access_token.encode("ascii")).digest()
@@ -336,12 +336,12 @@ def test_verify_id_token_at_hash_valid_and_mismatch():
     token = jwt.encode({"alg": "RS256", "kid": "test-key-1"}, _id_token_claims(at_hash=at_hash), key)
 
     # Matching access token verifies.
-    claims = asyncio.run(svc._verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE, access_token=access_token))
+    claims = asyncio.run(svc.discovery.verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE, access_token=access_token))
     assert claims["sub"] == "idp-subject"
 
     # A different access token fails the at_hash binding.
     with pytest.raises(exc.InvalidTokenError, match="at_hash"):
-        asyncio.run(svc._verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE, access_token="different-token"))
+        asyncio.run(svc.discovery.verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE, access_token="different-token"))
 
 
 def test_get_userinfo_forwards_access_token_for_at_hash():
@@ -350,7 +350,7 @@ def test_get_userinfo_forwards_access_token_for_at_hash():
     # at_hash is validated end-to-end (not just in the unit above).
     svc = IdentityProviderService()
     key, jwks = _rsa_jwks()
-    svc._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
+    svc.discovery._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
     access_token = "exchanged-access-token"
     digest = hashlib.sha256(access_token.encode("ascii")).digest()
     at_hash = base64.urlsafe_b64encode(digest[: len(digest) // 2]).rstrip(b"=").decode("ascii")
@@ -412,9 +412,9 @@ def test_verify_id_token_without_kid_is_accepted():
     # routinely omit it — demanding one would refuse those IdPs outright.
     svc = IdentityProviderService()
     key, jwks = _rsa_jwks()
-    svc._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
+    svc.discovery._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
     token = jwt.encode({"alg": "RS256"}, _id_token_claims(), key)
-    claims = asyncio.run(svc._verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
+    claims = asyncio.run(svc.discovery.verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
     assert claims["sub"] == "idp-subject"
 
 
@@ -422,10 +422,10 @@ def test_verify_id_token_without_kid_still_rejects_foreign_signature():
     svc = IdentityProviderService()
     _published, jwks = _rsa_jwks()
     foreign, _ = _rsa_jwks(kid="other")
-    svc._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
+    svc.discovery._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
     token = jwt.encode({"alg": "RS256"}, _id_token_claims(), foreign)
     with pytest.raises(exc.InvalidTokenError):
-        asyncio.run(svc._verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
+        asyncio.run(svc.discovery.verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
 
 
 def test_verify_id_token_skips_encryption_only_jwks_entries():
@@ -435,10 +435,10 @@ def test_verify_id_token_skips_encryption_only_jwks_entries():
     key, jwks = _rsa_jwks()
     enc_entry = dict(jwks["keys"][0])
     enc_entry["use"] = "enc"
-    svc._jwks_cache[JWKS_URI] = {"jwks": {"keys": [enc_entry]}, "cached_at": datetime.now(UTC)}
+    svc.discovery._jwks_cache[JWKS_URI] = {"jwks": {"keys": [enc_entry]}, "cached_at": datetime.now(UTC)}
     token = jwt.encode({"alg": "RS256"}, _id_token_claims(), key)
     with pytest.raises(exc.InvalidTokenError):
-        asyncio.run(svc._verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
+        asyncio.run(svc.discovery.verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
 
 
 def test_verify_id_token_ignores_unusable_jwks_entries():
@@ -447,18 +447,18 @@ def test_verify_id_token_ignores_unusable_jwks_entries():
     svc = IdentityProviderService()
     key, jwks = _rsa_jwks()
     noisy = {"keys": [{"kty": "OKP", "crv": "X25519"}, {"kty": "RSA", "n": "!!"}, *jwks["keys"]]}
-    svc._jwks_cache[JWKS_URI] = {"jwks": noisy, "cached_at": datetime.now(UTC)}
+    svc.discovery._jwks_cache[JWKS_URI] = {"jwks": noisy, "cached_at": datetime.now(UTC)}
     token = jwt.encode({"alg": "RS256"}, _id_token_claims(), key)
-    assert asyncio.run(svc._verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))["sub"] == "idp-subject"
+    assert asyncio.run(svc.discovery.verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))["sub"] == "idp-subject"
 
 
 def test_verify_id_token_empty_jwks_is_rejected():
     svc = IdentityProviderService()
     key, _jwks = _rsa_jwks()
-    svc._jwks_cache[JWKS_URI] = {"jwks": {"keys": []}, "cached_at": datetime.now(UTC)}
+    svc.discovery._jwks_cache[JWKS_URI] = {"jwks": {"keys": []}, "cached_at": datetime.now(UTC)}
     token = jwt.encode({"alg": "RS256"}, _id_token_claims(), key)
     with pytest.raises(exc.InvalidTokenError, match="unknown key"):
-        asyncio.run(svc._verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
+        asyncio.run(svc.discovery.verify_id_token(token, JWKS_URI, ISSUER, AUDIENCE))
 
 
 # --------------------------------------------------------------------------- #
@@ -477,25 +477,25 @@ def test_get_oidc_configuration_fetches_and_caches(db, monkeypatch):
     svc = IdentityProviderService()
     idp = _create_idp(db, issuer_url=ISSUER)
     config = {"issuer": ISSUER, "token_endpoint": f"{ISSUER}/token", "jwks_uri": JWKS_URI}
-    svc._http_client = _FakeHttpClient(_FakeResponse(config))
+    svc.discovery._http_client = _FakeHttpClient(_FakeResponse(config))
 
     result = asyncio.run(svc.get_oidc_configuration(idp))
     assert result == config
     # Cached on the second call.
-    assert idp.id in svc._discovery_cache
+    assert idp.id in svc.discovery._discovery_cache
 
 
 def test_fetch_jwks_success_and_invalid(db, monkeypatch):
     _no_ssrf(monkeypatch)
     svc = IdentityProviderService()
     _key, jwks = _rsa_jwks()
-    svc._http_client = _FakeHttpClient(_FakeResponse(jwks))
-    assert asyncio.run(svc._fetch_jwks(JWKS_URI)) == jwks
+    svc.discovery._http_client = _FakeHttpClient(_FakeResponse(jwks))
+    assert asyncio.run(svc.discovery.fetch_jwks(JWKS_URI)) == jwks
 
     svc2 = IdentityProviderService()
-    svc2._http_client = _FakeHttpClient(_FakeResponse({"no_keys": True}))
+    svc2.discovery._http_client = _FakeHttpClient(_FakeResponse({"no_keys": True}))
     with pytest.raises(exc.IdentityProviderError):
-        asyncio.run(svc2._fetch_jwks(JWKS_URI))
+        asyncio.run(svc2.discovery.fetch_jwks(JWKS_URI))
 
 
 # --------------------------------------------------------------------------- #
@@ -507,9 +507,7 @@ def test_initiate_login_builds_authorization_url(db):
     svc = IdentityProviderService()
     idp = _create_idp(db, authorization_endpoint=f"{ISSUER}/authorize", scopes="openid email")
     state_id, nonce = "state-123", "nonce-123"
-    oauth_state_crud.create_oauth_state(
-        db=db, state_id=state_id, nonce=nonce, client_type="web", ip_address=None, idp_id=idp.id
-    )
+    oauth_state_crud.create_oauth_state(db=db, state_id=state_id, nonce=nonce, ip_address=None, idp_id=idp.id)
 
     url = asyncio.run(svc.initiate_login(idp, _request(), db, oauth_state_id=state_id))
     assert url.startswith(f"{ISSUER}/authorize")
@@ -530,9 +528,7 @@ def test_initiate_login_includes_pkce_challenge_and_stores_verifier(db):
     svc = IdentityProviderService()
     idp = _create_idp(db, authorization_endpoint=f"{ISSUER}/authorize")
     state_id = "pkce-state"
-    oauth_state_crud.create_oauth_state(
-        db=db, state_id=state_id, nonce="pkce-nonce", client_type="web", ip_address=None, idp_id=idp.id
-    )
+    oauth_state_crud.create_oauth_state(db=db, state_id=state_id, nonce="pkce-nonce", ip_address=None, idp_id=idp.id)
 
     url = asyncio.run(svc.initiate_login(idp, _request(), db, oauth_state_id=state_id))
 
@@ -550,9 +546,7 @@ def test_initiate_login_includes_pkce_challenge_and_stores_verifier(db):
 def test_initiate_login_rejects_http_authorization_endpoint_when_required(db):
     svc = IdentityProviderService()
     idp = _create_idp(db, authorization_endpoint="http://idp.example/authorize")
-    oauth_state_crud.create_oauth_state(
-        db=db, state_id="s-http", nonce="n", client_type="web", ip_address=None, idp_id=idp.id
-    )
+    oauth_state_crud.create_oauth_state(db=db, state_id="s-http", nonce="n", ip_address=None, idp_id=idp.id)
     with pytest.raises(exc.InvalidRequestError):
         asyncio.run(svc.initiate_login(idp, _request(), db, oauth_state_id="s-http"))
 
@@ -560,9 +554,7 @@ def test_initiate_login_rejects_http_authorization_endpoint_when_required(db):
 def test_initiate_login_allows_http_authorization_endpoint_when_disabled(db):
     svc = IdentityProviderService()
     idp = _create_idp(db, authorization_endpoint="http://idp.example/authorize")
-    oauth_state_crud.create_oauth_state(
-        db=db, state_id="s-httpok", nonce="n", client_type="web", ip_address=None, idp_id=idp.id
-    )
+    oauth_state_crud.create_oauth_state(db=db, state_id="s-httpok", nonce="n", ip_address=None, idp_id=idp.id)
     with _settings(idp_require_https=False):
         url = asyncio.run(svc.initiate_login(idp, _request(), db, oauth_state_id="s-httpok"))
     assert url.startswith("http://idp.example/authorize")
@@ -595,9 +587,7 @@ def test_handle_callback_login_creates_user(db, monkeypatch):
     token = _prepare_callback_idp(db, monkeypatch, svc, userinfo=userinfo)
 
     state_id = "s-login"
-    oauth_state_crud.create_oauth_state(
-        db=db, state_id=state_id, nonce="n", client_type="web", ip_address=None, idp_id=idp.id
-    )
+    oauth_state_crud.create_oauth_state(db=db, state_id=state_id, nonce="n", ip_address=None, idp_id=idp.id)
     state_obj = oauth_state_crud.get_oauth_state_by_id(state_id, db)
 
     result = asyncio.run(svc.handle_callback(idp, "auth-code", state_id, _request(), password_hasher, db, state_obj))
@@ -620,9 +610,7 @@ def test_handle_callback_login_creates_user(db, monkeypatch):
 
 
 def _oidc_callback_state(db, idp, state_id):
-    oauth_state_crud.create_oauth_state(
-        db=db, state_id=state_id, nonce="n", client_type="web", ip_address=None, idp_id=idp.id
-    )
+    oauth_state_crud.create_oauth_state(db=db, state_id=state_id, nonce="n", ip_address=None, idp_id=idp.id)
     return oauth_state_crud.get_oauth_state_by_id(state_id, db)
 
 
@@ -687,9 +675,7 @@ def test_handle_callback_replays_pkce_verifier(db, monkeypatch):
     monkeypatch.setattr(svc, "_create_oauth_client", lambda **kw: _CapturingOAuthClient(captured, token, userinfo))
 
     state_id = "s-pkce"
-    oauth_state_crud.create_oauth_state(
-        db=db, state_id=state_id, nonce="n", client_type="web", ip_address=None, idp_id=idp.id
-    )
+    oauth_state_crud.create_oauth_state(db=db, state_id=state_id, nonce="n", ip_address=None, idp_id=idp.id)
     oauth_state_crud.set_upstream_code_verifier(state_id, crypto.encrypt_token_fernet("verifier-xyz"), db)
     state_obj = oauth_state_crud.get_oauth_state_by_id(state_id, db)
 
@@ -710,9 +696,7 @@ def test_handle_callback_without_pkce_verifier_omits_code_verifier(db, monkeypat
     monkeypatch.setattr(svc, "_create_oauth_client", lambda **kw: _CapturingOAuthClient(captured, token, userinfo))
 
     state_id = "s-nopkce"
-    oauth_state_crud.create_oauth_state(
-        db=db, state_id=state_id, nonce="n", client_type="web", ip_address=None, idp_id=idp.id
-    )
+    oauth_state_crud.create_oauth_state(db=db, state_id=state_id, nonce="n", ip_address=None, idp_id=idp.id)
     state_obj = oauth_state_crud.get_oauth_state_by_id(state_id, db)
 
     asyncio.run(svc.handle_callback(idp, "auth-code", state_id, _request(), password_hasher, db, state_obj))
@@ -735,7 +719,6 @@ def test_handle_callback_link_mode(db, make_user, monkeypatch):
         db=db,
         state_id=state_id,
         nonce="n",
-        client_type="web",
         ip_address=None,
         idp_id=idp.id,
         user_id=user.id,
@@ -753,7 +736,6 @@ def _stepup_state(db, idp, user, *, state_id):
         db=db,
         state_id=state_id,
         nonce="n",
-        client_type="web",
         ip_address=None,
         idp_id=idp.id,
         user_id=user.id,
@@ -839,7 +821,6 @@ def test_initiate_link_forwards_extra_authorize_params(db, make_user):
         db=db,
         state_id="s-xtra",
         nonce="n",
-        client_type="web",
         ip_address=None,
         idp_id=idp.id,
         user_id=user.id,
@@ -867,9 +848,7 @@ def test_handle_callback_missing_subject(db, monkeypatch):
     _prepare_callback_idp(db, monkeypatch, svc, userinfo={"email": "x@test.dev"})  # no 'sub'
 
     state_id = "s-nosub"
-    oauth_state_crud.create_oauth_state(
-        db=db, state_id=state_id, nonce="n", client_type="web", ip_address=None, idp_id=idp.id
-    )
+    oauth_state_crud.create_oauth_state(db=db, state_id=state_id, nonce="n", ip_address=None, idp_id=idp.id)
     state_obj = oauth_state_crud.get_oauth_state_by_id(state_id, db)
 
     with pytest.raises(exc.IdentityProviderError):
@@ -886,9 +865,7 @@ def test_handle_callback_oidc_refuses_unverified_userinfo(db, monkeypatch):
     _prepare_callback_idp(db, monkeypatch, svc, userinfo=userinfo)  # token carries no id_token
 
     state_id = "s-oidc-noverify"
-    oauth_state_crud.create_oauth_state(
-        db=db, state_id=state_id, nonce="n", client_type="web", ip_address=None, idp_id=idp.id
-    )
+    oauth_state_crud.create_oauth_state(db=db, state_id=state_id, nonce="n", ip_address=None, idp_id=idp.id)
     state_obj = oauth_state_crud.get_oauth_state_by_id(state_id, db)
 
     with pytest.raises(exc.IdentityProviderError):
@@ -904,7 +881,7 @@ def test_handle_callback_oidc_verified_id_token_succeeds(db, monkeypatch):
     svc = IdentityProviderService()
     idp = _create_idp(db, issuer_url=ISSUER, token_endpoint=f"{ISSUER}/token")  # provider_type defaults to "oidc"
     key, jwks = _rsa_jwks()
-    svc._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
+    svc.discovery._jwks_cache[JWKS_URI] = {"jwks": jwks, "cached_at": datetime.now(UTC)}
 
     async def _fake_config(_idp):
         return {"jwks_uri": JWKS_URI, "issuer": ISSUER, "token_endpoint": f"{ISSUER}/token"}
@@ -918,9 +895,7 @@ def test_handle_callback_oidc_verified_id_token_succeeds(db, monkeypatch):
     monkeypatch.setattr(svc, "_create_oauth_client", lambda **kw: _FakeOAuthClient(token, None))
 
     state_id = "s-oidc-ok"
-    oauth_state_crud.create_oauth_state(
-        db=db, state_id=state_id, nonce="n", client_type="web", ip_address=None, idp_id=idp.id
-    )
+    oauth_state_crud.create_oauth_state(db=db, state_id=state_id, nonce="n", ip_address=None, idp_id=idp.id)
     state_obj = oauth_state_crud.get_oauth_state_by_id(state_id, db)
 
     result = asyncio.run(svc.handle_callback(idp, "auth-code", state_id, _request(), password_hasher, db, state_obj))

@@ -7,18 +7,18 @@ service layer encodes/decodes when talking to ``py_webauthn``.
 """
 
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from jafaal.orm import UserId, get_active_base
+from jafaal.orm import UserId, get_active_base, host_user_model
 
 # JAFAAL's models bind to the host-owned declarative base at map_models() time.
 Base = get_active_base()
 
 if TYPE_CHECKING:
-    from jafaal.user_model import UserMixin as Users
+    pass
 
 
 class WebAuthnCredential(Base):
@@ -88,6 +88,7 @@ class WebAuthnCredential(Base):
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Relationships
-    users: Mapped["Users"] = relationship(
+    users: Mapped[Any] = relationship(
+        host_user_model,
         back_populates="webauthn_credentials",
     )

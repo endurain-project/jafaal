@@ -19,11 +19,7 @@ import jafaal._internal.token_manager as jafaal_token_manager
 import jafaal.audit as jafaal_audit
 import jafaal.credentials.crud as jafaal_credentials_crud
 import jafaal.exceptions as jafaal_exceptions
-import jafaal.identity_providers.utils as idp_utils
-import jafaal.oauth_state.crud as oauth_state_crud
-import jafaal.oauth_state.utils as oauth_state_utils
 import jafaal.ports as jafaal_ports
-import jafaal.schema as jafaal_schema
 import jafaal.sessions.utils as jafaal_sessions_utils
 import jafaal.settings as jafaal_settings
 from jafaal._core import network
@@ -105,6 +101,7 @@ def create_tokens(
     user: jafaal_ports.UserProtocol,
     token_manager: jafaal_token_manager.TokenManager,
     session_id: str | None = None,
+    client: jafaal_settings.OAuthClient | None = None,
 ) -> tuple[str, datetime, str, datetime, str, str]:
     """
     Generates session tokens for a user, including access token, refresh token, and CSRF token.
@@ -113,6 +110,8 @@ def create_tokens(
         user (jafaal_ports.UserProtocol): The user object for whom the tokens are being created.
         token_manager (jafaal_token_manager.TokenManager): The token manager responsible for token creation.
         session_id (str | None, optional): An optional session ID. If not provided, a new unique session ID is generated.
+        client: The registered client the tokens are issued to. Its scope
+            ceiling narrows what the tokens carry.
 
     Returns:
         tuple[str, datetime, str, datetime, str, str]:
@@ -129,10 +128,12 @@ def create_tokens(
         session_id = str(uuid4())
 
     # Create the access, refresh tokens and csrf token
-    access_token_exp, access_token = token_manager.create_token(session_id, user, jafaal_token_manager.TokenType.ACCESS)
+    access_token_exp, access_token = token_manager.create_token(
+        session_id, user, jafaal_token_manager.TokenType.ACCESS, client
+    )
 
     refresh_token_exp, refresh_token = token_manager.create_token(
-        session_id, user, jafaal_token_manager.TokenType.REFRESH
+        session_id, user, jafaal_token_manager.TokenType.REFRESH, client
     )
 
     csrf_token = token_manager.create_csrf_token()
@@ -151,6 +152,7 @@ def mint_access_token(
     user: jafaal_ports.UserProtocol,
     token_manager: jafaal_token_manager.TokenManager,
     session_id: str,
+    client: jafaal_settings.OAuthClient | None = None,
 ) -> tuple[datetime, str]:
     """
     Mint a single fresh access token for an existing session.
@@ -163,11 +165,12 @@ def mint_access_token(
         user: The user the token is issued for.
         token_manager: Token manager responsible for token creation.
         session_id: Existing session identifier to bind the token to.
+        client: The registered client the token is issued to.
 
     Returns:
         Tuple of (access_token_exp, access_token).
     """
-    return token_manager.create_token(session_id, user, jafaal_token_manager.TokenType.ACCESS)
+    return token_manager.create_token(session_id, user, jafaal_token_manager.TokenType.ACCESS, client)
 
 
 def _is_secure_cookie_environment() -> bool:
@@ -232,40 +235,47 @@ def clear_refresh_token_cookies(response: Response) -> None:
 
 def build_token_response(
     response: Response,
-    client_type: str,
+    client: jafaal_settings.OAuthClient,
     session_id: str,
     access_token: str,
     access_token_exp: datetime,
     refresh_token: str,
     refresh_token_exp: datetime,
     csrf_token: str | None,
+    scope: str | None = None,
 ) -> dict:
-    """Build the token-response body for login and refresh.
+    """Build the RFC 6749 §5.1 token response for ``client``.
 
-    Single source of truth for token delivery, shared by the password
-    login, SSO login, and ``/refresh`` flows so they cannot drift:
+    Single source of truth for token delivery, shared by the password login,
+    authorization-code, and ``/refresh`` flows so they cannot drift.
 
-    - Web clients receive the refresh token as an ``HttpOnly`` cookie
-      (set here via :func:`set_refresh_token_cookie`) and the CSRF token
-      in the body.
-    - Mobile clients receive the refresh token in the body and no CSRF
-      token.
+    Delivery follows the client's registered ``token_delivery``, never a
+    request-supplied value:
 
-    ``expires_in`` / ``refresh_token_expires_in`` are seconds-until-expiry
-    per RFC 6749 §5.1.
+    - ``cookie`` — the refresh token is set as an ``HttpOnly``,
+      ``SameSite=Strict`` cookie (RFC 9700 §7.2: do not expose refresh tokens
+      to page script) and a CSRF token is returned in its place.
+    - ``body`` — the literal RFC 6749 §5.1 response, refresh token included.
+
+    ``expires_in`` is seconds-until-expiry per §5.1;
+    ``refresh_token_expires_in`` and ``session_id`` are JAFAAL extensions, which
+    §5.1 explicitly permits.
 
     Args:
-        response: HTTP response used to set the web refresh cookie.
-        client_type: ``"web"`` or any other value (treated as mobile).
+        response: HTTP response used to set the refresh cookie.
+        client: The registered client receiving the tokens.
         session_id: Session identifier.
         access_token: Newly minted access token.
         access_token_exp: Access-token expiry datetime.
         refresh_token: Newly minted refresh token.
         refresh_token_exp: Refresh-token expiry datetime.
-        csrf_token: CSRF token (only returned to web clients).
+        csrf_token: CSRF token (only returned under ``cookie`` delivery).
+        scope: Space-delimited granted scopes. RFC 6749 §5.1 requires this when
+            it differs from what was requested; JAFAAL always sends it so a
+            client never has to decode the access token to learn what it got.
 
     Returns:
-        dict: Response body for the client type.
+        dict: Response body for the client.
 
     Raises:
         None.
@@ -274,66 +284,68 @@ def build_token_response(
     body = {
         "session_id": session_id,
         "access_token": access_token,
-        "token_type": "bearer",
+        # RFC 6749 §7.1 / RFC 6750 §4: the type is case-insensitive but is
+        # registered as "Bearer". Emitted consistently everywhere.
+        "token_type": "Bearer",
         "expires_in": int((access_token_exp - now).total_seconds()),
         "refresh_token_expires_in": int((refresh_token_exp - now).total_seconds()),
     }
+    if scope is not None:
+        body["scope"] = scope
 
-    if client_type == "web":
-        # Web: Refresh token as httpOnly cookie (XSS protection); CSRF
-        # token in body for in-memory storage. Cookie attributes are
-        # centralised in set_refresh_token_cookie so login, /refresh, and
-        # SSO token exchange stay in lockstep.
+    if client.uses_cookie_delivery:
+        # Refresh token as httpOnly cookie (XSS protection); CSRF token in body
+        # for in-memory storage. Cookie attributes are centralised in
+        # set_refresh_token_cookie so login, /refresh, and the code exchange
+        # stay in lockstep.
         set_refresh_token_cookie(response, refresh_token)
         body["csrf_token"] = csrf_token
     else:
-        # Mobile: All tokens in JSON body for secure platform storage.
+        # All tokens in the JSON body for secure platform storage.
         body["refresh_token"] = refresh_token
 
     return body
+
+
+def granted_scope(user: jafaal_ports.UserProtocol, client: jafaal_settings.OAuthClient) -> str:
+    """Return the space-delimited scopes a token for ``user``/``client`` carries.
+
+    Mirrors exactly what :meth:`TokenManager.create_token` stamps, so the
+    advertised ``scope`` and the token's ``scope`` claim cannot disagree.
+    """
+    return " ".join(client.narrow(jafaal_ports.get_scope_resolver().scopes_for(user)))
 
 
 def complete_login(
     response: Response,
     request: Request,
     user: jafaal_ports.UserProtocol,
-    client_type: str,
+    client: jafaal_settings.OAuthClient,
     token_manager: jafaal_token_manager.TokenManager,
     db: Session,
 ) -> dict:
-    """
-    Handles the completion of the login process by generating session and authentication tokens,
-    storing the session in the database, and returning tokens in response body.
+    """Mint a session and its token bundle for an authenticated user.
 
-    Token delivery follows the OAuth 2.0 Security BCP (RFC 9700) advice for
-    browser clients rather than RFC 6749 §5.1 literally: the access token is
-    returned in the body for in-memory storage, while the refresh token is set as
-    an ``HttpOnly``, ``SameSite=Strict`` cookie instead of being handed to page
-    script. The body is therefore a superset of the RFC 6749 token response
-    (extra ``session_id`` / ``csrf_token``, and no ``refresh_token`` for web).
+    Shared by password login and the authorization-code exchange, so both flows
+    produce byte-identical token semantics, auditing, and new-device detection.
 
-    This unified model works for both username/password and SSO login flows.
+    Token delivery follows ``client.token_delivery``. For a browser client
+    (``cookie``) the response follows RFC 9700 §7.2 rather than RFC 6749 §5.1
+    literally: the access token is returned in the body for in-memory storage,
+    while the refresh token is set as an ``HttpOnly``, ``SameSite=Strict``
+    cookie instead of being handed to page script.
 
     Args:
-        response (Response): The HTTP response object to set refresh cookie.
-        request (Request): The HTTP request object containing client information.
-        user (jafaal_ports.UserProtocol): The authenticated user object.
-        client_type (str): The type of client ("web" or "mobile").
-        token_manager (jafaal_token_manager.TokenManager): Utility for token generation and management.
-        db (Session): Database session for storing session information.
+        response: The HTTP response object, used to set the refresh cookie.
+        request: The HTTP request, for IP and device fingerprinting.
+        user: The authenticated user.
+        client: The registered client the tokens are issued to.
+        token_manager: Utility for token generation.
+        db: Database session for storing session information.
 
     Returns:
-        dict: Contains session_id, access_token, csrf_token, token_type, expires_in, and refresh_token_expires_in.
-
-    Raises:
-        JafaalError: If the client type is invalid, raises a 403 Forbidden error.
+        dict: The RFC 6749 §5.1 token response (see :func:`build_token_response`).
     """
-    if client_type not in ["web", "mobile"]:
-        raise jafaal_exceptions.AuthorizationError(
-            "Invalid client type",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
     # Create the tokens
     (
         session_id,
@@ -342,7 +354,7 @@ def complete_login(
         refresh_token_exp,
         refresh_token,
         csrf_token,
-    ) = create_tokens(user, token_manager)
+    ) = create_tokens(user, token_manager, client=client)
 
     # Decide whether this login is from a not-previously-seen device *before*
     # the new session is written. Only pay the lookup when a host sink actually
@@ -370,15 +382,14 @@ def complete_login(
         db,
     )
 
-    # Token delivery based on client type (web cookie vs mobile body) is
-    # centralised in build_token_response so login, /refresh, and SSO
-    # token exchange share one delivery contract.
+    # Token delivery (cookie vs body) is centralised in build_token_response so
+    # login, /refresh, and the code exchange share one delivery contract.
     jafaal_audit.record(
         jafaal_audit.Event.LOGIN_SUCCESS,
         user_id=user.id,
         username=user.username,
         session_id=session_id,
-        client_type=client_type,
+        client_id=client.client_id,
         ip=network.get_ip_address(request),
     )
 
@@ -398,92 +409,12 @@ def complete_login(
         )
     return build_token_response(
         response,
-        client_type,
+        client,
         session_id,
         access_token,
         access_token_exp,
         refresh_token,
         refresh_token_exp,
         csrf_token,
-    )
-
-
-def create_mobile_pkce_session_response(
-    response: Response,
-    request: Request,
-    user: jafaal_ports.UserProtocol,
-    code_challenge: str,
-    code_challenge_method: str,
-    db: Session,
-) -> jafaal_schema.MobileSessionResponse:
-    """
-    Create a session for mobile password login with PKCE exchange flow.
-
-    This function is exclusively for mobile clients. Web clients should use
-    complete_login() which provides secure token delivery via httpOnly cookies.
-
-    Similar to SSO flow, but for password authentication.
-    Returns session_id instead of tokens—tokens obtained via
-    POST /public/idp/session/{session_id}/tokens with code_verifier.
-
-    Args:
-        response: FastAPI response object
-        request: FastAPI request object
-        user: Authenticated user object
-        code_challenge: PKCE code challenge (base64url-encoded SHA256)
-        code_challenge_method: PKCE method (must be S256)
-        db: Database session
-
-    Returns:
-        jafaal_schema.MobileSessionResponse: Contains session_id and mfa_required flag
-
-    Raises:
-        JafaalError: If PKCE parameters are invalid
-
-    Notes:
-        - Mobile-only: Web clients use complete_login() with httpOnly cookies
-        - Session created without tokens (pending exchange)
-        - OAuth state record stores PKCE challenge
-        - Client must POST to /public/idp/session/{session_id}/tokens
-        - Reuses existing token exchange endpoint from SSO flow
-    """
-    # Validate PKCE challenge format
-    if code_challenge_method != "S256":
-        raise jafaal_exceptions.InvalidRequestError("Only S256 PKCE method is supported")
-
-    idp_utils.validate_pkce_challenge(code_challenge, code_challenge_method)
-
-    # Generate session ID
-    session_id = str(uuid4())
-
-    # Create OAuth state record for PKCE (reuse SSO infrastructure)
-    state_id, nonce = oauth_state_utils.create_state_id_and_nonce()
-    client_ip = network.get_ip_address(request)
-
-    oauth_state_crud.create_oauth_state(
-        db=db,
-        state_id=state_id,
-        nonce=nonce,
-        client_type="mobile",  # This function is mobile-only
-        ip_address=client_ip,
-        redirect_path=None,
-        code_challenge=code_challenge,
-        code_challenge_method=code_challenge_method,
-    )
-
-    # Create session linked to oauth_state (enables PKCE exchange)
-    jafaal_sessions_utils.create_session(
-        session_id,
-        user,
-        request,
-        None,  # No refresh token yet
-        db,
-        oauth_state_id=state_id,
-    )
-
-    # Return session_id for token exchange (no tokens yet)
-    return jafaal_schema.MobileSessionResponse(
-        session_id=session_id,
-        mfa_required=False,
-        message=("Complete authentication by exchanging tokens at /public/idp/session/{session_id}/tokens"),
+        granted_scope(user, client),
     )

@@ -274,6 +274,88 @@ class InvalidMFACodeError(InvalidRequestError):
     default_detail = "Invalid MFA code."
 
 
+class OAuthError(InvalidRequestError):
+    """An RFC 6749 §5.2 error response from the token endpoint.
+
+    OAuth defines its *own* error wire format, and a conformant client parses
+    that and nothing else: a JSON body with an ``error`` member drawn from a
+    fixed registry, optionally ``error_description`` and ``error_uri``. Putting
+    an OAuth error code inside a human-readable ``detail`` string looks
+    conformant and is not — no client library will ever read it.
+
+    So this carries the code as data, and the edge handler renders the OAuth
+    shape for it while every other :class:`JafaalError` keeps JAFAAL's own
+    ``{"detail", "code"}`` shape. The two audiences are different: OAuth clients
+    read this one, application front-ends read the other.
+
+    Attributes:
+        oauth_error: The RFC 6749 §5.2 error code (e.g. ``invalid_grant``).
+    """
+
+    code = "oauth_error"
+    default_detail = "The request is invalid."
+    #: Rendered as the ``error`` member; overridden per instance.
+    oauth_error: str = "invalid_request"
+
+    def __init__(
+        self,
+        oauth_error: str,
+        detail: str | None = None,
+        *,
+        status_code: int | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        self.oauth_error = oauth_error
+        if status_code is not None:
+            self.status_code = status_code
+        super().__init__(detail, headers=headers)
+
+
+class InvalidClientError(OAuthError):
+    """RFC 6749 §5.2 ``invalid_client`` — the client is unknown or unauthorised.
+
+    401 rather than 400, as §5.2 specifies for a client-authentication failure.
+    """
+
+    code = "invalid_client"
+
+    def __init__(self, detail: str | None = None, *, headers: dict[str, str] | None = None) -> None:
+        super().__init__("invalid_client", detail, status_code=401, headers=headers)
+
+
+class InvalidGrantError(OAuthError):
+    """RFC 6749 §5.2 ``invalid_grant``.
+
+    The authorization code or refresh token is invalid, expired, revoked, was
+    issued to another client, or its ``redirect_uri`` does not match. Every one
+    of those maps to the *same* code deliberately: distinguishing them turns the
+    token endpoint into an oracle for probing which codes and clients exist.
+    """
+
+    code = "invalid_grant"
+
+    def __init__(self, detail: str | None = None, *, headers: dict[str, str] | None = None) -> None:
+        super().__init__("invalid_grant", detail, headers=headers)
+
+
+class UnsupportedGrantTypeError(OAuthError):
+    """RFC 6749 §5.2 ``unsupported_grant_type``."""
+
+    code = "unsupported_grant_type"
+
+    def __init__(self, detail: str | None = None, *, headers: dict[str, str] | None = None) -> None:
+        super().__init__("unsupported_grant_type", detail, headers=headers)
+
+
+class InvalidScopeError(OAuthError):
+    """RFC 6749 §5.2 ``invalid_scope`` — the requested scope is unknown or excessive."""
+
+    code = "invalid_scope"
+
+    def __init__(self, detail: str | None = None, *, headers: dict[str, str] | None = None) -> None:
+        super().__init__("invalid_scope", detail, headers=headers)
+
+
 class PasswordPolicyError(UnprocessableError):
     """A password failed the configured policy (422)."""
 
@@ -314,13 +396,17 @@ __all__ = [
     "IdentityProviderTimeoutError",
     "InternalError",
     "InvalidApiKeyError",
+    "InvalidClientError",
     "InvalidCredentialsError",
+    "InvalidGrantError",
     "InvalidMFACodeError",
     "InvalidRequestError",
+    "InvalidScopeError",
     "InvalidTokenError",
     "JafaalError",
     "MissingScopeError",
     "NotFoundError",
+    "OAuthError",
     "PasswordPolicyError",
     "PreconditionFailedError",
     "RateLimitedError",
@@ -331,6 +417,7 @@ __all__ = [
     "StoreUnavailableError",
     "TokenExpiredError",
     "UnprocessableError",
+    "UnsupportedGrantTypeError",
     "UpstreamError",
     "UpstreamTimeoutError",
 ]

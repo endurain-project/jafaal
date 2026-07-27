@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import functools
 
-from conftest import replace_settings
+from conftest import WEB_CLIENT_ID, replace_settings
 from fastapi import FastAPI, Response, Security
 from fastapi.testclient import TestClient
 
@@ -16,14 +16,11 @@ import jafaal.api_keys.schema as api_keys_schema
 import jafaal.rate_limit as rate_limit
 import jafaal.utils as jafaal_utils
 
-WEB = {"X-Client-Type": "web"}
-
 
 def _login(client, username="alice", password="Str0ng!Pass"):
     return client.post(
         "/api/v1/auth/login",
-        data={"username": username, "password": password},
-        headers=WEB,
+        data={"username": username, "password": password, "client_id": WEB_CLIENT_ID},
     )
 
 

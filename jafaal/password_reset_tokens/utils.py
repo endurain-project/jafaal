@@ -147,7 +147,7 @@ def use_password_reset_token(
     db_user = jafaal_user_guards.get_user_by_id_or_404(token_user_id, db)
     hashed_password = jafaal_password_policy.validate_and_hash_for_user(
         identity_service,
-        db_user.is_superuser,
+        jafaal_ports.is_superuser(db_user),
         new_password,
     )
 

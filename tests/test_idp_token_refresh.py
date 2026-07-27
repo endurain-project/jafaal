@@ -269,7 +269,7 @@ def test_revoke_success(db, make_user, monkeypatch):
     # runs the SSRF/HTTPS pre-flight; stub it (the guard has its own tests).
     _no_ssrf(monkeypatch)
     # Seed the discovery cache so the revocation endpoint resolves without HTTP.
-    svc._discovery_cache[idp.id] = {"revocation_endpoint": f"{ISSUER}/revoke"}
-    svc._cache_expiry[idp.id] = datetime.now(UTC) + timedelta(hours=1)
-    svc._http_client = _FakeHttpClient(_FakeResponse(status_code=200))
+    svc.discovery._discovery_cache[idp.id] = {"revocation_endpoint": f"{ISSUER}/revoke"}
+    svc.discovery._cache_expiry[idp.id] = datetime.now(UTC) + timedelta(hours=1)
+    svc.discovery._http_client = _FakeHttpClient(_FakeResponse(status_code=200))
     assert asyncio.run(svc.revoke_idp_token(user.id, idp.id, db)) is True

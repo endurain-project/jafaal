@@ -43,12 +43,9 @@ endpoint, and a revocation endpoint. This document advertises exactly that:
   absent, and JAFAAL's clients are public: PKCE, not a client credential, is what
   binds a code to its requester.
 
-**Non-standard requirement.** JAFAAL's native request shape additionally uses an
-``X-Client-Type`` header (``web`` or ``mobile``), because refresh-token delivery
-differs between the two (``HttpOnly`` cookie vs response body). A stock OAuth
-client has no way to guess that, so the token endpoint infers ``mobile`` for an
-RFC 6749 form request — and the header is advertised as the
-``jafaal_required_request_headers`` extension member for everything else.
+The document carries no extension members. Everything a client needs to drive
+JAFAAL is here in standard fields; anything that would need a bespoke one is a
+sign the endpoint should have been designed differently.
 """
 
 from __future__ import annotations
@@ -117,12 +114,6 @@ def get_authorization_server_metadata(*, api_root: str, auth_prefix: str = "/aut
         "revocation_endpoint_auth_methods_supported": ["none"],
         # PKCE is mandatory, and ``plain`` is refused.
         "code_challenge_methods_supported": ["S256"],
-        # Extension member (RFC 8414 §2 permits additional metadata). Headers a
-        # client sending JAFAAL's *native* request shape must set — a standard
-        # authorization-code or refresh request needs none of them.
-        "jafaal_required_request_headers": {
-            "X-Client-Type": ["web", "mobile"],
-        },
     }
 
 

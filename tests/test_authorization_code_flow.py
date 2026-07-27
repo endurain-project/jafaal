@@ -40,10 +40,14 @@ CLIENT_ID = "com.example.app"
 REDIRECT_URI = "com.example.app://oauth/callback"
 OTHER_REDIRECT_URI = "com.example.app://oauth/other"
 
+#: A second *registered* client, so "the code belongs to someone else" can be
+#: tested without also tripping the unregistered-client check.
+SECOND_CLIENT_ID = "com.other.app"
+
 
 @pytest.fixture(autouse=True)
 def _registered_client():
-    """Register a public client for the duration of each test."""
+    """Register two public clients for the duration of each test."""
     original = jafaal.get_settings()
     jafaal.configure(
         replace_settings(
@@ -53,6 +57,11 @@ def _registered_client():
                     client_id=CLIENT_ID,
                     redirect_uris=(REDIRECT_URI, OTHER_REDIRECT_URI),
                     name="Example App",
+                ),
+                jafaal.OAuthClient(
+                    client_id=SECOND_CLIENT_ID,
+                    redirect_uris=("com.other.app://oauth/callback",),
+                    name="Other App",
                 ),
             ),
         )
@@ -111,8 +120,6 @@ def _stub_callback(monkeypatch, user):
             "user": user,
             "token_data": {},
             "userinfo": {"sub": "idp-subject"},
-            "redirect_path": oauth_state.redirect_path,
-            "client_type": oauth_state.client_type,
         }
 
     monkeypatch.setattr(idp_service.idp_service, "handle_callback", _handle_callback)
@@ -126,7 +133,7 @@ def _complete_authorization(client, monkeypatch, make_user, *, state="opaque-sta
 
     verifier, challenge = _pkce()
     started = _authorize(client, challenge=challenge, state=state)
-    assert started.status_code == 307
+    assert started.status_code == 302
     upstream_state = parse_qs(urlsplit(started.headers["location"]).query)["state"][0]
 
     landed = client.get(
@@ -134,7 +141,7 @@ def _complete_authorization(client, monkeypatch, make_user, *, state="opaque-sta
         params={"code": "upstream-code", "state": upstream_state},
         follow_redirects=False,
     )
-    assert landed.status_code == 307
+    assert landed.status_code == 302
     target = urlsplit(landed.headers["location"])
     query = parse_qs(target.query)
 
@@ -170,7 +177,7 @@ def test_full_authorization_code_flow_issues_tokens(client, monkeypatch, make_us
 
     assert response.status_code == 200
     body = response.json()
-    assert body["token_type"] == "bearer"
+    assert body["token_type"] == "Bearer"
     assert body["access_token"]
     # A registered client redeems over HTTP and gets the refresh token in the
     # body — it never receives it as a browser cookie.
@@ -190,7 +197,7 @@ def test_issued_tokens_authenticate_a_request(client, monkeypatch, make_user):
 
     me = client.get(
         "/api/v1/auth/sessions/user/1",
-        headers={"Authorization": f"Bearer {access}", "X-Client-Type": "mobile"},
+        headers={"Authorization": f"Bearer {access}"},
     )
     # 200 or 403 both prove the token authenticated; 401 would mean it did not.
     assert me.status_code != 401
@@ -211,7 +218,8 @@ def test_unregistered_client_is_refused_without_redirecting(client, monkeypatch,
     _, challenge = _pkce()
     response = _authorize(client, challenge=challenge, client_id="not.registered")
 
-    assert response.status_code == 400
+    assert response.status_code == 401
+    assert response.json()["error"] == "invalid_client"
     assert "location" not in response.headers
 
 
@@ -244,19 +252,52 @@ def test_redirect_uri_matching_is_exact_not_prefix(client):
 
 
 def test_implicit_and_hybrid_response_types_are_refused(client):
+    # Reported by redirect: the client and redirect URI already validated, so
+    # RFC 6749 §4.1.2.1 requires the error to reach the waiting client.
     _create_idp()
     _, challenge = _pkce()
     for response_type in ("token", "id_token", "code token", "code id_token"):
         response = _authorize(client, challenge=challenge, response_type=response_type)
-        assert response.status_code == 400, response_type
+        assert response.status_code == 302, response_type
+        query = parse_qs(urlsplit(response.headers["location"]).query)
+        assert query["error"] == ["unsupported_response_type"], response_type
+        assert query["state"] == ["opaque-state"], response_type
 
 
 def test_pkce_is_mandatory_and_plain_is_refused(client):
     _create_idp()
     _, challenge = _pkce()
 
-    assert _authorize(client, challenge=challenge, code_challenge_method="plain").status_code == 400
-    assert _authorize(client, challenge="short").status_code == 400
+    plain = _authorize(client, challenge=challenge, code_challenge_method="plain")
+    assert plain.status_code == 302
+    assert parse_qs(urlsplit(plain.headers["location"]).query)["error"] == ["invalid_request"]
+
+    short = _authorize(client, challenge="short")
+    assert short.status_code == 302
+    assert parse_qs(urlsplit(short.headers["location"]).query)["error"] == ["invalid_request"]
+
+
+def test_an_unknown_idp_is_reported_by_redirect(client):
+    # There is no OAuth error code for "your idp parameter is wrong", but the
+    # client still has to learn the flow failed rather than hang on its
+    # callback listener.
+    _create_idp()
+    _, challenge = _pkce()
+    response = _authorize(client, challenge=challenge, idp="does-not-exist")
+
+    assert response.status_code == 302
+    query = parse_qs(urlsplit(response.headers["location"]).query)
+    assert query["error"] == ["invalid_request"]
+    assert query["state"] == ["opaque-state"]
+
+
+def test_a_scope_outside_the_catalog_is_refused(client):
+    _create_idp()
+    _, challenge = _pkce()
+    response = _authorize(client, challenge=challenge, scope="not:a:real:scope")
+
+    assert response.status_code == 302
+    assert parse_qs(urlsplit(response.headers["location"]).query)["error"] == ["invalid_scope"]
 
 
 # --------------------------------------------------------------------------- #
@@ -268,19 +309,51 @@ def test_wrong_code_verifier_is_refused(client, monkeypatch, make_user):
     _verifier, code, _ = _complete_authorization(client, monkeypatch, make_user)
     other_verifier, _ = _pkce()
 
-    assert _redeem(client, code=code, verifier=other_verifier).status_code == 400
+    response = _redeem(client, code=code, verifier=other_verifier)
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_grant"
+
+
+def test_every_redemption_failure_returns_the_same_error(client, monkeypatch, make_user):
+    """Distinguishing failures would make the token endpoint a probing oracle.
+
+    "Unknown code", "issued to a different *registered* client", "wrong
+    redirect_uri", and "wrong verifier" all answer ``invalid_grant`` with the
+    same description, so an attacker learns nothing about which codes exist or
+    who they belong to. (An *unregistered* client is a different case — RFC 6749
+    §5.2 gives it ``invalid_client``, and it reveals only what the caller already
+    told us.)
+    """
+    verifier, code, _ = _complete_authorization(client, monkeypatch, make_user)
+    other_verifier, _ = _pkce()
+
+    bodies = [
+        _redeem(client, code=secrets.token_urlsafe(32), verifier=verifier).json(),
+        _redeem(client, code=code, verifier=verifier, client_id=SECOND_CLIENT_ID).json(),
+        _redeem(client, code=code, verifier=verifier, redirect_uri=OTHER_REDIRECT_URI).json(),
+        _redeem(client, code=code, verifier=other_verifier).json(),
+    ]
+    assert {b["error"] for b in bodies} == {"invalid_grant"}
+    assert len({b["error_description"] for b in bodies}) == 1
 
 
 def test_code_cannot_be_redeemed_by_another_client(client, monkeypatch, make_user):
     """A stolen code is useless to a client it was not issued to."""
     verifier, code, _ = _complete_authorization(client, monkeypatch, make_user)
 
-    response = _redeem(client, code=code, verifier=verifier, client_id="com.other.app")
+    response = _redeem(client, code=code, verifier=verifier, client_id=SECOND_CLIENT_ID)
 
     assert response.status_code == 400
+    assert response.json()["error"] == "invalid_grant"
     # And the code survives for its rightful owner — a failed probe must not
     # burn it.
     assert _redeem(client, code=code, verifier=verifier).status_code == 200
+
+
+def test_an_unregistered_client_is_invalid_client_not_invalid_grant(client):
+    response = _redeem(client, code="x" * 43, verifier="y" * 43, client_id="not.registered")
+    assert response.status_code == 401
+    assert response.json()["error"] == "invalid_client"
 
 
 def test_code_cannot_be_redeemed_against_a_different_registered_uri(client, monkeypatch, make_user):
@@ -301,7 +374,8 @@ def test_authorization_code_is_single_use(client, monkeypatch, make_user):
 
     assert _redeem(client, code=code, verifier=verifier).status_code == 200
     replay = _redeem(client, code=code, verifier=verifier)
-    assert replay.status_code in (400, 409)
+    assert replay.status_code == 400
+    assert replay.json()["error"] == "invalid_grant"
 
 
 def test_unknown_code_is_refused(client):
@@ -319,7 +393,16 @@ def test_missing_parameters_are_reported(client):
     for omitted in ("code", "code_verifier", "redirect_uri", "client_id"):
         response = client.post(TOKEN, data={**complete, omitted: ""})
         assert response.status_code == 400, omitted
-        assert omitted in response.json()["detail"]
+        body = response.json()
+        assert body["error"] == "invalid_request", omitted
+        assert omitted in body["error_description"], omitted
+
+
+def test_token_endpoint_errors_are_not_cacheable(client):
+    # RFC 6749 §5.1: token responses carry Cache-Control: no-store, so no
+    # intermediary retains an authorization outcome.
+    response = client.post(TOKEN, data={"grant_type": "password"})
+    assert response.headers["cache-control"] == "no-store"
 
 
 def test_the_code_is_not_stored_in_plaintext(client, monkeypatch, make_user):
@@ -339,16 +422,16 @@ def test_the_code_is_not_stored_in_plaintext(client, monkeypatch, make_user):
 
 
 # --------------------------------------------------------------------------- #
-# Interaction with the native flow
+# One flow, no side doors
 # --------------------------------------------------------------------------- #
 
 
-def test_a_code_flow_session_cannot_be_redeemed_by_session_id(client, monkeypatch, make_user):
-    """The native exchange must not be a second, weaker door into a code flow.
+def test_there_is_no_session_id_exchange_endpoint(client, monkeypatch, make_user):
+    """The native exchange is deleted, not merely refused for code flows.
 
-    ``/session/{id}/tokens`` checks PKCE but knows nothing about ``client_id`` or
-    ``redirect_uri``, so honouring it here would silently drop two of the four
-    bindings the authorization-code flow relies on.
+    It checked PKCE but knew nothing about ``client_id`` or ``redirect_uri``, so
+    it was a second door that silently dropped two of the four bindings. A
+    refusal would still be a code path to get wrong; removal is not.
     """
     import jafaal.sessions.models as sessions_models
 
@@ -361,9 +444,8 @@ def test_a_code_flow_session_cannot_be_redeemed_by_session_id(client, monkeypatc
     response = client.post(
         f"/api/v1/public/idp/session/{session_id}/tokens",
         json={"code_verifier": verifier},
-        headers={"X-Client-Type": "mobile"},
     )
-    assert response.status_code == 400
+    assert response.status_code == 404
 
 
 def test_refresh_grant_still_works_on_the_token_endpoint(client, monkeypatch, make_user):
@@ -381,10 +463,29 @@ def test_refresh_grant_still_works_on_the_token_endpoint(client, monkeypatch, ma
     assert refreshed.json()["refresh_token"] != issued["refresh_token"], "refresh must rotate"
 
 
+def test_the_refreshed_token_keeps_the_original_clients_delivery_mode(client, monkeypatch, make_user):
+    """The client is fixed at issuance and read from the token, not the request.
+
+    Otherwise a caller holding a body-delivery refresh token could ask for the
+    cookie shape (or vice versa) and change where the next refresh token lands.
+    """
+    verifier, code, _ = _complete_authorization(client, monkeypatch, make_user)
+    issued = _redeem(client, code=code, verifier=verifier).json()
+
+    refreshed = client.post(
+        TOKEN,
+        data={"grant_type": "refresh_token", "refresh_token": issued["refresh_token"]},
+    )
+
+    assert refreshed.json()["refresh_token"]
+    assert "csrf_token" not in refreshed.json()
+    assert "jafaal_refresh_token" not in refreshed.cookies
+
+
 def test_unsupported_grant_type_is_rejected(client):
     response = client.post(TOKEN, data={"grant_type": "password", "username": "a", "password": "b"})
     assert response.status_code == 400
-    assert "unsupported_grant_type" in response.json()["detail"]
+    assert response.json()["error"] == "unsupported_grant_type"
 
 
 def test_refresh_grant_without_a_token_is_a_bad_request(client):
@@ -417,7 +518,7 @@ def test_a_failed_callback_reports_the_error_to_the_clients_redirect_uri(client,
         follow_redirects=False,
     )
 
-    assert landed.status_code == 307
+    assert landed.status_code == 302
     target = urlsplit(landed.headers["location"])
     assert f"{target.scheme}://{target.netloc}{target.path}" == REDIRECT_URI
     query = parse_qs(target.query)

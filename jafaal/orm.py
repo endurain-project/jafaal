@@ -2,13 +2,12 @@
 
 **Option B (the host owns the ``Base``).** JAFAAL's companion tables and the host
 application's user model must live in a *single* declarative registry so that
-string relationships (``relationship("Users", ...)``) and cross-table foreign keys
-(``ForeignKey("users.id")``) resolve. The host owns that registry; JAFAAL maps its
-models **into** it.
+relationships and cross-table foreign keys (``ForeignKey("users.id")``) resolve.
+The host owns that registry; JAFAAL maps its models **into** it.
 
 Host applications:
 
-1. Own a declarative base and build their ``Users`` model on it::
+1. Own a declarative base and build their user model on it::
 
        from sqlalchemy.orm import DeclarativeBase
        from jafaal import IntPKUserMixin
@@ -16,21 +15,22 @@ Host applications:
        class Base(DeclarativeBase):
            ...  # the host's own base (naming conventions, schema, ...)
 
-       class Users(IntPKUserMixin, Base):
+       class Account(IntPKUserMixin, Base):
            __tablename__ = "users"
            # ...app-specific profile columns...
 
-   The class **must** be named ``Users`` and mapped to the ``users`` table — that
-   is how JAFAAL's models resolve their relationships/foreign keys. The reverse
+   The class may be called anything; it is handed to :func:`map_models`
+   explicitly, so JAFAAL never looks it up by name. It must map to the ``users``
+   table, which is what JAFAAL's foreign keys reference. The reverse
    relationships (``users_sessions``, ``local_credential`` …) are supplied by the
    mixin, so the host does not declare them. (A host that does not want to own a
-   base may build ``Users`` on JAFAAL's convenience :data:`Base` and call
-   :func:`map_models` with no argument.)
+   base may build its user model on JAFAAL's convenience :data:`Base` and call
+   :func:`map_models` without one.)
 
 2. Map JAFAAL's tables into that base's registry, once, at startup::
 
        import jafaal
-       jafaal.map_models(Base)   # define + map JAFAAL's companion tables
+       jafaal.map_models(Base, user_model=Account)
 
    This must happen **before** :func:`jafaal.create_auth_router` or any DB use —
    importing a JAFAAL model (or CRUD/router) before it is a configuration error.
@@ -61,10 +61,11 @@ import logging
 import uuid
 from collections.abc import Callable, Coroutine, Generator
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, Request, Response
 from fastapi.routing import APIRoute
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import DeclarativeBase, Mapper, Session, sessionmaker
 
 from jafaal._core.registry import ConfigSlot
@@ -107,7 +108,7 @@ class Base(DeclarativeBase):
     Under Option B the **host** owns the registry: define your own
     :class:`~sqlalchemy.orm.DeclarativeBase`, build ``Users`` on it, and pass it
     to :func:`map_models`. Use this default base only if you would rather not own
-    one — build ``Users`` on it and call ``map_models()`` with no argument.
+    one — build the user model on it and call ``map_models()`` without a base.
     """
 
 
@@ -120,6 +121,27 @@ mapper_registry = Base.registry
 # The active declarative base JAFAAL's models are mapped onto; ``None`` until
 # ``map_models`` runs. Host-owned under Option B, or :data:`Base` by default.
 _active_base: type[DeclarativeBase] | None = None
+
+# The host's user class, supplied to ``map_models``. Every JAFAAL model resolves
+# its ``users`` relationship through this, which is what frees the host to name
+# the class whatever fits its own domain.
+_user_model: ConfigSlot[type] = ConfigSlot(
+    missing_message=(
+        "JAFAAL does not know the host's user model. Call jafaal.map_models(Base, user_model=YourUserClass) at startup."
+    )
+)
+
+
+def host_user_model() -> type:
+    """Return the host's user class, for a relationship target.
+
+    Used as ``relationship(host_user_model, ...)`` in JAFAAL's own models.
+    SQLAlchemy calls it lazily at ``registry.configure()`` time, so the target
+    resolves through the host's registration rather than through a hard-coded
+    class name.
+    """
+    return get_user_model()
+
 
 # Every module that defines a JAFAAL companion model. ``map_models`` imports each
 # (order-independent — relationships resolve by name at ``registry.configure()``),
@@ -165,39 +187,51 @@ def is_models_mapped() -> bool:
     return _active_base is not None
 
 
-def map_models(base: type[DeclarativeBase] | None = None) -> None:
+def map_models(base: type[DeclarativeBase] | None = None, *, user_model: type | None = None) -> None:
     """Define and map JAFAAL's companion tables into ``base``'s registry.
 
-    Call once at startup, **after** defining your ``Users`` model and **before**
+    Call once at startup, **after** defining your user model and **before**
     :func:`jafaal.create_auth_router` or any database use. JAFAAL's models are
-    mapped onto the base you pass, so your ``Users`` model and JAFAAL's tables
-    share one registry — which is what resolves ``relationship("Users")`` and the
-    ``users.id`` foreign keys.
+    mapped onto the base you pass, so your user model and JAFAAL's tables share
+    one registry — which is what resolves the ``users.id`` foreign keys.
 
     Args:
         base: The host's :class:`~sqlalchemy.orm.DeclarativeBase` subclass; your
-            ``Users`` model must be built on it. Omit it to use JAFAAL's own
+            user model must be built on it. Omit it to use JAFAAL's own
             :data:`Base` (the convenience default).
+        user_model: The host's user class. Passing it explicitly is what lets the
+            class be called anything — ``Account``, ``Member``, ``Person``.
+            Omitted, JAFAAL falls back to whichever class is mapped to the
+            ``users`` table, which is unambiguous but silently constrains the
+            host's schema; pass it.
 
     Raises:
-        RuntimeError: If called again with a different base, or if a model
-            references a class (e.g. ``Users``) that is not mapped on ``base``.
+        RuntimeError: If called again with a different base or user model, or if
+            a model references a class that is not mapped on ``base``.
     """
     global _active_base
     target = base if base is not None else Base
     if _active_base is not None:
         if _active_base is not target:
             raise RuntimeError("jafaal.map_models() was already called with a different base; call it once at startup.")
+        if user_model is not None and _user_model.is_configured() and _user_model.get() is not user_model:
+            raise RuntimeError(
+                "jafaal.map_models() was already called with a different user_model; call it once at startup."
+            )
         return
     _active_base = target
+    if user_model is not None:
+        _user_model.configure(user_model)
     try:
         for module_name in _MODEL_MODULES:
             importlib.import_module(module_name)
         # Resolve every mapper/relationship now so misconfiguration (e.g. no
-        # Users mapped on this base) fails fast at startup, not on first query.
+        # user model mapped on this base) fails fast at startup, not on first
+        # query.
         target.registry.configure()
     except Exception:
         _active_base = None  # let the host fix the problem and retry
+        _user_model.reset()
         raise
 
 
@@ -452,44 +486,45 @@ def session_scope() -> Generator[Session]:
 
 
 def _resolve_user_mapper() -> Mapper[Any]:
-    """Return the mapper of the host's user class (the class mapped to ``users``).
+    """Return the mapper of the host's user class.
 
-    JAFAAL requires the host user model to be mapped to the ``users`` table on
-    the active base (see :mod:`jafaal.user_model`), so it is unambiguous within
-    the process.
+    Uses the class the host passed to :func:`map_models`. Falling back to "the
+    class mapped to ``users``" keeps the zero-argument call working, but that
+    fallback is why the class had to be discoverable by schema in the first
+    place — pass ``user_model=`` and the host owns the naming entirely.
 
     Raises:
-        RuntimeError: If models are not mapped, or no class is mapped to the
-            ``users`` table.
+        RuntimeError: If models are not mapped, or no user class can be found.
     """
+    if _user_model.is_configured():
+        return cast("Mapper[Any]", sa_inspect(_user_model.get()))
     for mapper in get_active_base().registry.mappers:
         table = mapper.local_table
         if table is not None and getattr(table, "name", None) == "users":
             return mapper
     raise RuntimeError(
-        "JAFAAL could not find a mapped class for the 'users' table. Build your "
-        "Users model on your declarative base and pass it to jafaal.map_models(...) "
-        "(see jafaal.user_model)."
+        "JAFAAL could not find the host's user model. Pass it explicitly — "
+        "jafaal.map_models(Base, user_model=YourUserClass) — or map a class to the "
+        "'users' table (see jafaal.user_model)."
     )
+
+
+def get_user_model() -> type:
+    """Return the host's user class.
+
+    The class the host passed to :func:`map_models` (or, failing that, whichever
+    class is mapped to ``users``). This is how JAFAAL's own models resolve their
+    ``users`` relationship, so the host class needs no particular name.
+
+    Raises:
+        RuntimeError: If no user model has been registered or mapped yet.
+    """
+    return _resolve_user_mapper().class_
 
 
 def user_id_python_type() -> type:
     """Return the Python type of the host user table's primary key (``int``/``UUID``)."""
     return _resolve_user_mapper().primary_key[0].type.python_type
-
-
-def get_user_model() -> type:
-    """Return the host's user class (the class mapped to the ``users`` table).
-
-    Resolves the single class the host built on :data:`Base` and mapped to
-    ``users`` (see :mod:`jafaal.user_model`). Useful for reference adapters such
-    as :class:`jafaal.adapters.SqlAlchemyUserRepository` that construct or query
-    the user row without the host wiring the class in explicitly.
-
-    Raises:
-        RuntimeError: If no class is mapped to the ``users`` table yet.
-    """
-    return _resolve_user_mapper().class_
 
 
 def jafaal_table_names() -> frozenset[str]:

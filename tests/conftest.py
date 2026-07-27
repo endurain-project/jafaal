@@ -26,6 +26,7 @@ from sqlalchemy.pool import StaticPool
 
 import jafaal
 import jafaal.orm as jafaal_orm
+import jafaal.scopes as jafaal_scopes
 from jafaal import IntPKUserMixin
 
 # --------------------------------------------------------------------------- #
@@ -37,17 +38,27 @@ class Base(DeclarativeBase):
     """Host-owned declarative base (Option B: the host owns the registry)."""
 
 
-class Users(IntPKUserMixin, Base):
-    """Minimal host user model used across the test suite."""
+class Account(IntPKUserMixin, Base):
+    """Minimal host user model used across the test suite.
+
+    Deliberately *not* called ``Users``: JAFAAL takes the class explicitly, so
+    the suite proves the library imposes no naming convention on the host's
+    domain model.
+    """
 
     __tablename__ = "users"
 
     display_name: Mapped[str | None] = mapped_column(String(250), nullable=True)
 
 
+#: Backwards-compatible alias for the tests and adapters that refer to the host
+#: user class by a generic name.
+Users = Account
+
+
 # Map JAFAAL's companion tables into the host-owned registry once, at import time
 # — before any JAFAAL model / CRUD module is imported (below or by test modules).
-jafaal.map_models(Base)
+jafaal.map_models(Base, user_model=Account)
 
 
 # --------------------------------------------------------------------------- #
@@ -201,6 +212,69 @@ def replace_settings(original: jafaal.AuthSettings, **overrides) -> jafaal.AuthS
 
 
 # --------------------------------------------------------------------------- #
+# Registered clients
+# --------------------------------------------------------------------------- #
+
+#: The browser client: refresh token as an ``HttpOnly`` cookie, CSRF token in
+#: the body (RFC 9700 §7.2).
+WEB_CLIENT_ID = "test-web"
+
+#: A native/public client (RFC 8252): the literal RFC 6749 §5.1 response, every
+#: token in the body.
+NATIVE_CLIENT_ID = "test-native"
+
+#: The native client's registered redirect URI, matched byte-for-byte.
+NATIVE_REDIRECT_URI = "com.example.app://callback"
+
+#: A client with a scope ceiling, for asserting that a token is narrowed to the
+#: intersection of what the user holds and what the client may receive.
+LIMITED_CLIENT_ID = "test-limited"
+
+OAUTH_CLIENTS: tuple[jafaal.OAuthClient, ...] = (
+    jafaal.OAuthClient(
+        client_id=WEB_CLIENT_ID,
+        redirect_uris=("https://app.test/callback",),
+        token_delivery="cookie",
+        name="Test web app",
+    ),
+    jafaal.OAuthClient(
+        client_id=NATIVE_CLIENT_ID,
+        redirect_uris=(NATIVE_REDIRECT_URI, "http://127.0.0.1:8765/callback"),
+        token_delivery="body",
+        name="Test native app",
+    ),
+    jafaal.OAuthClient(
+        client_id=LIMITED_CLIENT_ID,
+        redirect_uris=("com.example.limited://callback",),
+        token_delivery="body",
+        scopes=(jafaal_scopes.PROFILE,),
+        name="Test limited app",
+    ),
+)
+
+
+def login(
+    client,
+    username: str,
+    password: str,
+    *,
+    client_id: str = WEB_CLIENT_ID,
+    **kwargs,
+):
+    """POST ``/auth/login`` for ``client_id``.
+
+    Every token-issuing request names the registered client it is for, because
+    the registration — not the request — decides delivery mode and scope ceiling.
+    Wrapped here so a change to that contract is one edit, not one per test.
+    """
+    return client.post(
+        "/api/v1/auth/login",
+        data={"username": username, "password": password, "client_id": client_id},
+        **kwargs,
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Fixtures
 # --------------------------------------------------------------------------- #
 
@@ -238,6 +312,7 @@ def _configure_jafaal(engine):
             # Not a deployed environment → refresh cookies are not ``Secure``,
             # so the http TestClient stores them.
             environment="test",
+            oauth_clients=OAUTH_CLIENTS,
         )
     )
     jafaal.configure_sessionmaker(sessionmaker(bind=engine, autoflush=False, expire_on_commit=False))

@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 
 import jafaal._internal.internal_dependencies as jafaal_internal_dependencies
 import jafaal._internal.security_stores as jafaal_security_stores
+import jafaal._internal.services.authorization_code_service as authorization_code_service
 import jafaal._internal.token_manager as jafaal_token_manager
 import jafaal._internal.user_guards as jafaal_user_guards
 import jafaal.audit as jafaal_audit
@@ -181,10 +182,6 @@ def complete_second_factor(
     response: Response,
     request: Request,
     data: webauthn_schema.WebAuthnSecondFactorComplete,
-    client_type: Annotated[
-        jafaal_internal_dependencies.ClientType,
-        Depends(jafaal_internal_dependencies.get_client_type),
-    ],
     failed_attempts: Annotated[
         jafaal_security_stores.FailedLoginStore,
         Depends(jafaal_security_stores.get_failed_login_attempts),
@@ -200,6 +197,7 @@ def complete_second_factor(
     db: Annotated[Session, Depends(jafaal_orm.get_db)],
 ) -> dict:
     """Verify a second-factor passkey assertion and complete the login."""
+    client = authorization_code_service.resolve_login_client(data.client_id, request)
     # The ticket is the caller's proof that it satisfied the password factor;
     # resolving the pending login from it (rather than from a public username)
     # is what keeps this a genuine second factor.
@@ -259,7 +257,7 @@ def complete_second_factor(
         ip=network.get_ip_address(request),
         ceremony="second_factor",
     )
-    return jafaal_utils.complete_login(response, request, user, client_type, token_manager, db)
+    return jafaal_utils.complete_login(response, request, user, client, token_manager, db)
 
 
 # ===========================================================================
@@ -289,10 +287,6 @@ def complete_authentication(
     response: Response,
     request: Request,
     data: webauthn_schema.WebAuthnAuthenticationComplete,
-    client_type: Annotated[
-        jafaal_internal_dependencies.ClientType,
-        Depends(jafaal_internal_dependencies.get_client_type),
-    ],
     token_manager: Annotated[
         jafaal_token_manager.TokenManager,
         Depends(jafaal_token_manager.get_token_manager),
@@ -300,6 +294,7 @@ def complete_authentication(
     db: Annotated[Session, Depends(jafaal_orm.get_db)],
 ) -> dict:
     """Verify a passwordless passkey assertion and issue JAFAAL tokens."""
+    client = authorization_code_service.resolve_login_client(data.client_id, request)
     user = webauthn_service.complete_authentication(data.challenge_id, data.credential, db)
     jafaal_user_guards.check_user_is_active(user)
     jafaal_audit.record(
@@ -309,4 +304,4 @@ def complete_authentication(
         ip=network.get_ip_address(request),
         ceremony="passwordless",
     )
-    return jafaal_utils.complete_login(response, request, user, client_type, token_manager, db)
+    return jafaal_utils.complete_login(response, request, user, client, token_manager, db)

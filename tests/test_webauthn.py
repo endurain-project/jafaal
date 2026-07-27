@@ -24,7 +24,7 @@ from types import SimpleNamespace
 
 import cbor2
 import pytest
-from conftest import replace_settings
+from conftest import WEB_CLIENT_ID, replace_settings
 from cryptography.hazmat.primitives import hashes as crypto_hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
@@ -34,8 +34,6 @@ import jafaal.orm as jafaal_orm
 import jafaal.webauthn.crud as webauthn_crud
 import jafaal.webauthn.service as webauthn_service
 from jafaal._core.optional_deps import MissingDependencyError
-
-WEB = {"X-Client-Type": "web"}
 
 REG_BEGIN = "/api/v1/auth/webauthn/register/begin"
 REG_COMPLETE = "/api/v1/auth/webauthn/register/complete"
@@ -52,12 +50,14 @@ AUTH_COMPLETE = "/api/v1/public/webauthn/authenticate/complete"
 
 
 def _login(client, username="alice", password="Str0ng!Pass"):
-    return client.post("/api/v1/auth/login", data={"username": username, "password": password}, headers=WEB)
+    return client.post(
+        "/api/v1/auth/login", data={"username": username, "password": password, "client_id": WEB_CLIENT_ID}
+    )
 
 
 def _auth_headers(client, username="alice", password="Str0ng!Pass"):
     access = _login(client, username, password).json()["access_token"]
-    return {"X-Client-Type": "web", "Authorization": f"Bearer {access}"}
+    return {"Authorization": f"Bearer {access}"}
 
 
 @contextmanager
@@ -201,7 +201,7 @@ def test_user_handle_is_opaque_stable_and_per_user(make_user):
 
 def test_register_begin_requires_auth(client, make_user):
     make_user(username="alice")
-    resp = client.post(REG_BEGIN, headers=WEB)
+    resp = client.post(REG_BEGIN)
     assert resp.status_code in (401, 403)
 
 
@@ -310,8 +310,7 @@ def test_passwordless_authentication_issues_tokens(client, make_user, mock_verif
 
     resp = client.post(
         AUTH_COMPLETE,
-        json={"challenge_id": challenge_id, "credential": _assertion_credential()},
-        headers=WEB,
+        json={"challenge_id": challenge_id, "credential": _assertion_credential(), "client_id": WEB_CLIENT_ID},
     )
     assert resp.status_code == 200
     assert resp.json()["access_token"]
@@ -334,8 +333,11 @@ def test_passwordless_usernameless_flow(client, make_user, mock_verify):
 
     resp = client.post(
         AUTH_COMPLETE,
-        json={"challenge_id": begin.json()["challenge_id"], "credential": _assertion_credential()},
-        headers=WEB,
+        json={
+            "challenge_id": begin.json()["challenge_id"],
+            "credential": _assertion_credential(),
+            "client_id": WEB_CLIENT_ID,
+        },
     )
     assert resp.status_code == 200
     assert resp.json()["access_token"]
@@ -346,8 +348,11 @@ def test_passwordless_unknown_credential_rejected(client, make_user, mock_verify
     begin = client.post(AUTH_BEGIN, json={"username": "alice"})
     resp = client.post(
         AUTH_COMPLETE,
-        json={"challenge_id": begin.json()["challenge_id"], "credential": _assertion_credential(b"unknown")},
-        headers=WEB,
+        json={
+            "challenge_id": begin.json()["challenge_id"],
+            "credential": _assertion_credential(b"unknown"),
+            "client_id": WEB_CLIENT_ID,
+        },
     )
     assert resp.status_code == 401
 
@@ -357,12 +362,12 @@ def test_passwordless_challenge_is_single_use(client, make_user, mock_verify):
     _register_credential(user.id, raw_id=b"cred-1")
     begin = client.post(AUTH_BEGIN, json={"username": "alice"})
     challenge_id = begin.json()["challenge_id"]
-    payload = {"challenge_id": challenge_id, "credential": _assertion_credential()}
+    payload = {"challenge_id": challenge_id, "credential": _assertion_credential(), "client_id": WEB_CLIENT_ID}
 
-    first = client.post(AUTH_COMPLETE, json=payload, headers=WEB)
+    first = client.post(AUTH_COMPLETE, json=payload)
     assert first.status_code == 200
     # The challenge was consumed; replaying the same handle fails.
-    second = client.post(AUTH_COMPLETE, json=payload, headers=WEB)
+    second = client.post(AUTH_COMPLETE, json=payload)
     assert second.status_code == 401
 
 
@@ -372,8 +377,11 @@ def test_passwordless_inactive_user_rejected(client, make_user, mock_verify):
     begin = client.post(AUTH_BEGIN, json={"username": "alice"})
     resp = client.post(
         AUTH_COMPLETE,
-        json={"challenge_id": begin.json()["challenge_id"], "credential": _assertion_credential()},
-        headers=WEB,
+        json={
+            "challenge_id": begin.json()["challenge_id"],
+            "credential": _assertion_credential(),
+            "client_id": WEB_CLIENT_ID,
+        },
     )
     assert resp.status_code in (401, 403)
 
@@ -405,8 +413,11 @@ def test_passwordless_complete_enforces_user_verification(client, make_user, mon
     begin = client.post(AUTH_BEGIN, json={"username": "alice"})
     resp = client.post(
         AUTH_COMPLETE,
-        json={"challenge_id": begin.json()["challenge_id"], "credential": _assertion_credential()},
-        headers=WEB,
+        json={
+            "challenge_id": begin.json()["challenge_id"],
+            "credential": _assertion_credential(),
+            "client_id": WEB_CLIENT_ID,
+        },
     )
     assert resp.status_code == 200
     assert captured["require_user_verification"] is True
@@ -452,8 +463,7 @@ def test_second_factor_completes_login(client, make_user, mock_verify):
 
         resp = client.post(
             MFA_COMPLETE,
-            json={"mfa_token": mfa_token, "credential": _assertion_credential()},
-            headers=WEB,
+            json={"mfa_token": mfa_token, "credential": _assertion_credential(), "client_id": WEB_CLIENT_ID},
         )
     assert resp.status_code == 200
     assert resp.json()["access_token"]
@@ -483,8 +493,7 @@ def test_second_factor_uses_configured_user_verification(client, make_user, monk
         assert begin.json()["userVerification"] == "discouraged"
         resp = client.post(
             MFA_COMPLETE,
-            json={"mfa_token": mfa_token, "credential": _assertion_credential()},
-            headers=WEB,
+            json={"mfa_token": mfa_token, "credential": _assertion_credential(), "client_id": WEB_CLIENT_ID},
         )
     assert resp.status_code == 200
     assert captured["require_user_verification"] is False
@@ -504,8 +513,7 @@ def test_second_factor_rejects_foreign_credential(client, make_user):
         # Present Bob's credential to satisfy Alice's pending second factor.
         resp = client.post(
             MFA_COMPLETE,
-            json={"mfa_token": mfa_token, "credential": _assertion_credential(b"bob-key")},
-            headers=WEB,
+            json={"mfa_token": mfa_token, "credential": _assertion_credential(b"bob-key"), "client_id": WEB_CLIENT_ID},
         )
     assert resp.status_code == 401
     assert bob_cred is not None
@@ -519,8 +527,7 @@ def test_second_factor_complete_without_pending_login_rejected(client, make_user
         client.post(MFA_BEGIN, json={"mfa_token": "not-a-real-ticket"})
         resp = client.post(
             MFA_COMPLETE,
-            json={"mfa_token": "not-a-real-ticket", "credential": _assertion_credential()},
-            headers=WEB,
+            json={"mfa_token": "not-a-real-ticket", "credential": _assertion_credential(), "client_id": WEB_CLIENT_ID},
         )
     assert resp.status_code == 400
 
@@ -542,8 +549,7 @@ def test_second_factor_rejects_a_passkey_assertion_without_the_ticket(client, ma
         # The attacker guesses the username — the old address for this ceremony.
         resp = client.post(
             MFA_COMPLETE,
-            json={"mfa_token": "alice", "credential": _assertion_credential()},
-            headers=WEB,
+            json={"mfa_token": "alice", "credential": _assertion_credential(), "client_id": WEB_CLIENT_ID},
         )
         assert resp.status_code == 400
 
@@ -551,7 +557,6 @@ def test_second_factor_rejects_a_passkey_assertion_without_the_ticket(client, ma
         legacy = client.post(
             MFA_COMPLETE,
             json={"username": "alice", "credential": _assertion_credential()},
-            headers=WEB,
         )
         assert legacy.status_code == 422
 
@@ -691,8 +696,11 @@ def test_real_assertion_authenticates_and_advances_sign_count(client, make_user,
     challenge_id, challenge = _begin_passwordless(client)
     resp = client.post(
         AUTH_COMPLETE,
-        json={"challenge_id": challenge_id, "credential": authenticator.assert_(challenge, sign_count=5)},
-        headers=WEB,
+        json={
+            "challenge_id": challenge_id,
+            "credential": authenticator.assert_(challenge, sign_count=5),
+            "client_id": WEB_CLIENT_ID,
+        },
     )
     assert resp.status_code == 200
     assert resp.json()["access_token"]
@@ -717,8 +725,11 @@ def test_real_assertion_with_regressed_sign_count_is_rejected_as_clone(client, m
     challenge_id, challenge = _begin_passwordless(client)
     resp = client.post(
         AUTH_COMPLETE,
-        json={"challenge_id": challenge_id, "credential": authenticator.assert_(challenge, sign_count=3)},
-        headers=WEB,
+        json={
+            "challenge_id": challenge_id,
+            "credential": authenticator.assert_(challenge, sign_count=3),
+            "client_id": WEB_CLIENT_ID,
+        },
     )
     assert resp.status_code == 401
 
@@ -741,8 +752,11 @@ def test_real_assertion_replayed_sign_count_is_rejected_as_clone(client, make_us
     challenge_id, challenge = _begin_passwordless(client)
     resp = client.post(
         AUTH_COMPLETE,
-        json={"challenge_id": challenge_id, "credential": authenticator.assert_(challenge, sign_count=6)},
-        headers=WEB,
+        json={
+            "challenge_id": challenge_id,
+            "credential": authenticator.assert_(challenge, sign_count=6),
+            "client_id": WEB_CLIENT_ID,
+        },
     )
     assert resp.status_code == 401
 
@@ -763,8 +777,11 @@ def test_real_assertion_from_a_different_key_is_rejected(client, make_user):
     challenge_id, challenge = _begin_passwordless(client)
     resp = client.post(
         AUTH_COMPLETE,
-        json={"challenge_id": challenge_id, "credential": attacker.assert_(challenge, sign_count=1)},
-        headers=WEB,
+        json={
+            "challenge_id": challenge_id,
+            "credential": attacker.assert_(challenge, sign_count=1),
+            "client_id": WEB_CLIENT_ID,
+        },
     )
     assert resp.status_code == 401
 
@@ -788,7 +805,7 @@ def test_real_assertion_for_another_challenge_is_rejected(client, make_user):
         json={
             "challenge_id": challenge_id,
             "credential": authenticator.assert_(foreign_challenge, sign_count=1),
+            "client_id": WEB_CLIENT_ID,
         },
-        headers=WEB,
     )
     assert resp.status_code == 401

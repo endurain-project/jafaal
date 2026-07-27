@@ -49,6 +49,11 @@ class MFALoginRequest(BaseModel):
         ...,
         pattern=r"^(\d{6}|[A-Z0-9]{4}-[A-Z0-9]{4})$",
     )
+    client_id: StrictStr = Field(
+        ...,
+        max_length=256,
+        description="The registered client the login was started for; decides token delivery and scope.",
+    )
 
 
 class StepUpVerification(BaseModel):
@@ -107,34 +112,22 @@ class MFARequiredResponse(BaseModel):
     message: StrictStr = "MFA verification required"
 
 
-class MobileSessionResponse(BaseModel):
-    """
-    Response for mobile password login with PKCE exchange flow.
-
-    Attributes:
-        session_id: Session identifier for token exchange.
-        mfa_required: Whether MFA is required.
-        message: Instructions for the client on next steps.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    session_id: StrictStr
-    mfa_required: StrictBool = False
-    message: StrictStr = "Complete authentication by exchanging tokens at /public/idp/session/{session_id}/tokens"
-
-
 class TokenResponseWeb(BaseModel):
-    """
-    Token response payload for web clients.
+    """Token response for a client registered with ``token_delivery="cookie"``.
+
+    The RFC 6749 §5.1 response minus ``refresh_token``, which is delivered as an
+    ``HttpOnly``, ``SameSite=Strict`` cookie instead (RFC 9700 §7.2: do not hand
+    a refresh token to page script). ``session_id``, ``csrf_token`` and
+    ``refresh_token_expires_in`` are JAFAAL extensions, which §5.1 permits.
 
     Attributes:
         session_id: Session identifier.
         access_token: Bearer access token.
         csrf_token: CSRF token bound to the session.
-        token_type: Always ``bearer``.
+        token_type: Always ``Bearer`` (RFC 6750 §4).
         expires_in: Seconds until the access token expires.
         refresh_token_expires_in: Seconds until the refresh token expires.
+        scope: Space-delimited scopes the access token actually carries.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -142,22 +135,24 @@ class TokenResponseWeb(BaseModel):
     session_id: StrictStr
     access_token: StrictStr
     csrf_token: StrictStr
-    token_type: Literal["bearer"] = "bearer"
+    token_type: Literal["Bearer"] = "Bearer"
     expires_in: StrictInt
     refresh_token_expires_in: StrictInt
+    scope: StrictStr | None = None
 
 
 class TokenResponseMobile(BaseModel):
-    """
-    Token response payload for mobile clients.
+    """The RFC 6749 §5.1 token response, for ``token_delivery="body"``.
 
     Attributes:
-        session_id: Session identifier.
+        session_id: Session identifier (JAFAAL extension).
         access_token: Bearer access token.
         refresh_token: Refresh token.
-        token_type: Always ``bearer``.
+        token_type: Always ``Bearer`` (RFC 6750 §4).
         expires_in: Seconds until the access token expires.
-        refresh_token_expires_in: Seconds until the refresh token expires.
+        refresh_token_expires_in: Seconds until the refresh token expires
+            (JAFAAL extension).
+        scope: Space-delimited scopes the access token actually carries.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -165,9 +160,10 @@ class TokenResponseMobile(BaseModel):
     session_id: StrictStr
     access_token: StrictStr
     refresh_token: StrictStr
-    token_type: Literal["bearer"] = "bearer"
+    token_type: Literal["Bearer"] = "Bearer"
     expires_in: StrictInt
     refresh_token_expires_in: StrictInt
+    scope: StrictStr | None = None
 
 
 class TokenIntrospectionResponse(BaseModel):

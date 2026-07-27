@@ -89,13 +89,13 @@ _UUID_E2E = textwrap.dedent(
         pass
 
 
-    class Users(UUIDPKUserMixin, Base):
+    class Person(UUIDPKUserMixin, Base):
         __tablename__ = "users"
         display_name: Mapped[str | None] = mapped_column(String(250), nullable=True)
 
 
     # Host owns the base; map JAFAAL's tables into it before any model/CRUD import.
-    jafaal.map_models(Base)
+    jafaal.map_models(Base, user_model=Person)
 
     import jafaal.credentials.crud as credentials_crud
     from jafaal._internal.password_hasher import password_hasher
@@ -107,13 +107,13 @@ _UUID_E2E = textwrap.dedent(
         """Minimal UserRepository — only get_by_id is on the resolve path."""
 
         def get_by_id(self, user_id, db):
-            return db.get(Users, user_id)
+            return db.get(Person, user_id)
 
         def get_by_email(self, email, db):
-            return db.query(Users).filter(Users.email == email).one_or_none()
+            return db.query(Person).filter(Person.email == email).one_or_none()
 
         def get_by_username(self, username, db):
-            return db.query(Users).filter(Users.username == username).one_or_none()
+            return db.query(Person).filter(Person.username == username).one_or_none()
 
         def create_local_user(self, username, email, db, *, is_active, is_verified):
             raise NotImplementedError
@@ -164,7 +164,7 @@ _UUID_E2E = textwrap.dedent(
 
     # 2. Create a user + credential: companion FK + reverse relationship resolve.
     db = jafaal_orm.get_sessionmaker()()
-    user = Users(username="alice", email="alice@test.dev", is_active=True, is_verified=True)
+    user = Person(username="alice", email="alice@test.dev", is_active=True, is_verified=True)
     db.add(user)
     db.commit()
     db.refresh(user)

@@ -1,20 +1,19 @@
 """SQLAlchemy ORM models for IdP link tokens."""
 
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import DateTime, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
-from jafaal.orm import UserId, get_active_base
+from jafaal.orm import UserId, get_active_base, host_user_model
 
 # JAFAAL's models bind to the host-owned declarative base at map_models() time.
 Base = get_active_base()
 
 if TYPE_CHECKING:
     from jafaal.identity_providers.models import IdentityProvider
-    from jafaal.user_model import UserMixin as Users
 
 
 class IdpLinkToken(Base):
@@ -96,7 +95,8 @@ class IdpLinkToken(Base):
     )
 
     # Relationships
-    users: Mapped["Users"] = relationship(
+    users: Mapped[Any] = relationship(
+        host_user_model,
         back_populates="idp_link_tokens",
         foreign_keys=[user_id],
     )

@@ -57,11 +57,12 @@ jafaal.configure(
 )
 ```
 
-## Native apps: the authorization-code flow
+## Registered clients
 
-A native app authenticates through the standard RFC 6749 §4.1 authorization-code
-flow with PKCE, which every OAuth client library already speaks — AppAuth-iOS,
-AppAuth-Android, `openid-client`, MSAL. Register the app first:
+Every request that issues a token names the client it is for. The registration —
+not the request — decides how the tokens are delivered and how wide they may be,
+because a value a caller can choose per-request is a value an attacker can
+choose.
 
 ```python
 jafaal.configure(
@@ -69,15 +70,51 @@ jafaal.configure(
         secrets=jafaal.Secrets(secret_key=..., fernet_key=...),
         base_url="https://app.example.com",
         oauth_clients=(
+            # The first-party web frontend: refresh token as an HttpOnly cookie.
+            jafaal.OAuthClient(
+                client_id="web",
+                token_delivery="cookie",
+                name="Example web app",
+            ),
+            # A native app: the literal RFC 6749 §5.1 response.
             jafaal.OAuthClient(
                 client_id="com.example.app",
                 redirect_uris=("com.example.app://oauth/callback",),
                 name="Example for iOS",
             ),
+            # A third-party integration, capped at what it actually needs.
+            jafaal.OAuthClient(
+                client_id="com.partner.tool",
+                redirect_uris=("https://partner.example/callback",),
+                scopes=("profile",),
+                name="Partner tool",
+            ),
         ),
     )
 )
 ```
+
+| Field | Effect |
+| --- | --- |
+| `client_id` | The identifier the client sends. Any stable opaque string. |
+| `redirect_uris` | Where authorization codes may be delivered, matched **byte-for-byte**. Not needed for a client that only uses `/auth/login` and `/auth/refresh`. |
+| `token_delivery` | `"body"` (RFC 6749 §5.1, the default) or `"cookie"` (RFC 9700 §7.2 — `HttpOnly` refresh cookie plus a CSRF token). |
+| `scopes` | Ceiling on the token's scopes, intersected with what your [`ScopeResolver`][jafaal.ScopeResolver] grants the user. Empty means "whatever the user holds". |
+
+!!! warning "Set a ceiling for anything you do not control"
+    JAFAAL has no consent screen, so without `scopes` a registered client
+    receives the user's entire account. That is correct for a first-party app
+    that *is* the application, and wrong for everything else.
+
+A plain-`http` `redirect_uri` is accepted only for loopback (`127.0.0.1`,
+`[::1]`, `localhost`) per RFC 8252 §7.3; anything else must use `https` or a
+private-use scheme.
+
+## Native apps: the authorization-code flow
+
+A native app authenticates through the standard RFC 6749 §4.1 authorization-code
+flow with PKCE, which every OAuth client library already speaks — AppAuth-iOS,
+AppAuth-Android, `openid-client`, MSAL.
 
 Registration is not bureaucracy — it is what makes **exact `redirect_uri`
 matching** possible, which RFC 9700 §4.1 requires and which is the control that
@@ -94,31 +131,39 @@ GET  /auth/authorize?response_type=code
                     &redirect_uri=com.example.app://oauth/callback
                     &code_challenge=<S256>&code_challenge_method=S256
                     &state=<opaque>&idp=<provider-slug>
-  → 307 to the identity provider
+  → 302 to the identity provider
   → (IdP returns to /public/idp/callback/<slug>)
-  → 307 to com.example.app://oauth/callback?code=…&state=…
+  → 302 to com.example.app://oauth/callback?code=…&state=…
 
 POST /auth/token
      grant_type=authorization_code&code=…&code_verifier=…
      &redirect_uri=com.example.app://oauth/callback&client_id=com.example.app
-  → {"access_token": …, "refresh_token": …, "token_type": "bearer", "expires_in": …}
+  → {"access_token": …, "refresh_token": …, "token_type": "Bearer", "expires_in": …, "scope": …}
 ```
 
 Four bindings must all hold for a code to be redeemed, and each closes a
 published attack: PKCE, `client_id`, exact `redirect_uri`, and single use. Only
 the digest of a code is stored, so database read access alone does not yield a
-redeemable one.
+redeemable one. Every redemption failure answers the same `invalid_grant`, so the
+endpoint cannot be used to probe which codes or clients exist.
+
+Errors follow RFC 6749: §5.2 `{"error", "error_description"}` on `/auth/token`,
+and §4.1.2.1 on `/auth/authorize` — an unregistered `client_id` or `redirect_uri`
+is *rendered* (there is no verified target to redirect to), and every later
+failure is delivered **to** the redirect URI with `error` and `state`, so an app
+waiting on its callback listener learns what happened instead of timing out.
 
 `/auth/token` serves both grants — `authorization_code` and `refresh_token` — so
 a standard client needs exactly one token URL. `/auth/refresh` remains as an
-alias that also accepts JAFAAL's native cookie/header shape, which is what the
-first-party web frontend uses.
+alias that also accepts the refresh token from the `HttpOnly` cookie or an
+`Authorization` header.
 
 !!! note "Scope"
     `/auth/authorize` authenticates through an identity provider (`idp=`).
     Password login has no browser authorization endpoint because JAFAAL ships no
-    login UI — a first-party app posts to `/auth/login` directly, optionally
-    binding the result to a PKCE challenge.
+    login UI — a first-party app posts to `/auth/login` with its `client_id`
+    directly. That endpoint is not an OAuth grant and is never advertised in
+    discovery.
 
 Everything is advertised in the RFC 8414 discovery document at
 `/.well-known/oauth-authorization-server`, so a client can be configured from a
@@ -319,14 +364,15 @@ GET  <your-api-root>/.well-known/oauth-authorization-server
 {
   "issuer": "https://app.example.com",
   "jwks_uri": "https://app.example.com/api/v1/.well-known/jwks.json",
-  "token_endpoint": "https://app.example.com/api/v1/auth/refresh",
+  "authorization_endpoint": "https://app.example.com/api/v1/auth/authorize",
+  "token_endpoint": "https://app.example.com/api/v1/auth/token",
   "introspection_endpoint": "https://app.example.com/api/v1/auth/introspect",
   "revocation_endpoint": "https://app.example.com/api/v1/auth/revoke",
-  "grant_types_supported": ["refresh_token"],
+  "grant_types_supported": ["authorization_code", "refresh_token"],
+  "response_types_supported": ["code"],
   "token_endpoint_auth_methods_supported": ["none"],
   "scopes_supported": ["identity_providers:read", "profile", "users:read"],
-  "code_challenge_methods_supported": ["S256"],
-  "jafaal_required_request_headers": {"X-Client-Type": ["web", "mobile"]}
+  "code_challenge_methods_supported": ["S256"]
 }
 ```
 
@@ -335,60 +381,61 @@ and `scopes_supported` reflects the installed scope catalog. The origin is taken
 from `base_url` when it is set, so a forged `Host` header cannot make JAFAAL
 advertise an attacker-controlled `token_endpoint`.
 
-!!! warning "What this document does *not* claim"
-    JAFAAL is **not an OAuth 2.0 authorization server**. It has no client
-    registry, no authorization endpoint, and no consent screen, and it issues
-    tokens only for your own resource servers — never to third-party clients.
-    The document advertises exactly what a resource server needs and nothing
-    more:
+There are **no extension members**. Everything a client needs to drive JAFAAL is
+a standard field; a bespoke one would mean an endpoint a stock OAuth library
+cannot call.
 
-    - **`refresh_token` is the only grant**, and `token_endpoint` points at
-      `/auth/refresh`, which accepts the standard RFC 6749 §6 request
-      (`grant_type=refresh_token&refresh_token=…`). RFC 8414 §2 requires
-      `authorization_endpoint` only when a supported grant uses one, so omitting
-      it is conformant.
+!!! warning "What this document does *not* claim"
+    JAFAAL is an authorization server for **your own** clients. It has no client
+    secrets, no consent screen, and no dynamic registration: clients are
+    registered in configuration ([`OAuthClient`][jafaal.OAuthClient]) and are
+    public (RFC 8252), with PKCE — not a client credential — binding a code to
+    its requester.
+
     - **`/auth/login` is deliberately not advertised.** It authenticates an end
-      user directly and returns JAFAAL's own session tokens (and may return a
-      `202` MFA challenge instead). Advertising it as a `token_endpoint` would
-      invite a client to attempt the resource-owner password-credentials grant,
-      which OAuth 2.1 removes and [RFC 9700](https://www.rfc-editor.org/rfc/rfc9700)
-      §2.4 discourages.
+      user directly and is a first-party API, not an OAuth grant. Advertising it
+      would invite a client to attempt the resource-owner password-credentials
+      grant, which OAuth 2.1 removes and
+      [RFC 9700](https://www.rfc-editor.org/rfc/rfc9700) §2.4 discourages.
     - `token_endpoint_auth_methods_supported` is `["none"]` — stating it matters,
       because RFC 8414 otherwise implies `client_secret_basic`.
 
 ### Calling the token endpoint
 
-Two request shapes are accepted, so both a stock OAuth client and a JAFAAL-native
-client work:
+`/auth/token` serves both grants with the standard RFC 6749 request shapes:
 
-=== "RFC 6749 §6 (any OAuth client)"
+=== "Authorization code (RFC 6749 §4.1.3)"
 
     ```http
-    POST /api/v1/auth/refresh
+    POST /api/v1/auth/token
+    Content-Type: application/x-www-form-urlencoded
+
+    grant_type=authorization_code&code=<code>&code_verifier=<verifier>
+    &redirect_uri=<exact registered uri>&client_id=<your client>
+    ```
+
+=== "Refresh (RFC 6749 §6)"
+
+    ```http
+    POST /api/v1/auth/token
     Content-Type: application/x-www-form-urlencoded
 
     grant_type=refresh_token&refresh_token=<token>
     ```
 
-    No `X-Client-Type` needed: carrying the token in the body is itself proof the
-    caller is not a cookie-bearing browser, so the *mobile* delivery mode (tokens
-    in the response body, no CSRF token) is inferred.
+`/auth/refresh` is an alias for the refresh grant that additionally accepts the
+token from the `HttpOnly` cookie or an `Authorization` header, for a browser
+client that never sees the token.
 
-=== "JAFAAL native"
+**Delivery mode is not a request parameter.** Whether the refresh token comes
+back in the body (RFC 6749 §5.1) or as an `HttpOnly` cookie (RFC 9700 §7.2) is
+fixed by the client's registered `token_delivery`, and on refresh it is read from
+the token's own `client_id` claim. A caller cannot switch it, so there is no
+header to get wrong and no mismatch to defend against.
 
-    ```http
-    POST /api/v1/auth/refresh
-    X-Client-Type: web          # refresh token read from the HttpOnly cookie
-    ```
-
-    ```http
-    POST /api/v1/auth/refresh
-    X-Client-Type: mobile
-    Authorization: Bearer <refresh token>
-    ```
-
-An explicit `X-Client-Type` always wins, so a native client can ask for web
-delivery even when using the standard form shape.
+Errors follow RFC 6749 §5.2 — `{"error": "invalid_grant", "error_description":
+"…"}` with `Cache-Control: no-store` — which is what an OAuth client library
+parses.
 
 !!! note "Document location"
     RFC 8414 §3 derives the metadata URL from the issuer identifier. JAFAAL
@@ -495,9 +542,9 @@ Mounted by `create_auth_router` (paths relative to your API root):
 | `POST /auth/webauthn/mfa/begin` | anonymous | Start the second-factor ceremony for a pending login. |
 | `POST /auth/webauthn/mfa/complete` | anonymous | Verify the second-factor assertion and complete login. |
 
-The `/authenticate/*` and `/mfa/*` completion endpoints require the
-`X-Client-Type` header (`web`/`mobile`) and return the same token response as
-`/auth/login`. Challenges are single-use and expire after
+The `/authenticate/*` and `/mfa/*` completion endpoints take a `client_id`
+naming a registered [`OAuthClient`][jafaal.OAuthClient] and return the same token
+response as `/auth/login`. Challenges are single-use and expire after
 `challenge_ttl_seconds`.
 
 ### Second factor
@@ -518,10 +565,9 @@ always available regardless of this flag.
 ## Database: your `Base` and the session factory
 
 You own the declarative registry; JAFAAL maps its companion tables into it with
-[`map_models`][jafaal.map_models], so both share one metadata. Build your model
-on your own `DeclarativeBase` — it **must** be the class `Users` mapped to the
-`users` table — call `map_models`, and register a session factory bound to your
-engine.
+[`map_models`][jafaal.map_models], so both share one metadata. Build your user
+model on your own `DeclarativeBase` — call it whatever fits your domain — hand it
+to `map_models`, and register a session factory bound to your engine.
 
 ```python
 from sqlalchemy import create_engine
@@ -534,21 +580,25 @@ class Base(DeclarativeBase):
     ...  # your own base — naming conventions, schema, your other models
 
 
-class Users(IntPKUserMixin, Base):
+class Account(IntPKUserMixin, Base):
     __tablename__ = "users"
 
 
-jafaal.map_models(Base)  # map JAFAAL's tables into your registry
+jafaal.map_models(Base, user_model=Account)
 
 engine = create_engine("postgresql+psycopg://...")
 jafaal.configure_sessionmaker(sessionmaker(bind=engine, autoflush=False))
 Base.metadata.create_all(engine)  # fine for dev/tests; use jafaal.migrations in production (below)
 ```
 
-`map_models(...)` must run once at startup, **after** you define `Users` and
+The class name is yours; JAFAAL resolves its `users` relationship through the
+class you register, not by looking one up by name. The `users` **table** name is
+fixed, because JAFAAL's foreign keys reference it.
+
+`map_models(...)` must run once at startup, **after** you define the model and
 **before** `create_auth_router()` or any DB use (importing a JAFAAL model before
-it is a configuration error). Omit the argument — `jafaal.map_models()` — to use
-JAFAAL's own convenience `jafaal.orm.Base` instead of owning one.
+it is a configuration error). Omit the base — `jafaal.map_models(user_model=...)`
+— to use JAFAAL's own convenience `jafaal.orm.Base` instead of owning one.
 
 The reverse relationships (`users_sessions`, `local_credential`, `auth_mfa`, …)
 and the `mfa_enabled` property are supplied by the mixin — you declare none of

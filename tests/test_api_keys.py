@@ -3,6 +3,7 @@
 import hashlib
 
 import pytest
+from conftest import WEB_CLIENT_ID
 
 import jafaal
 import jafaal.api_keys.utils as api_keys_utils
@@ -175,17 +176,15 @@ def test_unknown_api_key_is_rejected(db, make_user):
 # End-to-end scope delegation over HTTP
 # --------------------------------------------------------------------------- #
 
-_WEB = {"X-Client-Type": "web"}
 _PASSWORD = "Str0ng!Pass"
 
 
 def _auth_headers(client, username):
     access = client.post(
         "/api/v1/auth/login",
-        data={"username": username, "password": _PASSWORD},
-        headers=_WEB,
+        data={"username": username, "password": _PASSWORD, "client_id": WEB_CLIENT_ID},
     ).json()["access_token"]
-    return {**_WEB, "Authorization": f"Bearer {access}"}
+    return {"Authorization": f"Bearer {access}"}
 
 
 def _create_key_request(client, username, requested_scopes):

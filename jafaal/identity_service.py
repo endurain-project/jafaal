@@ -749,7 +749,7 @@ class DefaultIdentityService:
             username=user.username,
             email=user.email,
             is_active=bool(user.is_active),
-            is_superuser=bool(user.is_superuser),
+            is_superuser=jafaal_ports.is_superuser(user),
             scopes=frozenset(scopes),
             credential=credential,
         )

@@ -13,17 +13,16 @@ Exports:
       ``get_password_hasher``
     - JWT: ``TokenManager``, ``TokenType``, ``get_token_manager``
     - Security dependencies: ``AuthContext``, ``oauth2_scheme``,
-      ``validate_access_token_expiration``, ``validate_refresh_token``,
+      ``validate_access_token``,
       ``check_auth_scopes``,
       ``get_sub_from_access_token``, ``get_sid_from_access_token``,
       ``get_sub_from_refresh_token``, ``get_sid_from_refresh_token``,
       ``validate_access_token_or_api_key``,
-      ``header_client_type_scheme``, ``header_csrf_token_scheme``
 
       Scope enforcement (``check_scopes``) is provided by
       :mod:`jafaal.dependencies`, which resolves the full principal.
     - Schemas: ``MFALoginRequest``,
-      ``MFARequiredResponse``, ``MobileSessionResponse``,
+      ``MFARequiredResponse``,
       ``TokenResponseWeb``, ``TokenResponseMobile``,
       ``LogoutResponse``
     - Stores: ``PendingMFALogin``, ``FailedLoginAttempts``,
@@ -32,7 +31,7 @@ Exports:
       ``cleanup_expired_pending_mfa_logins``,
       ``clear_pending_mfa_for_user``
     - Helpers: ``authenticate_user``, ``complete_login``,
-      ``create_tokens``, ``create_mobile_pkce_session_response``
+      ``create_tokens``
     - User model mixins: ``UserMixin``, ``IntPKUserMixin``,
       ``UUIDPKUserMixin`` (extensible base for the host app's user table)
 """
@@ -151,7 +150,6 @@ from .schema import (
     LogoutResponse,
     MFALoginRequest,
     MFARequiredResponse,
-    MobileSessionResponse,
     SignUpRequest,
     StepUpVerification,
     TokenIntrospectionResponse,
@@ -207,18 +205,13 @@ from .user_model import IntPKUserMixin, UserMixin, UUIDPKUserMixin
 if TYPE_CHECKING:
     from ._internal.internal_dependencies import (
         AuthContext,
-        ClientType,
-        get_client_type,
         get_sid_from_access_token,
         get_sid_from_refresh_token,
         get_sub_from_access_token,
         get_sub_from_refresh_token,
-        header_client_type_scheme,
         header_csrf_token_scheme,
         oauth2_scheme,
-        validate_access_token_expiration,
         validate_access_token_or_api_key,
-        validate_refresh_token,
     )
     from .api_keys.utils import (
         configure_api_key_scopes,
@@ -229,28 +222,21 @@ if TYPE_CHECKING:
     from .utils import (
         authenticate_user,
         complete_login,
-        create_mobile_pkce_session_response,
         create_tokens,
     )
 
 _LAZY_EXPORTS: dict[str, str] = {
     "AuthContext": "jafaal._internal.internal_dependencies",
-    "ClientType": "jafaal._internal.internal_dependencies",
-    "get_client_type": "jafaal._internal.internal_dependencies",
     "get_sid_from_access_token": "jafaal._internal.internal_dependencies",
     "get_sid_from_refresh_token": "jafaal._internal.internal_dependencies",
     "get_sub_from_access_token": "jafaal._internal.internal_dependencies",
     "get_sub_from_refresh_token": "jafaal._internal.internal_dependencies",
-    "header_client_type_scheme": "jafaal._internal.internal_dependencies",
     "header_csrf_token_scheme": "jafaal._internal.internal_dependencies",
     "oauth2_scheme": "jafaal._internal.internal_dependencies",
-    "validate_access_token_expiration": "jafaal._internal.internal_dependencies",
     "validate_access_token_or_api_key": "jafaal._internal.internal_dependencies",
-    "validate_refresh_token": "jafaal._internal.internal_dependencies",
     "check_auth_scopes": "jafaal.dependencies",
     "authenticate_user": "jafaal.utils",
     "complete_login": "jafaal.utils",
-    "create_mobile_pkce_session_response": "jafaal.utils",
     "create_tokens": "jafaal.utils",
     "configure_api_key_scopes": "jafaal.api_keys.utils",
     "get_api_key_scopes": "jafaal.api_keys.utils",
@@ -370,13 +356,11 @@ __all__ = [
     "register_exception_handlers",
     # Security dependencies
     "AuthContext",
-    "ClientType",
     "FailedLoginAttempts",
     # Schemas
     "LogoutResponse",
     "MFALoginRequest",
     "MFARequiredResponse",
-    "MobileSessionResponse",
     "SignUpRequest",
     "StepUpVerification",
     "TokenIntrospectionResponse",
@@ -428,9 +412,7 @@ __all__ = [
     "cleanup_expired_pending_mfa_logins",
     "clear_pending_mfa_for_user",
     "complete_login",
-    "create_mobile_pkce_session_response",
     "create_tokens",
-    "get_client_type",
     "get_failed_login_attempts",
     "get_password_hasher",
     "get_pending_mfa_store",
@@ -440,10 +422,7 @@ __all__ = [
     "get_sub_from_access_token",
     "get_sub_from_refresh_token",
     "get_token_manager",
-    "header_client_type_scheme",
     "header_csrf_token_scheme",
     "oauth2_scheme",
-    "validate_access_token_expiration",
     "validate_access_token_or_api_key",
-    "validate_refresh_token",
 ]

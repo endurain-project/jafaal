@@ -7,18 +7,18 @@ state for a user. Rows are written by
 here, never on the host-owned ``users`` table.
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from jafaal.orm import UserId, get_active_base
+from jafaal.orm import UserId, get_active_base, host_user_model
 
 # JAFAAL's models bind to the host-owned declarative base at map_models() time.
 Base = get_active_base()
 
 if TYPE_CHECKING:
-    from jafaal.user_model import UserMixin as Users
+    pass
 
 
 class UsersMFA(Base):
@@ -71,6 +71,7 @@ class UsersMFA(Base):
     )
 
     # Relationships
-    users: Mapped["Users"] = relationship(
+    users: Mapped[Any] = relationship(
+        host_user_model,
         back_populates="auth_mfa",
     )

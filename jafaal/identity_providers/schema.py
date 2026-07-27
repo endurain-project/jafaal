@@ -220,69 +220,23 @@ class IdentityProviderTemplate(BaseModel):
     configuration_notes: StrictStr | None = Field(default=None, description="Setup instructions for this IdP")
 
 
-class TokenExchangeRequest(BaseModel):
-    """
-    Request schema for mobile PKCE token exchange.
+class StepUpReauthRequest(BaseModel):
+    """Request body for beginning an IdP step-up re-authentication.
 
-    After OAuth callback completes, mobile clients exchange the session_id
-    for actual JWT tokens by proving they possess the code_verifier that
-    matches the code_challenge sent during login initiation.
-
-    Attributes:
-        code_verifier (str): PKCE code verifier (43-128 chars, base64url).
-            Must hash to the code_challenge stored in OAuth state.
-    """
-
-    code_verifier: StrictStr = Field(
-        ...,
-        min_length=43,
-        max_length=128,
-        description="PKCE code verifier (base64url, 43-128 chars)",
-    )
-
-    @field_validator("code_verifier")
-    @classmethod
-    def validate_code_verifier(cls, v: str) -> str:
-        """
-        Validate PKCE code_verifier format according to RFC 7636.
-
-        Args:
-            v (str): The code verifier string.
-
-        Returns:
-            str: The validated code verifier.
-
-        Raises:
-            ValueError: If format is invalid (wrong length or characters).
-        """
-        if not re.match(r"^[A-Za-z0-9_-]+$", v):
-            raise ValueError("code_verifier must be valid base64url")
-        return v
-
-
-class TokenExchangeResponse(BaseModel):
-    """
-    Response schema for successful PKCE token exchange.
-
-    Returns the actual JWT tokens that clients need for API access.
-    Response format varies by client type:
-    - Web clients: access_token, csrf_token (refresh_token in httpOnly cookie)
-    - Mobile clients: access_token, refresh_token (no CSRF token)
+    Carries the same client/redirect pair the authorization endpoint takes, and
+    it is validated by the same exact-match gate: a step-up round trip ends in a
+    browser redirect, so it gets the same open-redirect protection a login does.
 
     Attributes:
-        session_id (str): Session identifier.
-        access_token (str): JWT access token (15-minute expiry).
-        refresh_token (str | None): JWT refresh token (7-day expiry). Only for mobile clients.
-        csrf_token (str | None): CSRF protection token. Only for web clients.
-        expires_in (int): Access token lifetime in seconds (900 = 15 minutes).
-        refresh_token_expires_in (int): Refresh token lifetime in seconds (604800 = 7 days).
-        token_type (str): Token type, always "Bearer".
+        client_id: A client registered via ``AuthSettings.oauth_clients``.
+        redirect_uri: Where to return the browser after the provider re-prompts.
+            Must match one of the client's registered URIs exactly.
+        state: Opaque client value, echoed back on return so the client can
+            correlate the result with its request.
     """
 
-    session_id: StrictStr = Field(..., description="Session identifier")
-    access_token: StrictStr = Field(..., description="JWT access token")
-    refresh_token: StrictStr | None = Field(default=None, description="JWT refresh token (mobile only)")
-    csrf_token: StrictStr | None = Field(default=None, description="CSRF protection token (web only)")
-    expires_in: StrictInt = Field(default=900, description="Access token lifetime in seconds")
-    refresh_token_expires_in: StrictInt = Field(default=604800, description="Refresh token lifetime in seconds")
-    token_type: StrictStr = Field(default="Bearer", description="Token type")
+    model_config = ConfigDict(extra="forbid")
+
+    client_id: StrictStr = Field(..., max_length=256, description="Registered client id")
+    redirect_uri: StrictStr = Field(..., max_length=2048, description="Exactly-registered redirect URI")
+    state: StrictStr | None = Field(default=None, max_length=512, description="Opaque value echoed back")

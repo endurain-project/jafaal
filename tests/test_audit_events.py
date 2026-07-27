@@ -12,6 +12,7 @@ import logging
 
 import pyotp
 import pytest
+from conftest import WEB_CLIENT_ID
 
 import jafaal
 import jafaal._internal.services.account_security_service as account_svc
@@ -29,8 +30,6 @@ from jafaal._internal.password_hasher import get_password_hasher
 from jafaal._internal.security_stores import StepUpAttempts
 from jafaal._internal.token_manager import get_token_manager
 from jafaal.identity_service import DefaultIdentityService
-
-WEB = {"X-Client-Type": "web"}
 
 
 def _svc(db):
@@ -76,7 +75,9 @@ def _find(caplog, slug):
 
 
 def _login(client, username="alice", password="Str0ng!Pass"):
-    return client.post("/api/v1/auth/login", data={"username": username, "password": password}, headers=WEB)
+    return client.post(
+        "/api/v1/auth/login", data={"username": username, "password": password, "client_id": WEB_CLIENT_ID}
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -87,7 +88,7 @@ def _login(client, username="alice", password="Str0ng!Pass"):
 def test_logout_and_refresh_are_audited(client, make_user, audited):
     make_user()
     access = _login(client).json()["access_token"]
-    headers = {**WEB, "Authorization": f"Bearer {access}"}
+    headers = {"Authorization": f"Bearer {access}"}
 
     client.post("/api/v1/auth/refresh", headers={**headers, "Origin": "https://app.test"})
     client.post("/api/v1/auth/logout", headers=headers)
@@ -136,8 +137,7 @@ def test_mfa_success_is_audited_not_just_failure(client, make_user, audited):
     mfa_token = _login(client).json()["mfa_token"]
     response = client.post(
         "/api/v1/auth/mfa/verify",
-        json={"mfa_token": mfa_token, "mfa_code": pyotp.TOTP(secret).now()},
-        headers=WEB,
+        json={"mfa_token": mfa_token, "mfa_code": pyotp.TOTP(secret).now(), "client_id": WEB_CLIENT_ID},
     )
 
     assert response.status_code == 200
@@ -208,7 +208,7 @@ def test_scope_denial_is_audited(client, make_user, audited):
     response = client.post(
         "/api/v1/auth/introspect",
         data={"token": access},
-        headers={**WEB, "Authorization": f"Bearer {access}"},
+        headers={"Authorization": f"Bearer {access}"},
     )
 
     assert response.status_code == 403

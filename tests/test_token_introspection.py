@@ -2,24 +2,26 @@
 
 from __future__ import annotations
 
-from conftest import replace_settings
+from conftest import NATIVE_CLIENT_ID, WEB_CLIENT_ID, replace_settings
 
 import jafaal
 import jafaal.api_keys.crud as api_keys_crud
 import jafaal.api_keys.schema as api_keys_schema
 
-WEB = {"X-Client-Type": "web"}
-MOBILE = {"X-Client-Type": "mobile"}
 INTROSPECT = "/api/v1/auth/introspect"
 REVOKE = "/api/v1/auth/revoke"
 
 
 def _login_web(client, username="alice", password="Str0ng!Pass"):
-    return client.post("/api/v1/auth/login", data={"username": username, "password": password}, headers=WEB)
+    return client.post(
+        "/api/v1/auth/login", data={"username": username, "password": password, "client_id": WEB_CLIENT_ID}
+    )
 
 
 def _login_mobile(client, username="alice", password="Str0ng!Pass"):
-    return client.post("/api/v1/auth/login", data={"username": username, "password": password}, headers=MOBILE)
+    return client.post(
+        "/api/v1/auth/login", data={"username": username, "password": password, "client_id": NATIVE_CLIENT_ID}
+    )
 
 
 def _api_key(db, user_id, scopes):
@@ -82,7 +84,7 @@ def test_introspect_reflects_logout(client, make_user, db):
     key = _introspect_key(db, user.id)
 
     assert client.post(INTROSPECT, data={"token": access}, headers={"X-API-Key": key}).json()["active"] is True
-    client.post("/api/v1/auth/logout", headers=WEB)  # deletes the session
+    client.post("/api/v1/auth/logout")  # deletes the session
     # The access token's session is gone → introspection reports it inactive.
     assert client.post(INTROSPECT, data={"token": access}, headers={"X-API-Key": key}).json()["active"] is False
 
@@ -100,7 +102,7 @@ def test_revoke_refresh_token_kills_the_session(client, make_user):
     # The refresh token no longer works (its session was deleted).
     retry = client.post(
         "/api/v1/auth/refresh",
-        headers={**MOBILE, "Authorization": f"Bearer {refresh}"},
+        headers={"Authorization": f"Bearer {refresh}"},
     )
     assert retry.status_code in (401, 404)
 

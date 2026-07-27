@@ -454,7 +454,6 @@ def test_oauth_state_create_and_lookup(db):
         db=db,
         state_id=state_id,
         nonce=nonce,
-        client_type="web",
         ip_address="1.2.3.4",
     )
     row = oauth_state_crud.get_oauth_state_by_id_and_not_used(state_id, db)

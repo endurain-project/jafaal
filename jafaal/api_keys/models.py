@@ -1,18 +1,18 @@
 """Auth-owned API key database models (table: ``users_api_keys``)."""
 
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from jafaal.orm import UserId, get_active_base
+from jafaal.orm import UserId, get_active_base, host_user_model
 
 # JAFAAL's models bind to the host-owned declarative base at map_models() time.
 Base = get_active_base()
 
 if TYPE_CHECKING:
-    from jafaal.user_model import UserMixin as Users
+    pass
 
 
 class UsersApiKeys(Base):
@@ -96,4 +96,4 @@ class UsersApiKeys(Base):
     )
 
     # Relationship to Users model
-    users: Mapped["Users"] = relationship(back_populates="users_api_keys")
+    users: Mapped[Any] = relationship(host_user_model, back_populates="users_api_keys")

@@ -121,10 +121,8 @@ def create_oauth_state(
     db: Session,
     state_id: str,
     nonce: str,
-    client_type: str,
     ip_address: str | None,
     idp_id: int | None = None,
-    redirect_path: str | None = None,
     code_challenge: str | None = None,
     code_challenge_method: str | None = None,
     user_id: UserId | None = None,
@@ -139,22 +137,21 @@ def create_oauth_state(
         db: SQLAlchemy database session.
         state_id: The state parameter (secrets.token_urlsafe(32)).
         nonce: OIDC nonce for ID token validation.
-        client_type: Client type (web or mobile).
         ip_address: Client IP address at initiation. Recorded as a *detection*
             signal only — the callback compares it and audits a mismatch rather
             than rejecting, because the browser leg of an SSO round trip
             legitimately changes address (mobile hand-off, IPv6 privacy
             rotation, proxy egress). Replay is prevented by the single-use
             claim, the nonce, and the PKCE binding.
-        idp_id: Identity provider ID (may be null if mobile logic).
-        redirect_path: Frontend path after login.
-        code_challenge: PKCE challenge (required for mobile).
+        idp_id: Identity provider ID.
+        code_challenge: PKCE challenge (mandatory for a login flow).
         code_challenge_method: PKCE method (S256).
-        user_id: User ID for link mode.
+        user_id: User ID for link and step-up modes.
         purpose: Flow purpose (``login``, ``link``, or ``stepup``).
-        client_id: Registered public client, when the flow was started at
-            ``/auth/authorize``.
-        redirect_uri: Exact redirect URI from the authorization request.
+        client_id: The registered public client that started the flow.
+        redirect_uri: The client's redirect URI, already matched exactly against
+            its registration. Every browser redirect this flow later emits goes
+            here and nowhere else.
         client_state: The client's opaque ``state``, echoed back with the code.
 
     Returns:
@@ -169,9 +166,7 @@ def create_oauth_state(
         id=state_id,
         idp_id=idp_id,
         nonce=nonce,
-        client_type=client_type,
         ip_address=ip_address,
-        redirect_path=redirect_path,
         code_challenge=code_challenge,
         code_challenge_method=code_challenge_method,
         user_id=user_id,
@@ -187,7 +182,7 @@ def create_oauth_state(
     db.flush()
     db.refresh(oauth_state)
 
-    logger.debug(f"OAuth state created: {state_id[:8]}... for IdP {idp_id}, client_type={client_type}")
+    logger.debug(f"OAuth state created: {state_id[:8]}... for IdP {idp_id}, client={client_id}")
 
     return oauth_state
 

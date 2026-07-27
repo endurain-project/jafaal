@@ -83,7 +83,7 @@ def test_create_auth_router_mounts_routes_and_registers_handler():
     # The endpoints are reachable (present → not 404) once mounted.
     client = TestClient(app)
     assert client.post("/api/v1/auth/login").status_code != 404
-    assert client.post("/api/v1/auth/refresh", headers={"X-Client-Type": "web"}).status_code != 404
+    assert client.post("/api/v1/auth/refresh").status_code != 404
 
 
 def test_is_enforcing_reflects_configuration():

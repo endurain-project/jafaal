@@ -119,17 +119,17 @@ jafaal.configure(
 )
 
 
-# 2. You own the Base; build `Users` on it (must be named `Users`, table `users`).
+# 2. You own the Base; build your user model on it (any class name, table `users`).
 class Base(DeclarativeBase):
     pass
 
 
-class Users(IntPKUserMixin, Base):
+class Account(IntPKUserMixin, Base):
     __tablename__ = "users"
     display_name: Mapped[str | None] = mapped_column(String(250))
 
 
-jafaal.map_models(Base)  # map JAFAAL's companion tables into your registry
+jafaal.map_models(Base, user_model=Account)  # map JAFAAL's companion tables into your registry
 
 engine = create_engine("postgresql+psycopg://...")
 jafaal.configure_sessionmaker(sessionmaker(bind=engine, autoflush=False))

@@ -6,6 +6,7 @@ from typing import Annotated
 from fastapi import Depends, Request, Security, status
 from sqlalchemy.orm import Session
 
+import jafaal._internal.services.authorization_code_service as authorization_code_service
 import jafaal.dependencies as jafaal_dependencies
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_providers.crud as idp_crud
@@ -175,6 +176,7 @@ def delete_identity_provider(
 async def initiate_step_up_reauth(
     idp_id: int,
     request: Request,
+    body: idp_schema.StepUpReauthRequest,
     token_user_id: Annotated[
         jafaal_orm.UserId,
         Depends(jafaal_dependencies.get_sub_from_access_token),
@@ -195,9 +197,15 @@ async def initiate_step_up_reauth(
     are sent so the provider re-prompts the user, and the callback verifies the
     ID token's ``auth_time`` is recent.
 
+    ``client_id``/``redirect_uri`` go through the same exact-match gate as
+    ``/auth/authorize``. A step-up round trip ends in a browser redirect just
+    like a login does, so it gets the same open-redirect protection — there is
+    no second, weaker rule for "internal" redirects.
+
     Args:
         idp_id: The linked identity provider to re-authenticate against.
         request: The current HTTP request (for client IP capture).
+        body: The registered client and the redirect URI to return to.
         token_user_id: The authenticated user (from the access token ``sub``).
         db: SQLAlchemy database session.
 
@@ -206,11 +214,14 @@ async def initiate_step_up_reauth(
 
     Raises:
         JafaalError: 400 if IdP step-up re-auth is disabled or the provider is
-            not linked to the caller; 404 if the provider is missing or disabled.
+            not linked to the caller; 401/400 if the client or redirect URI is
+            unregistered; 404 if the provider is missing or disabled.
     """
     settings = jafaal_settings.get_settings()
     if not settings.sso.step_up_idp_reauth_enabled:
         raise jafaal_exceptions.InvalidRequestError("Identity-provider step-up re-authentication is disabled.")
+
+    authorization_code_service.validate_client_and_redirect_uri(body.client_id, body.redirect_uri)
 
     idp = idp_crud.get_identity_provider(idp_id, db)
     if not idp or not idp.enabled:
@@ -225,11 +236,13 @@ async def initiate_step_up_reauth(
         db=db,
         state_id=state_id,
         nonce=nonce,
-        client_type="web",
         ip_address=network.get_ip_address(request),
         idp_id=idp_id,
         user_id=token_user_id,
         purpose="stepup",
+        client_id=body.client_id,
+        redirect_uri=body.redirect_uri,
+        client_state=body.state,
     )
 
     authorization_url = await idp_service.idp_service.initiate_link(

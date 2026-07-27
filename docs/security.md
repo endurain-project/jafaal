@@ -245,13 +245,13 @@ hashes) does not.
 
 ## Response headers for SSO redirect pages
 
-JAFAAL issues browser redirects for the SSO callback (e.g. to
-`login_result_path` / `error_path` with a `session_id` or error query
-parameter). JAFAAL validates and constrains these redirect targets (relative
-paths or configured custom schemes only — no open redirects), but **setting
-transport and content-security headers is the host's responsibility**. On the
-frontend pages that receive these redirects, and on your API responses
-generally, set at least:
+JAFAAL issues browser redirects for the SSO callback, always to the
+`redirect_uri` the initiating client registered and never to a configured
+fallback path. The target is matched byte-for-byte against
+[`OAuthClient.redirect_uris`][jafaal.OAuthClient] before the flow starts, so
+there is no open redirect to defend against — but **setting transport and
+content-security headers is the host's responsibility**. On the frontend pages
+that receive these redirects, and on your API responses generally, set at least:
 
 ```text
 Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
