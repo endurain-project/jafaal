@@ -156,9 +156,15 @@ class UserRepository(Protocol):
     def sync_from_idp(self, user_id: Any, claims: Mapping[str, Any], db: Session) -> None:
         """Optionally sync host-owned profile fields from refreshed IdP claims.
 
-        ``claims`` is the mapped IdP claim dict (e.g. ``email``, ``name``). Called
-        on subsequent logins when IdP→user sync is enabled; the host decides which
+        ``claims`` is the mapped IdP claim dict (e.g. ``email``, ``name``), plus
+        ``email_verified`` so the host can apply its own policy. Called on
+        subsequent logins when IdP→user sync is enabled; the host decides which
         fields to update and resolves any email conflicts.
+
+        ``email`` is present **only when the provider asserted it verified** —
+        JAFAAL withholds an unverified address rather than hand the host
+        something it might write onto the user row, since the local email is
+        where password resets are delivered.
         """
         ...
 
@@ -314,6 +320,23 @@ class RefreshTokenTheftDetected:
     token_family_id: str
 
 
+@dataclass(frozen=True)
+class IdpAccountLinked:
+    """An identity provider was linked to an existing account by matching email.
+
+    Emitted when an SSO login adopts a pre-existing local account rather than
+    creating one — a new way to sign in that the owner did not initiate from a
+    session they already held. Tell them out of band, so a link they did not
+    expect is visible rather than silent.
+    """
+
+    user_id: Any
+    username: str
+    idp_name: str
+    idp_slug: str
+    email: str
+
+
 class AuthEventSink(Protocol):
     """Host-owned delivery of JAFAAL's outbound notifications.
 
@@ -344,6 +367,8 @@ class AuthEventSink(Protocol):
 
     async def on_refresh_token_theft_detected(self, event: RefreshTokenTheftDetected) -> None: ...
 
+    async def on_idp_account_linked(self, event: IdpAccountLinked) -> None: ...
+
 
 class NullAuthEventSink:
     """Default no-op sink — a host that skips these flows implements nothing."""
@@ -367,6 +392,9 @@ class NullAuthEventSink:
         return None
 
     async def on_refresh_token_theft_detected(self, event: RefreshTokenTheftDetected) -> None:
+        return None
+
+    async def on_idp_account_linked(self, event: IdpAccountLinked) -> None:
         return None
 
 
@@ -572,16 +600,18 @@ CRITICAL_EVENT_METHODS: frozenset[str] = frozenset(
     {
         "on_account_locked",
         "on_refresh_token_theft_detected",
+        "on_idp_account_linked",
     }
 )
 """Events whose loss is itself a security incident.
 
-An undelivered "your account was locked" or "refresh-token theft detected"
-notification is not a missed convenience email — it is the signal a user or
-operator needs to react to an attack in progress. A flood of ordinary
-notifications must therefore never be able to starve them out, so these are
-admitted against :data:`MAX_INFLIGHT_CRITICAL_EVENTS` (strictly larger than the
-general bound), which reserves headroom that routine traffic cannot consume.
+An undelivered "your account was locked", "refresh-token theft detected", or
+"a new identity provider can now sign in as you" notification is not a missed
+convenience email — it is the signal a user or operator needs to react to an
+attack in progress. A flood of ordinary notifications must therefore never be
+able to starve them out, so these are admitted against
+:data:`MAX_INFLIGHT_CRITICAL_EVENTS` (strictly larger than the general bound),
+which reserves headroom that routine traffic cannot consume.
 """
 
 MAX_INFLIGHT_CRITICAL_EVENTS: Final = 1024
@@ -782,6 +812,7 @@ __all__ = [
     "AccountLocked",
     "AuthEventSink",
     "EmailVerificationRequested",
+    "IdpAccountLinked",
     "IdpIdentity",
     "NewDeviceLogin",
     "NullAuthEventSink",

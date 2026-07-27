@@ -1166,24 +1166,59 @@ class IdentityProviderService:
 
         # Try to find by email (for linking existing accounts).
         #
-        # SECURITY (account-takeover prevention): only auto-link an
-        # external identity to an EXISTING local account when the IdP
-        # asserts that the email is verified (standard OIDC
-        # ``email_verified`` claim). Without this gate, an attacker who
-        # registers an unverified address matching a victim's email at a
-        # permissive IdP would be auto-linked into — and gain control of —
-        # the victim's existing account on first SSO login. Subject-based
-        # linking above is unaffected; this only guards the email fallback.
+        # SECURITY (account-takeover prevention). Adopting an existing local
+        # account on the strength of a matching email address means trusting
+        # this provider to be authoritative for that address. Two gates, because
+        # neither is sufficient alone:
+        #
+        # 1. ``allow_email_linking`` — off by default. ``email_verified`` is the
+        #    provider's *own* assertion, and nothing stops a provider asserting
+        #    it for an address in a domain it has no authority over. In a
+        #    multi-provider deployment that turns the weakest enabled provider
+        #    into a takeover path for every account: register
+        #    victim@example.com there, sign in, and land inside the victim's
+        #    account. So adopting existing accounts is a per-provider decision
+        #    the operator makes about a provider they trust, not a default.
+        # 2. ``email_verified`` — still required when linking is enabled, so an
+        #    unverified address is never enough even from a trusted provider.
+        #
+        # Subject-based linking above is unaffected: that identity was
+        # explicitly linked already.
         mapped_data = self._map_user_claims(idp, userinfo)
         email = mapped_data.get("email")
 
         if email:
             user = jafaal_ports.get_user_repository().get_by_email(email, db)
             if user:
+                if not idp.allow_email_linking:
+                    logger.warning(
+                        f"Refusing to link IdP {idp.name} to existing account "
+                        f"{user.username}: email linking is disabled for this provider"
+                    )
+                    jafaal_audit.record(
+                        jafaal_audit.Event.IDP_EMAIL_LINK_REFUSED,
+                        outcome=jafaal_audit.Outcome.BLOCKED,
+                        level=logging.WARNING,
+                        user_id=user.id,
+                        idp=idp.slug,
+                        reason="email_linking_disabled",
+                    )
+                    raise jafaal_exceptions.AuthorizationError(
+                        "An account already exists with this email address. Sign in with it and link "
+                        f"{idp.name} from your account settings."
+                    )
                 if not self._is_email_verified(userinfo):
                     logger.warning(
                         f"Refusing to link IdP {idp.name} to existing account "
                         f"{user.username}: provider did not assert a verified email"
+                    )
+                    jafaal_audit.record(
+                        jafaal_audit.Event.IDP_EMAIL_LINK_REFUSED,
+                        outcome=jafaal_audit.Outcome.BLOCKED,
+                        level=logging.WARNING,
+                        user_id=user.id,
+                        idp=idp.slug,
+                        reason="email_not_verified",
                     )
                     raise jafaal_exceptions.AuthorizationError(
                         "Cannot link this identity provider to an existing "
@@ -1195,6 +1230,25 @@ class IdentityProviderService:
                 jafaal_identity_links_crud.create_user_identity_provider(user.id, idp.id, subject, db)
 
                 logger.info(f"Linked existing user {user.username} to IdP {idp.name}")
+                jafaal_audit.record(
+                    jafaal_audit.Event.IDP_EMAIL_LINKED,
+                    level=logging.WARNING,
+                    user_id=user.id,
+                    idp=idp.slug,
+                )
+                # Tell the account owner out of band: this is a new way to sign
+                # in to their account that they did not perform from a
+                # session they were already holding.
+                await jafaal_ports.adispatch_event(
+                    "on_idp_account_linked",
+                    jafaal_ports.IdpAccountLinked(
+                        user_id=user.id,
+                        username=user.username,
+                        idp_name=idp.name,
+                        idp_slug=idp.slug,
+                        email=email,
+                    ),
+                )
 
                 # Update user info if sync is enabled
                 if idp.sync_user_info:
@@ -1295,6 +1349,14 @@ class IdentityProviderService:
         ``UserRepository.sync_from_idp``; the host decides which fields to update
         and resolves any email conflicts. Returns the (possibly updated) user.
 
+        The mapped claims carry ``email_verified`` so the host can apply its own
+        policy, and JAFAAL **withholds an unverified ``email`` entirely**. Sync
+        runs on every login when it is enabled, so passing one through would
+        quietly undo the gate that guards linking: a linked user who changes
+        their address at the provider to an unverified ``victim@example.com``
+        would have it written onto their local row — and the local email is what
+        password reset is delivered to.
+
         Args:
             user: The user to update.
             idp (idp_models.IdentityProvider): The identity provider instance with user_mapping config.
@@ -1305,6 +1367,12 @@ class IdentityProviderService:
             The updated user.
         """
         mapped_data = self._map_user_claims(idp, userinfo)
+        email_verified = self._is_email_verified(userinfo)
+        mapped_data["email_verified"] = email_verified
+
+        if not email_verified and mapped_data.pop("email", None) is not None:
+            logger.warning(f"Withholding unverified email from profile sync for user {user.id} (IdP {idp.name})")
+
         repo = jafaal_ports.get_user_repository()
         repo.sync_from_idp(user.id, mapped_data, db)
         return repo.get_by_id(user.id, db) or user

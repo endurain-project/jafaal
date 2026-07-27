@@ -27,15 +27,26 @@ protections and the deployment steps you are responsible for.
   (see [Asymmetric signing & JWKS](configuration.md#asymmetric-signing-jwks)).
   OIDC ID tokens are verified against a separate asymmetric allow-list (blocking
   RS256→HS256 confusion), and their `iss`/`aud`/`exp`/`iat`, `nonce`, `azp`, and
-  (when present) `at_hash` claims are checked. When an identity provider declares
+  (when present) `at_hash` claims are checked, and the discovery document's
+  `issuer` must equal the configured issuer URL (OIDC Discovery §4.3) so `iss`
+  anchors to the provider you configured rather than to the document itself.
+  When an identity provider declares
   an issuer, **discovery failing is a failed login, not an unverified one**: the
   callback refuses to fall back to trusting the userinfo response alone, so an
   attacker who can disrupt discovery cannot downgrade the flow past ID-token
   verification.
+- **Adopting an existing account over SSO is opt-in.** A provider can only
+  claim a pre-existing local account by matching email when that provider has
+  `allow_email_linking` set *and* asserts `email_verified` — because
+  `email_verified` is the provider's own claim, and an always-on email fallback
+  would make the weakest enabled provider a takeover path for every account.
+  Profile sync withholds an unverified email for the same reason.
 - **Refresh-token rotation with reuse detection.** Every refresh rotates the
   token; presenting an already-rotated token past a short grace window is treated
   as **theft** and invalidates the entire token family. A racing/duplicate
-  refresh *within* grace replays the same replacement idempotently. Sessions
+  refresh *within* grace replays the same replacement idempotently, **once** — a
+  lost response produces exactly one retry, so a second replay is reuse and
+  invalidates the family too. Sessions
   store the refresh token as a keyed HMAC-SHA256 digest — unforgeable without
   `secret_key`, and microseconds to verify, since a refresh token is a
   high-entropy server-minted JWT rather than a user-chosen secret.
@@ -143,7 +154,7 @@ got in and what they changed once there. The slugs are declared on
 | Credentials | `password.changed`, `password.reset_requested`, `password.reset_completed`, `signup.confirmed` |
 | Tokens & sessions | `token.refreshed`, `token.revoked`, `token.reuse_grace`, `token.theft_detected`, `session.revoked` |
 | API keys | `api_key.created`, `api_key.revoked`, `api_key.deleted`, `api_key.auth_success`, `api_key.auth_failure` |
-| Identity providers | `idp.link_added`, `idp.link_removed`, `oauth_state.replay_rejected` |
+| Identity providers | `idp.link_added`, `idp.link_removed`, `idp.email_linked`, `idp.email_link_refused`, `idp.discovery_failed`, `oauth_state.replay_rejected` |
 | Authorization | `scope.denied` |
 
 State-changing events an account owner would want to know about
@@ -155,9 +166,10 @@ filter still surfaces them.
     Beyond the SIEM-facing audit stream, the host
     [`AuthEventSink`][jafaal.AuthEventSink] also receives best-effort
     **security notifications** it can turn into user-facing alerts:
-    `on_new_device_login`, `on_account_locked`, and
-    `on_refresh_token_theft_detected`. They are fire-and-forget and
-    forward-compatible — a sink that does not implement a method simply skips it.
+    `on_new_device_login`, `on_account_locked`,
+    `on_refresh_token_theft_detected`, and `on_idp_account_linked`. They are
+    fire-and-forget and forward-compatible — a sink that does not implement a
+    method simply skips it.
 
     Delivery never runs inline on the auth path: from synchronous code the
     coroutine is handed to a background dispatch loop, so a slow SMTP server or

@@ -38,6 +38,9 @@ class IdentityProvider(Base):
             (default: "openid profile email").
         icon (str | None): Icon name (FontAwesome) or custom URL for the provider.
         auto_create_users (bool): Automatically create users on first login.
+        allow_email_linking (bool): Allow a login from this provider to adopt an
+            existing local account whose email matches (still requires a
+            verified email). Off by default.
         sync_user_info (bool): Sync user info on each login.
         user_mapping (dict[str, Any] | None): JSON mapping of IdP claims to user
             fields.
@@ -130,6 +133,12 @@ class IdentityProvider(Base):
         nullable=False,
         default=True,
         comment="Automatically create users on first login",
+    )
+    allow_email_linking: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        comment="Allow linking to an existing local account by matching email (requires email_verified)",
     )
     sync_user_info: Mapped[bool] = mapped_column(
         Boolean,

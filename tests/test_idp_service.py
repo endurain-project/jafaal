@@ -26,6 +26,7 @@ import jafaal.identity_providers.crud as idp_crud
 import jafaal.identity_providers.links.crud as links_crud
 import jafaal.identity_providers.schema as idp_schema
 import jafaal.oauth_state.crud as oauth_state_crud
+import jafaal.ports as ports
 from jafaal._core import crypto
 from jafaal._internal.password_hasher import password_hasher
 from jafaal._internal.security_stores import consume_step_up_reauth_grant
@@ -201,6 +202,132 @@ def test_is_email_verified():
     assert svc._is_email_verified({"email_verified": "true"}) is True
     assert svc._is_email_verified({"email_verified": False}) is False
     assert svc._is_email_verified({}) is False
+
+
+# --------------------------------------------------------------------------- #
+# Email-based account adoption (H1) and profile sync (H2)
+# --------------------------------------------------------------------------- #
+
+
+def _run(coro):
+    import asyncio
+
+    return asyncio.run(coro)
+
+
+def test_email_linking_is_refused_by_default(db, make_user):
+    """A provider must not adopt an existing account unless the operator says so.
+
+    ``email_verified`` is the provider's own assertion, so any enabled provider
+    could otherwise claim victim@example.com and land inside that account.
+    """
+    victim = make_user(username="victim", email="victim@test.dev")
+    idp = _create_idp(db, slug="weak")
+    assert idp.allow_email_linking is False
+
+    with pytest.raises(exc.AuthorizationError):
+        _run(
+            IdentityProviderService()._find_or_create_user(
+                idp,
+                "attacker-subject",
+                {"sub": "attacker-subject", "email": "victim@test.dev", "email_verified": True},
+                db,
+            )
+        )
+
+    # No link was created behind the refusal.
+    assert links_crud.get_user_identity_provider_by_subject_and_idp_id(idp.id, "attacker-subject", db) is None
+    assert victim.username == "victim"
+
+
+def test_email_linking_still_requires_a_verified_email_when_enabled(db, make_user):
+    make_user(username="victim2", email="victim2@test.dev")
+    idp = _create_idp(db, slug="trusted", allow_email_linking=True)
+
+    with pytest.raises(exc.AuthorizationError):
+        _run(
+            IdentityProviderService()._find_or_create_user(
+                idp,
+                "unverified-subject",
+                {"sub": "unverified-subject", "email": "victim2@test.dev", "email_verified": False},
+                db,
+            )
+        )
+    assert links_crud.get_user_identity_provider_by_subject_and_idp_id(idp.id, "unverified-subject", db) is None
+
+
+def test_email_linking_adopts_the_account_when_enabled_and_verified(db, make_user):
+    user = make_user(username="owner", email="owner@test.dev")
+    idp = _create_idp(db, slug="trusted2", allow_email_linking=True)
+
+    linked = _run(
+        IdentityProviderService()._find_or_create_user(
+            idp,
+            "owner-subject",
+            {"sub": "owner-subject", "email": "owner@test.dev", "email_verified": True},
+            db,
+        )
+    )
+    assert linked.id == user.id
+    assert links_crud.get_user_identity_provider_by_subject_and_idp_id(idp.id, "owner-subject", db) is not None
+
+
+def test_profile_sync_withholds_an_unverified_email(db, make_user, monkeypatch):
+    """An unverified address must not reach the host's user row via sync.
+
+    Sync runs on every login, so passing one through would silently undo the
+    gate that guards linking — and the local email is where password resets go.
+    """
+    user = make_user(username="synced", email="synced@test.dev")
+    idp = _create_idp(db, slug="sync")
+
+    captured: dict = {}
+    repo = ports.get_user_repository()
+    monkeypatch.setattr(repo, "sync_from_idp", lambda user_id, claims, db: captured.update(claims), raising=False)
+
+    _run(
+        IdentityProviderService()._update_user_from_idp(
+            user, idp, {"email": "attacker@evil.dev", "email_verified": False, "name": "Synced"}, db
+        )
+    )
+    assert "email" not in captured
+    assert captured["email_verified"] is False
+    assert captured["name"] == "Synced"
+
+    captured.clear()
+    _run(
+        IdentityProviderService()._update_user_from_idp(
+            user, idp, {"email": "new@test.dev", "email_verified": True, "name": "Synced"}, db
+        )
+    )
+    assert captured["email"] == "new@test.dev"
+    assert captured["email_verified"] is True
+
+
+# --------------------------------------------------------------------------- #
+# Discovery issuer validation (H3)
+# --------------------------------------------------------------------------- #
+
+
+def test_discovery_issuer_must_match_the_configured_issuer_url(db):
+    """OIDC Discovery 1.0 §4.3: the returned issuer MUST equal the prefix used.
+
+    Without it the ``iss`` an ID token is checked against is whatever the
+    document declared — self-referential, so a document from provider A can
+    claim to be provider B and every later comparison still passes.
+    """
+    from jafaal.identity_providers.discovery import _assert_discovered_issuer_matches
+
+    idp = _create_idp(db, slug="disc", issuer_url=ISSUER)
+
+    # Exact match, and trailing-slash normalisation, are both accepted.
+    _assert_discovered_issuer_matches(idp, {"issuer": ISSUER})
+    _assert_discovered_issuer_matches(idp, {"issuer": ISSUER + "/"})
+
+    with pytest.raises(exc.IdentityProviderError):
+        _assert_discovered_issuer_matches(idp, {"issuer": "https://evil.example"})
+    with pytest.raises(exc.IdentityProviderError):
+        _assert_discovered_issuer_matches(idp, {})
 
 
 def test_prune_expired_caches():

@@ -35,6 +35,8 @@ class IdentityProviderBase(BaseModel):
         scopes (str): OAuth2/OIDC scopes (max 500 characters). Defaults to "openid profile email".
         icon (str | None): Icon name or URL (max 100 characters).
         auto_create_users (bool): Whether to auto-create users on first login. Defaults to True.
+        allow_email_linking (bool): Whether a verified IdP email may adopt an existing local
+            account. Defaults to False.
         sync_user_info (bool): Whether to sync user info on each login. Defaults to True.
         user_mapping (Dict[str, Any] | None): Claims mapping configuration.
         client_id (str | None): The client ID for the provider (1-512 characters).
@@ -62,6 +64,14 @@ class IdentityProviderBase(BaseModel):
     )
     icon: StrictStr | None = Field(default=None, max_length=100, description="Icon name or URL")
     auto_create_users: StrictBool = Field(default=True, description="Auto-create users on first login")
+    allow_email_linking: StrictBool = Field(
+        default=False,
+        description=(
+            "Allow a login from this provider to adopt an existing local account whose email matches. "
+            "Off by default: it trusts this provider's email_verified claim as proof of ownership of "
+            "any address, including domains it has no authority over."
+        ),
+    )
     sync_user_info: StrictBool = Field(default=True, description="Sync user info on each login")
     user_mapping: dict[str, Any] | None = Field(default=None, description="Claims mapping configuration")
     client_id: StrictStr | None = Field(default=None, min_length=1, max_length=512)

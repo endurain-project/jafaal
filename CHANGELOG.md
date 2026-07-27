@@ -116,6 +116,22 @@ First release.
   stale cached key sets, still verify against the published keys — and when the
   provider declares an issuer, a discovery failure is a **failed** login rather
   than an unverified one.
+- The discovery document's `issuer` is checked against the configured issuer URL
+  (OIDC Discovery 1.0 §4.3, a MUST). Without it the value `iss` is validated
+  against is simply whatever the fetched document declared — self-referential,
+  so a document served by one provider can claim to be another.
+- Adopting an **existing** local account by matching email is opt-in per
+  provider (`allow_email_linking`, off by default) and still requires
+  `email_verified`. `email_verified` is the provider's *own* assertion, and
+  nothing stops a provider asserting it for a domain it has no authority over —
+  so in a multi-provider deployment an always-on email fallback would make the
+  weakest enabled provider a takeover path for every account. When a link is
+  made the account owner is notified out of band via the `IdpAccountLinked`
+  event, since it is a new way to sign in that they did not initiate.
+- Profile sync carries `email_verified` to the host and **withholds an
+  unverified `email` entirely**. Sync runs on every login, so passing one
+  through would quietly undo the linking gate — and the local email is where
+  password resets are delivered.
 - SSRF-guarded outbound calls: scheme allow-list, public-address enforcement on
   every resolved record, and connections pinned to the validated IP so a DNS
   rebind cannot swap in an internal target. Requests that carry credentials —

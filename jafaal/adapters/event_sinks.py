@@ -21,6 +21,7 @@ if TYPE_CHECKING:
         AccountLocked,
         AuthEventSink,
         EmailVerificationRequested,
+        IdpAccountLinked,
         NewDeviceLogin,
         PasswordResetRequested,
         RefreshTokenTheftDetected,
@@ -112,6 +113,14 @@ class LoggingAuthEventSink:
             event.token_family_id,
         )
 
+    async def on_idp_account_linked(self, event: IdpAccountLinked) -> None:
+        self._logger.log(
+            self._level,
+            "identity provider linked to existing account: user=%s idp=%s",
+            event.user_id,
+            event.idp_slug,
+        )
+
 
 class CompositeAuthEventSink:
     """Dispatch each event to several sinks in order.
@@ -156,3 +165,6 @@ class CompositeAuthEventSink:
 
     async def on_refresh_token_theft_detected(self, event: RefreshTokenTheftDetected) -> None:
         await self._dispatch("on_refresh_token_theft_detected", event)
+
+    async def on_idp_account_linked(self, event: IdpAccountLinked) -> None:
+        await self._dispatch("on_idp_account_linked", event)

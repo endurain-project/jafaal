@@ -131,6 +131,8 @@ class Event:
     # --- identity providers ---
     IDP_LINK_ADDED: Final = "idp.link_added"
     IDP_LINK_REMOVED: Final = "idp.link_removed"
+    IDP_EMAIL_LINKED: Final = "idp.email_linked"
+    IDP_EMAIL_LINK_REFUSED: Final = "idp.email_link_refused"
     IDP_DISCOVERY_FAILED: Final = "idp.discovery_failed"
     OAUTH_STATE_REPLAY_REJECTED: Final = "oauth_state.replay_rejected"
     OAUTH_STATE_IP_MISMATCH: Final = "oauth_state.ip_mismatch"

@@ -33,6 +33,7 @@ from joserfc.errors import (
     MissingClaimError,
 )
 
+import jafaal.audit as jafaal_audit
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_providers.id_token as id_token_verify
 import jafaal.settings as jafaal_settings
@@ -47,6 +48,49 @@ logger = logging.getLogger(__name__)
 def _idp_require_https() -> bool:
     """Whether identity-provider endpoints must use https (``idp_require_https``)."""
     return jafaal_settings.get_settings().sso.idp_require_https
+
+
+def _assert_discovered_issuer_matches(idp: idp_models.IdentityProvider, config: dict[str, Any]) -> None:
+    """Assert the discovery document's ``issuer`` is the one we asked for.
+
+    OpenID Connect Discovery 1.0 §4.3: *"The ``issuer`` value returned MUST be
+    identical to the Issuer URL that was used as the prefix to
+    ``/.well-known/openid-configuration``."*
+
+    This is the check that makes ``iss`` mean anything. Without it the value an
+    ID token is validated against is simply whatever the fetched document
+    declared — self-referential, so a document served from provider A can claim
+    to be provider B and every subsequent ``iss`` comparison still passes. In a
+    multi-provider deployment that is the difference between "this token came
+    from the IdP we configured" and "this token came from *an* IdP".
+
+    Compared with the trailing slash normalised away, since ``https://idp/`` and
+    ``https://idp`` are the same issuer and providers are inconsistent about it.
+
+    Args:
+        idp: The provider whose document was fetched.
+        config: The parsed discovery document.
+
+    Raises:
+        IdentityProviderError: If ``issuer`` is missing or does not match.
+    """
+    declared = config.get("issuer")
+    configured = idp.issuer_url or ""
+    if not isinstance(declared, str) or declared.rstrip("/") != configured.rstrip("/"):
+        logger.error(
+            f"OIDC discovery for {idp.name} declared issuer {declared!r}, but it was fetched from {configured!r}"
+        )
+        jafaal_audit.record(
+            jafaal_audit.Event.IDP_DISCOVERY_FAILED,
+            outcome=jafaal_audit.Outcome.FAILURE,
+            level=logging.ERROR,
+            idp=idp.slug,
+            reason="issuer_mismatch",
+        )
+        raise jafaal_exceptions.IdentityProviderError(
+            f"Identity provider {idp.name} published a discovery document whose issuer does not match its "
+            "configured issuer URL, so its tokens cannot be trusted."
+        )
 
 
 class OidcDiscovery:
@@ -456,14 +500,17 @@ class OidcDiscovery:
         This method attempts to fetch the OIDC configuration from the provider's well-known discovery endpoint.
         It uses an in-memory cache to avoid redundant network requests and respects a cache TTL (time-to-live).
         If the configuration is cached and not expired, it is returned directly from the cache.
-        Otherwise, it fetches the configuration over HTTP, caches it, and returns the result.
+        Otherwise, it fetches the configuration over HTTP, validates its ``issuer``, caches it, and returns the result.
         Args:
             idp (idp_models.IdentityProvider): The identity provider instance containing the issuer URL and unique ID.
         Returns:
             dict[str, Any] | None: The OIDC discovery configuration as a dictionary if successful, or None if fetching fails
             or the issuer URL is not provided.
         Raises:
-            Does not raise exceptions directly; logs errors and returns None on failure.
+            IdentityProviderError: If the document's ``issuer`` does not match the
+                configured ``issuer_url``. A transport failure returns ``None``;
+                this one raises, because it is a misconfiguration or an attack,
+                not an outage.
         """
         if not idp.issuer_url:
             return None
@@ -487,13 +534,6 @@ class OidcDiscovery:
 
             response.raise_for_status()
             config = response.json()
-
-            # Cache the configuration
-            self._discovery_cache[idp.id] = config
-            self._cache_expiry[idp.id] = datetime.now(UTC) + self._cache_ttl
-            self._prune_expired_caches()
-
-            return config
         except httpx.HTTPStatusError as err:
             logger.warning(
                 f"HTTP error fetching OIDC discovery for {idp.name}: {err.response.status_code} - {err.response.text}"
@@ -524,6 +564,18 @@ class OidcDiscovery:
         except Exception as err:
             logger.warning(f"Failed to fetch OIDC discovery for {idp.name}: {err}")
             return None
+
+        # Validated outside the fetch block on purpose: the handlers above turn a
+        # transport failure into ``None``, and this must not be swallowed the
+        # same way.
+        _assert_discovered_issuer_matches(idp, config)
+
+        # Cache the configuration
+        self._discovery_cache[idp.id] = config
+        self._cache_expiry[idp.id] = datetime.now(UTC) + self._cache_ttl
+        self._prune_expired_caches()
+
+        return config
 
     async def resolve_token_endpoint(self, idp: idp_models.IdentityProvider) -> str:
         """

@@ -165,6 +165,7 @@ def create_identity_provider(idp_data: idp_schema.IdentityProviderCreate, db: Se
         scopes=idp_data.scopes,
         icon=idp_data.icon,
         auto_create_users=idp_data.auto_create_users,
+        allow_email_linking=idp_data.allow_email_linking,
         sync_user_info=idp_data.sync_user_info,
         user_mapping=idp_data.user_mapping,
     )
