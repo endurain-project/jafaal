@@ -43,12 +43,19 @@ def verify_and_consume_backup_code(
     ``mark_backup_code_as_used``.
 
     The loop deliberately does **not** short-circuit on the first match: it
-    runs a verification for every stored hash so that the number of (slow,
-    constant-time) Argon2 verifications — and therefore the wall-clock
-    latency — does not depend on the matching code's position in the list.
-    This removes a timing side channel that could otherwise hint at how many
-    backup codes remain or where a valid code sits. Step-up/MFA progressive
-    lockout remains the primary guard against guessing.
+    runs a verification for every stored hash so that the wall-clock latency
+    does not depend on the matching code's *position* in the list, which would
+    otherwise reveal which code was used.
+
+    It does **not** hide how many codes remain: the loop runs exactly one
+    (deliberately slow) Argon2 verification per unused code, so total latency is
+    proportional to that count and drops to nearly zero once none are left. That
+    is observable to anyone already holding a valid ``mfa_token``, i.e. someone
+    who has already passed the password factor for this account. Equalising it
+    would mean padding every call to the maximum code count, paying the full
+    Argon2 cost on every MFA attempt; the leak is a count of remaining recovery
+    codes, not a credential, so the cost is not worth it. Step-up/MFA
+    progressive lockout remains the primary guard against guessing.
 
     Args:
         user_id: User ID to verify the backup code for.

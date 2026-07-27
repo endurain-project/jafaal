@@ -331,6 +331,15 @@ def create_auth_router(
     # ``<api-root>/.well-known/jwks.json`` — the URL to advertise as the
     # ``jwks_uri`` for resource servers verifying asymmetric tokens. The RFC 8414
     # discovery document sits beside it and points at both.
+    #
+    # It stays on the aggregate router rather than moving to the RFC 8414 §3
+    # issuer-derived path, because the endpoint URLs *inside* the document are
+    # built from the mount, and the mount is only knowable from the request path
+    # of a route that is itself mounted. An app-level absolute route would serve
+    # the document from the right place with the wrong endpoints in it, which is
+    # strictly worse. A host that needs the spec location mounts a second copy —
+    # ``create_metadata_router(prefixes.auth, path=issuer_derived_metadata_path())``
+    # — or serves ``get_authorization_server_metadata()`` there itself.
     aggregate.include_router(jwks_router)
     aggregate.include_router(create_metadata_router(prefixes.auth))
     return aggregate

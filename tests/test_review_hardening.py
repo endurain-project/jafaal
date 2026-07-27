@@ -271,6 +271,92 @@ def test_metadata_advertises_the_introspection_scope():
     assert scopes.AUTH_INTROSPECT in document["scopes_supported"]
 
 
+def test_metadata_uses_only_registered_auth_method_values():
+    """RFC 8414 §2 draws these from an IANA registry; ``"bearer"`` is not in it.
+
+    JAFAAL protects introspection with a scoped access token, which is not a
+    *client authentication* method at all — so the member is omitted rather than
+    carrying an unregistered token a strict client may reject, or ``"none"``,
+    which would claim the endpoint is unprotected.
+    """
+    registered = {
+        "none",
+        "client_secret_post",
+        "client_secret_basic",
+        "client_secret_jwt",
+        "private_key_jwt",
+        "tls_client_auth",
+        "self_signed_tls_client_auth",
+    }
+    document = metadata.get_authorization_server_metadata(api_root="https://app.test/api/v1")
+
+    assert "introspection_endpoint_auth_methods_supported" not in document
+    for key, values in document.items():
+        if key.endswith("_auth_methods_supported"):
+            assert set(values) <= registered, key
+
+
+def test_issuer_derived_metadata_path_follows_rfc8414_section_3():
+    # The well-known segment goes between host and path, so an issuer carrying a
+    # path does NOT publish at ``<issuer>/.well-known/...``.
+    with _settings(base_url="https://app.test/api/v1"):
+        assert metadata.issuer_derived_metadata_path() == "/.well-known/oauth-authorization-server/api/v1"
+    with _settings(base_url="https://app.test"):
+        assert metadata.issuer_derived_metadata_path() == "/.well-known/oauth-authorization-server"
+
+
+def test_unverified_account_cannot_log_in(client, make_user):
+    """``is_verified`` was never consulted, and only sign-up's coupling hid it.
+
+    A host repository that creates active-but-unverified users — or SSO
+    provisioning, which hard-codes ``is_active=True`` — would otherwise let an
+    unverified address authenticate.
+    """
+    make_user(username="unverified", password=PASSWORD, is_active=True, is_verified=False)
+
+    response = client.post(
+        "/api/v1/auth/login",
+        data={"username": "unverified", "password": PASSWORD, "client_id": WEB_CLIENT_ID},
+    )
+    assert response.status_code == 401
+
+
+def test_password_field_bounds_are_consistent():
+    """One transport bound, not three literals that can drift apart."""
+    import jafaal.password_reset_tokens.schema as reset_schema
+    import jafaal.schema as auth_schema
+    from jafaal.settings import PASSWORD_FIELD_MAX_LENGTH
+
+    def _max_len(model, field):
+        return next(m.max_length for m in model.model_fields[field].metadata if hasattr(m, "max_length"))
+
+    assert _max_len(auth_schema.SignUpRequest, "password") == PASSWORD_FIELD_MAX_LENGTH
+    assert _max_len(reset_schema.PasswordResetConfirm, "new_password") == PASSWORD_FIELD_MAX_LENGTH
+
+    # And the policy bound cannot be raised past the transport one, which would
+    # silently make it unreachable.
+    with pytest.raises(ValueError, match="transport bound"):
+        settings_mod.PasswordSettings(max_length=PASSWORD_FIELD_MAX_LENGTH + 1)
+
+
+def test_signup_writes_the_user_and_credential_in_one_transaction(db):
+    """``create_local_user`` must flush, not commit.
+
+    It used to commit, so an error before JAFAAL wrote the credential left a
+    permanently unusable account holding the username and email. Flushing keeps
+    both rows in the caller's transaction, so a rollback removes the user too.
+    """
+    from jafaal.adapters import SqlAlchemyUserRepository
+
+    repo = SqlAlchemyUserRepository()
+    created = repo.create_local_user("ghost", "ghost@test.dev", db, is_active=True, is_verified=True)
+    assert created.id is not None, "the primary key must be populated for the credential write"
+
+    # Nothing was committed, so abandoning the transaction abandons the account.
+    db.rollback()
+    assert repo.get_by_username("ghost", db) is None
+
+
 def test_pending_mfa_ticket_carries_the_client_it_was_issued_for():
     """The second factor must finish against the client the password step began.
 

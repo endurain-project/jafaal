@@ -346,6 +346,17 @@ class SessionSettings:
 # ===========================================================================
 
 
+#: Hard ceiling on any password field accepted over the wire.
+#:
+#: A *transport* bound, not a policy one: it exists so a request body cannot
+#: carry an unbounded string into the (deliberately slow) hashing layer. The
+#: policy bound is :attr:`PasswordSettings.max_length`, which is validated to
+#: stay at or below this value — previously the request schemas each carried
+#: their own literal (128 / none / 256), so raising the policy above the
+#: smallest of them silently could not take effect.
+PASSWORD_FIELD_MAX_LENGTH: int = 1024
+
+
 @dataclass(frozen=True)
 class PasswordSettings:
     """Argon2 cost parameters and the accepted password length bound.
@@ -376,6 +387,12 @@ class PasswordSettings:
             raise ValueError(
                 "PasswordSettings.max_length must be at least 64 so long passphrases are "
                 "accepted (NIST SP 800-63B recommends allowing at least 64 characters)."
+            )
+        if self.max_length > PASSWORD_FIELD_MAX_LENGTH:
+            raise ValueError(
+                f"PasswordSettings.max_length ({self.max_length}) exceeds the transport bound "
+                f"PASSWORD_FIELD_MAX_LENGTH ({PASSWORD_FIELD_MAX_LENGTH}); the request schemas would "
+                "reject such a password before the policy ever saw it."
             )
 
 

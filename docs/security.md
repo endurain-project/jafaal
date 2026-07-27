@@ -268,7 +268,10 @@ it merely permits.
 Passwords are NFKC-normalized before hashing (§3.1.1.2), so a passphrase enrolled
 on one platform verifies on another. Argon2id is the only hashing algorithm and
 it never truncates, so `max_length` (default 128, minimum 64) is the sole upper
-bound and exists only to cap hashing work on an unauthenticated endpoint.
+bound and exists only to cap hashing work on an unauthenticated endpoint. Every
+password request field shares one transport bound, and `max_length` is validated
+against it, so the policy can never be set to a value the schemas would reject
+first.
 
 ## Response headers for SSO redirect pages
 

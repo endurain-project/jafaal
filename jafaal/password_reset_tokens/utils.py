@@ -73,13 +73,29 @@ async def request_password_reset(email: str, db: Session) -> None:
     event-delivery failures are swallowed (logged) so they cannot change the
     caller's response.
 
+    Delivery is **dispatched, not awaited inline**. A host sink that sends SMTP
+    synchronously would otherwise add hundreds of milliseconds to the "account
+    exists" branch and nothing to the other, turning an identical response body
+    into a timing oracle. ``dispatch_event`` hands the coroutine to the
+    background loop, so both branches return in the same time.
+
     Args:
         email: The email address supplied in the reset request.
         db: Active SQLAlchemy session.
     """
     user = jafaal_ports.get_user_repository().get_by_email(email, db)
     if user is None or not user.is_active:
-        # Don't reveal whether the address maps to an (active) account.
+        # Don't reveal whether the address maps to an (active) account — but do
+        # record the probe. Returning early *before* auditing meant an attacker
+        # could walk a hundred thousand addresses through this endpoint and
+        # leave nothing behind for a SIEM to correlate.
+        jafaal_audit.record(
+            jafaal_audit.Event.PASSWORD_RESET_REQUESTED,
+            outcome=jafaal_audit.Outcome.BLOCKED,
+            level=logging.WARNING,
+            email=email,
+            reason="unknown_or_inactive_account",
+        )
         return
 
     token, expires_at = create_password_reset_token(user.id, db)
@@ -89,20 +105,17 @@ async def request_password_reset(email: str, db: Session) -> None:
         email=user.email,
         expires_at=expires_at.isoformat(),
     )
-    event = jafaal_ports.PasswordResetRequested(
-        user_id=user.id,
-        email=user.email,
-        display_name=user.username,
-        token=token,
-        expires_at=expires_at,
-        locale=None,
+    jafaal_ports.dispatch_event(
+        "on_password_reset_requested",
+        jafaal_ports.PasswordResetRequested(
+            user_id=user.id,
+            email=user.email,
+            display_name=user.username,
+            token=token,
+            expires_at=expires_at,
+            locale=None,
+        ),
     )
-    try:
-        await jafaal_ports.get_event_sink().on_password_reset_requested(event)
-    except Exception:
-        # Best-effort delivery: never surface a failure — doing so would leak
-        # account existence and break the enumeration-safe contract.
-        logger.exception("Failed to deliver password-reset event for user %s", user.id)
 
 
 def use_password_reset_token(

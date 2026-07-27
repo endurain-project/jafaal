@@ -21,7 +21,7 @@ from typing import Any
 
 from joserfc import jwt
 from joserfc.errors import BadSignatureError
-from joserfc.jwk import ECKey, OctKey, RSAKey
+from joserfc.jwk import ECKey, RSAKey
 
 import jafaal.exceptions as jafaal_exceptions
 
@@ -105,12 +105,20 @@ def verify_at_hash(access_token: str, alg: str, at_hash_claim: str) -> None:
         raise jafaal_exceptions.InvalidTokenError("ID token at_hash mismatch")
 
 
-def _import_jwks_key(key_data: dict[str, Any]) -> RSAKey | ECKey | OctKey | None:
+def _import_jwks_key(key_data: dict[str, Any]) -> RSAKey | ECKey | None:
     """Import one JWKS entry, or return ``None`` when it is unusable.
 
     A JWK Set may legitimately mix key types and include entries for other uses
     (e.g. encryption), so an entry we cannot import is skipped rather than
     failing the whole verification.
+
+    **Only asymmetric keys are materialised.** An ID token is verified against
+    the provider's *public* key, so a symmetric ``oct`` entry can never be the
+    right answer — and importing one would leave a live RS256→HS256 confusion
+    primitive sitting in the candidate list, where its harmlessness depends
+    entirely on :data:`ID_TOKEN_ALLOWED_ALGORITHMS` continuing to exclude every
+    ``HS*``. Refusing the key type here means that safety property is enforced
+    twice, independently, rather than resting on one distant constant.
 
     Args:
         key_data: A single JWK from the provider's key set.
@@ -124,16 +132,20 @@ def _import_jwks_key(key_data: dict[str, Any]) -> RSAKey | ECKey | OctKey | None
             return RSAKey.import_key(key_data)
         if key_type == "EC":
             return ECKey.import_key(key_data)
-        if key_type == "oct":
-            return OctKey.import_key(key_data)
     except Exception:
         logger.warning(f"Skipping unimportable JWKS entry (kty={key_type}, kid={key_data.get('kid')})")
+        return None
+    if key_type == "oct":
+        logger.warning(
+            f"Skipping symmetric JWKS entry (kid={key_data.get('kid')}): an ID token is verified against a "
+            "public key, so a shared secret is never a valid candidate."
+        )
         return None
     logger.debug(f"Skipping JWKS entry with unsupported key type: {key_type}")
     return None
 
 
-def select_jwks_keys(jwks: dict[str, Any], kid: str | None) -> list[RSAKey | ECKey | OctKey]:
+def select_jwks_keys(jwks: dict[str, Any], kid: str | None) -> list[RSAKey | ECKey]:
     """Return the JWKS keys to try for an ID token, most likely first.
 
     When the token carries a ``kid`` that matches an entry, only that key is
@@ -164,7 +176,7 @@ def select_jwks_keys(jwks: dict[str, Any], kid: str | None) -> list[RSAKey | ECK
     return [key for key in (_import_jwks_key(entry) for entry in entries) if key is not None]
 
 
-def decode_with_any_key(id_token: str, keys: list[RSAKey | ECKey | OctKey]) -> Any:
+def decode_with_any_key(id_token: str, keys: list[RSAKey | ECKey]) -> Any:
     """Decode ``id_token`` against the first key whose signature verifies.
 
     Args:

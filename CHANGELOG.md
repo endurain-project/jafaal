@@ -27,7 +27,10 @@ First release.
 - A `length_only` password policy by default, with a 15-character regular
   minimum (20 for admins). SP 800-63B-4 §3.1.1.2 states verifiers **SHALL NOT**
   impose composition rules; `password_type="strict"` remains available for hosts
-  bound by legacy requirements.
+  bound by legacy requirements. Every password field shares one transport bound
+  (`PASSWORD_FIELD_MAX_LENGTH`), and `PasswordSettings.max_length` is validated
+  against it — previously three schemas carried their own literals (128 / none /
+  256), so raising the policy past the smallest silently had no effect.
 - Progressive lockout on failed logins, keyed per account **and** per source IP,
   so one address cannot cheaply lock out many accounts. The source IP is taken
   from the forwarded chain resolved right-to-left (the first hop not listed in
@@ -49,7 +52,18 @@ First release.
   enumeration-safe password reset. Sign-up is enumeration-safe too: an already
   registered username or email produces the same status and body as a fresh
   registration, and the password is hashed before the existence check so the
-  branch is not visible in response time either.
+  branch is not visible in response time either. The user row and its credential
+  are written in **one transaction**, so a failure between them cannot leave a
+  credential-less account squatting the username.
+- Reset-request delivery is dispatched to the background rather than awaited
+  inline, so a host sink that sends SMTP synchronously cannot make the "account
+  exists" branch measurably slower than the other. Probes for unknown addresses
+  are audited (`blocked`), so an enumeration sweep leaves a trail instead of
+  nothing.
+- Login checks `is_verified` as well as `is_active`. The former was never
+  consulted; only JAFAAL's own sign-up coupling the two flags hid it, so any
+  host repository creating active-but-unverified users — or SSO provisioning,
+  which hard-codes `is_active=True` — would have let an unverified address in.
 - A password change or reset revokes the account's **API keys** as well as its
   sessions, and marks outstanding reset tokens used. Self-service password
   change now revokes other sessions by default — "change my password" is what a
@@ -66,10 +80,12 @@ First release.
 - RFC 8414 authorization-server metadata at
   `/.well-known/oauth-authorization-server`, so a client discovers the issuer,
   JWKS, and endpoint URLs instead of hard-coding them. It carries **no extension
-  members**: everything needed to drive JAFAAL is a standard field. `/auth/login`
+  members** and only IANA-registered values in its `*_auth_methods_supported`
+  fields: everything needed to drive JAFAAL is a standard field. `/auth/login`
   is deliberately **not** advertised — it authenticates a first-party user
   directly and is not the (OAuth 2.1-removed) resource-owner password-credentials
-  grant.
+  grant. `issuer_derived_metadata_path()` computes the RFC 8414 §3 location for
+  a host that wants to publish there as well.
 - RFC 6749 §4.1 authorization-code flow with mandatory PKCE (`/auth/authorize` →
   `/auth/token`), driven by registered public clients
   ([`OAuthClient`][jafaal.OAuthClient]). Four bindings must hold for a code to be
@@ -137,9 +153,11 @@ First release.
 **Multi-factor**
 
 - TOTP with QR provisioning, single-use backup codes, and single-use enforcement
-  of each matched timestep. The pending-MFA ticket is bound to the client the
-  password step was started for, so a login begun for a narrow, body-delivery
-  client cannot be finished as a wide, cookie-delivery one.
+  of each matched timestep — including the code that completes *enrolment*, so
+  no TOTP acceptance point sits outside the replay guard (RFC 6238 §5.2). The
+  pending-MFA ticket is bound to the client the password step was started for,
+  so a login begun for a narrow, body-delivery client cannot be finished as a
+  wide, cookie-delivery one.
 - WebAuthn / passkeys: registration, passwordless authentication, and an
   optional second factor after password login. Binding *and* unbinding a passkey
   require step-up verification (NIST SP 800-63B §6.1.2 / §6.1.4): because a
@@ -167,6 +185,10 @@ First release.
   (OIDC Discovery 1.0 §4.3, a MUST). Without it the value `iss` is validated
   against is simply whatever the fetched document declared — self-referential,
   so a document served by one provider can claim to be another.
+- Only asymmetric JWKS entries are materialised as ID-token verification
+  candidates. A symmetric `oct` key can never verify a provider's signature, and
+  importing one left a live RS256→HS256 confusion primitive whose harmlessness
+  rested entirely on the algorithm allow-list staying correct.
 - Adopting an **existing** local account by matching email is opt-in per
   provider (`allow_email_linking`, off by default) and still requires
   `email_verified`. `email_verified` is the provider's *own* assertion, and

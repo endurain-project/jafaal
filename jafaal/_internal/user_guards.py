@@ -69,16 +69,27 @@ def resolve_credential_user(user_id: Any, db: Session) -> jafaal_ports.UserProto
 
 
 def check_user_is_active(user: jafaal_ports.UserProtocol) -> None:
-    """Raise ``401`` if ``user`` is not active.
+    """Raise ``401`` if ``user`` cannot currently authenticate.
+
+    Checks **both** flags. ``is_active`` is the account-level gate; ``is_verified``
+    is the email one, and it was previously never consulted at login. That was
+    safe only by accident: JAFAAL's own sign-up couples the two, so an
+    unverified account also happened to be inactive. Any host repository that
+    creates an active-but-unverified user — or ``provision_from_idp``, which
+    hard-codes ``is_active=True`` and takes ``is_verified`` from the provider's
+    claim — would have let an unverified address log in. The invariant is
+    enforced here rather than left implicit in one particular sign-up flow.
 
     Args:
         user: The user to check.
 
     Raises:
-        InactiveAccountError: 401 if the account is inactive.
+        InactiveAccountError: 401 if the account is inactive or unverified.
     """
     if not user.is_active:
         raise jafaal_exceptions.InactiveAccountError("This account is not active.")
+    if not user.is_verified:
+        raise jafaal_exceptions.InactiveAccountError("This account's email address is not verified.")
 
 
 def assert_can_access_user(principal: Principal, target_user_id: Any) -> None:

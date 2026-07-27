@@ -202,7 +202,7 @@ the settings and invalidates settings-derived caches (e.g. the token manager).
 | `argon2_time_cost` | `3` | Argon2 time cost (iterations) for password hashing. |
 | `argon2_memory_cost` | `65536` | Argon2 memory cost, in KiB. |
 | `argon2_parallelism` | `4` | Argon2 parallelism (lanes). |
-| `max_length` | `128` | Maximum accepted password length (minimum 64), enforced before hashing. |
+| `max_length` | `128` | Maximum accepted password length (minimum 64), enforced before hashing. Cannot exceed `jafaal.settings.PASSWORD_FIELD_MAX_LENGTH` (1024), the shared bound every password request field carries. |
 | `totp_replay_fail_open` | `False` | On a state-store outage, accept a TOTP code without replay protection instead of failing closed (503). |
 | `rp_id` | `""` | WebAuthn Relying Party ID (registrable domain, no scheme/port); defaults to the `base_url` host. |
 | `rp_name` | `""` | Human-readable RP name shown by the authenticator; defaults to `app_name`. |

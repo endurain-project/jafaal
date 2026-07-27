@@ -304,7 +304,16 @@ def enable_user_mfa(
     if user.mfa_enabled:
         raise jafaal_exceptions.InvalidRequestError("MFA is already enabled for this user")
 
-    if not verify_totp(secret, mfa_code):
+    # Claim the timestep, exactly as the verification path does. RFC 6238 §5.2:
+    # "the verifier MUST NOT accept the second attempt of the OTP after the
+    # successful validation". A bare verify_totp() here left the enrolment code
+    # replayable for the rest of its ±1-step window — and this was the one TOTP
+    # acceptance point outside the single-use guard, so a code observed during
+    # enrolment could immediately satisfy a step-up challenge.
+    matched_timestep = _matched_totp_timestep(secret, mfa_code)
+    if matched_timestep is None:
+        raise jafaal_exceptions.InvalidMFACodeError()
+    if not _claim_totp_timestep(user_id, matched_timestep):
         raise jafaal_exceptions.InvalidMFACodeError()
 
     encrypted_secret = crypto.encrypt_token_fernet(secret)

@@ -142,6 +142,12 @@ class UserRepository(Protocol):
         user/profile row here (with the given active/verified state and any
         host-specific defaults). ``username``/``email`` are passed as supplied;
         the host applies its own normalization and uniqueness checks.
+
+        **Flush, do not commit.** The primary key must be populated for the
+        credential write that follows, but the two rows have to land in one
+        transaction: committing here leaves a credential-less account squatting
+        the username and email if anything downstream fails. JAFAAL commits both
+        together when it writes the credential.
         """
         ...
 

@@ -5,6 +5,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, StrictBool, StrictStr
 
 from jafaal.orm import UserId
+from jafaal.settings import PASSWORD_FIELD_MAX_LENGTH
 
 
 class PasswordResetToken(BaseModel):
@@ -88,8 +89,8 @@ class PasswordResetConfirm(BaseModel):
     new_password: StrictStr = Field(
         ...,
         description="The new password to set",
-        min_length=8,
-        max_length=256,
+        min_length=1,
+        max_length=PASSWORD_FIELD_MAX_LENGTH,
     )
 
     model_config = ConfigDict(extra="forbid")

@@ -11,6 +11,8 @@ from pydantic import (
     StrictStr,
 )
 
+from jafaal.settings import PASSWORD_FIELD_MAX_LENGTH
+
 
 class SignUpRequest(BaseModel):
     """Minimal local sign-up request.
@@ -25,7 +27,9 @@ class SignUpRequest(BaseModel):
 
     username: StrictStr = Field(..., min_length=1, max_length=250)
     email: StrictStr = Field(..., min_length=3, max_length=250)
-    password: StrictStr = Field(..., min_length=8)
+    # Bounded by the shared transport limit; the policy minimum/maximum comes
+    # from PasswordSettings, applied by validate_and_hash_for_user.
+    password: StrictStr = Field(..., min_length=1, max_length=PASSWORD_FIELD_MAX_LENGTH)
 
 
 class MFALoginRequest(BaseModel):
@@ -79,7 +83,7 @@ class StepUpVerification(BaseModel):
     current_password: StrictStr | None = Field(
         default=None,
         min_length=1,
-        max_length=250,
+        max_length=PASSWORD_FIELD_MAX_LENGTH,
         description="Current password (step-up verification). Required when the account has a local password.",
     )
     mfa_code: StrictStr | None = Field(

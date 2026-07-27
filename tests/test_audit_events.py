@@ -168,15 +168,45 @@ def test_api_key_lifecycle_is_audited(db, make_user, audited):
     assert deleted.levelno == logging.WARNING
 
 
+async def _drain_events(sink, *, expected: int = 1, timeout: float = 2.0) -> None:
+    """Yield to the loop until ``sink`` has received ``expected`` events.
+
+    Dispatch schedules delivery as a background task on the running loop, so an
+    async test has to give it a turn. ``wait_for_pending_events`` is a blocking
+    join and would deadlock the very loop the task needs.
+    """
+    import asyncio
+
+    deadline = asyncio.get_running_loop().time() + timeout
+    while len(sink.events) < expected and asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(0.01)
+
+
 async def test_password_reset_is_audited_end_to_end(db, make_user, event_sink, audited):
     user = make_user()
     await prt_utils.request_password_reset(user.email, db)
+    # Delivery is dispatched to the background loop rather than awaited inline,
+    # so that the "account exists" branch does not take measurably longer than
+    # the "unknown address" one.
+    await _drain_events(event_sink)
     token = event_sink.events[0].token
     prt_utils.use_password_reset_token(token, "Rec0very!Pass", _svc(db), db)
 
     assert "password.reset_requested" in _slugs(audited)
     assert _find(audited, "password.reset_completed").user_id == user.id
     assert "session.revoked" in _slugs(audited)
+
+
+async def test_unknown_email_reset_probe_is_audited(db, audited):
+    """An enumeration sweep must leave a trail for a SIEM to correlate.
+
+    Returning early *before* auditing meant an attacker could walk a hundred
+    thousand addresses through this endpoint and produce zero records.
+    """
+    await prt_utils.request_password_reset("nobody@absent.dev", db)
+
+    record = _find(audited, "password.reset_requested")
+    assert record.outcome == "blocked"
 
 
 def test_sign_up_confirmation_records_success_and_failure(db, make_user, audited):

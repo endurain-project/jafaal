@@ -5,9 +5,13 @@ A generic adapter over a host user model mapped via :func:`jafaal.map_models` (s
 columns (``username``, ``email``, ``is_active``, ``is_verified``) are enough to
 create a row.
 
-**Transaction behaviour.** The mutating methods (:meth:`create_local_user`,
-:meth:`provision_from_idp`, :meth:`set_email_verified`) commit and refresh so the
-generated primary key is populated before JAFAAL writes the linked credential.
+**Transaction behaviour.** :meth:`create_local_user` **flushes** so the generated
+primary key is populated without committing: JAFAAL writes the password
+credential to its own table immediately afterwards, and the two must land
+together or not at all — committing the user row first leaves a
+credential-less account squatting the username on any later failure. The
+remaining mutating methods (:meth:`provision_from_idp`,
+:meth:`set_email_verified`) commit, since nothing else is pending.
 This mirrors JAFAAL's "CRUD helpers own their commit" convention.
 
 **Extending.** If your user table has additional NOT NULL columns without
@@ -77,9 +81,14 @@ class SqlAlchemyUserRepository:
         is_active: bool,
         is_verified: bool,
     ) -> UserProtocol:
+        # Flush, don't commit. JAFAAL writes the password credential to its own
+        # table straight after this returns, and committing here would split the
+        # two: a failure in between leaves a committed, credential-less account
+        # that can never be logged into but permanently squats the username and
+        # email. The caller owns the transaction and commits both together.
         user = self._model()(username=username, email=email, is_active=is_active, is_verified=is_verified)
         db.add(user)
-        db.commit()
+        db.flush()
         db.refresh(user)
         return user
 
