@@ -27,6 +27,3 @@ devscripts/
 # build artifacts
 dist/
 *.egg-info/
-
-# committed bytecode from the CI helper scripts
-.forgejo/scripts/__pycache__/

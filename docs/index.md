@@ -1,7 +1,7 @@
 # JAFAAL
 
 <div>
-    <a href="https://github.com/endurain-project/jafaal/src/branch/main/LICENSE.md">
+    <a href="https://github.com/endurain-project/jafaal/blob/main/LICENSE.md">
       <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
     </a>
     <a href="https://github.com/endurain-project/jafaal/releases">
@@ -11,7 +11,7 @@
       <img src="https://img.shields.io/pypi/v/jafaal" alt="PyPI version">
     </a>
     <a href="https://github.com/endurain-project/jafaal">
-      <img src="https://img.shields.io/badge/dynamic/json?url=https://github.com/api/v1/repos/endurain-project/jafaal&query=$.stars_count&label=stars&logo=codeberg" alt="Stars">
+      <img src="https://img.shields.io/badge/dynamic/json?url=https://github.com/api/v1/repos/endurain-project/jafaal&query=$.stars_count&label=stars&logo=github" alt="Stars">
     </a>
 </div>
 
