@@ -35,10 +35,10 @@ dependencies = [
 [project.urls]
 Homepage = "https://jafaal.endurain.com/"
 Documentation = "https://jafaal.endurain.com/"
-Repository = "https://codeberg.org/endurain-project/jafaal"
-Changelog = "https://codeberg.org/endurain-project/jafaal/src/branch/main/CHANGELOG.md"
-Issues = "https://codeberg.org/endurain-project/jafaal/issues"
-Security = "https://codeberg.org/endurain-project/jafaal/src/branch/main/SECURITY.md"
+Repository = "https://github.com/endurain-project/jafaal"
+Changelog = "https://github.com/endurain-project/jafaal/blob/main/CHANGELOG.md"
+Issues = "https://github.com/endurain-project/jafaal/issues"
+Security = "https://github.com/endurain-project/jafaal/blob/main/SECURITY.md"
 
 # Optional features. A minimal "login + JWT + sessions" deployment needs none of
 # these; the feature modules import them defensively and fail fast (with an
@@ -142,7 +142,7 @@ exclude-newer = "30 days"
 # Cooldown exemptions ("0 days" = no cooldown for this package). The global
 # cooldown above also delays *security* fixes, which is the wrong trade for a
 # package with a published advisory: the audit workflow
-# (.forgejo/workflows/audit-jafaal.yml) fails while the fix sits behind the
+# (.github/workflows/audit-jafaal.yml) fails while the fix sits behind the
 # window. Exempt only the specific packages that need a fix now, so the cooldown
 # keeps protecting everything else. Remove an entry once its fix is older than
 # the window.
@@ -307,7 +307,6 @@ ignore = [
 "jafaal/utils.py" = ["S105", "S106"]  # false positive on cookie name constants
 "jafaal/adapters/static_settings.py" = ["S106"]  # false positive on the password_type policy default
 ".forgejo/scripts/check_conventional_commits.py" = ["T201", "W291"]  # CLI helper prints; regex string carries an intentional escaped space
-".forgejo/scripts/smoke_import.py" = ["T201"]  # CI helper reports its result on stdout
 ".github/scripts/check_conventional_commits.py" = ["T201", "W291"]  # CLI helper prints; regex string carries an intentional escaped space
 ".github/scripts/smoke_import.py" = ["T201"]  # CI helper reports its result on stdout
 

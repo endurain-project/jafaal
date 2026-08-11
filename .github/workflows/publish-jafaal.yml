@@ -1,14 +1,9 @@
 name: Publish jafaal
 
-# Builds and publishes a release to PyPI when a ``v*`` tag is pushed.
-#
-# Note on provenance: PEP 740 publish attestations require PyPI Trusted
-# Publishing, which currently supports GitHub, GitLab, Google Cloud and
-# ActiveState — not Forgejo/Codeberg. Until it does, this workflow authenticates
-# with a scoped PyPI API token and instead publishes what it can produce itself:
-# a CycloneDX SBOM and SHA-256 checksums, attached as build artifacts.
-#
-# Required secret: PYPI_TOKEN — a project-scoped PyPI API token.
+# Builds and publishes a release to PyPI when a ``v*`` tag is pushed. The
+# unprivileged build job validates the release and uploads its artifacts; the
+# separate ``pypi`` environment job receives OIDC permission only when it needs
+# to generate PEP 740 attestations and publish through Trusted Publishing.
 
 on:
   push:
@@ -26,31 +21,32 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ forgejo.workflow }}-${{ forgejo.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-
-  publish:
-    name: build, verify and upload
-    runs-on: local-runner
-
+  build:
+    name: Build and verify
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: https://data.forgejo.org/actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Install uv
-        uses: https://data.forgejo.org/astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: false
 
       # A tag that disagrees with the packaged version produces a release whose
-      # artifact name does not match its tag — catch it before anything is
+      # artifact name does not match its tag - catch it before anything is
       # uploaded, because a PyPI version can never be re-used.
       - name: Verify the tag matches the project version
-        if: startsWith(forgejo.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
-          TAG_REF: ${{ forgejo.ref }}
+          TAG_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
           tag_version="${TAG_REF#refs/tags/v}"
@@ -62,7 +58,7 @@ jobs:
           echo "Releasing version ${project_version}."
 
       - name: Verify the changelog documents this version
-        if: startsWith(forgejo.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v')
         run: |
           set -euo pipefail
           version="$(uv version --short)"
@@ -86,7 +82,7 @@ jobs:
           uv run --no-sync pytest
 
       - name: Build sdist and wheel
-        run: uv build
+        run: uv build --no-sources
 
       - name: Verify package metadata renders on PyPI
         run: uvx twine check --strict dist/*
@@ -97,10 +93,11 @@ jobs:
       - name: Smoke-test the built wheel
         run: |
           set -euo pipefail
-          uv venv /tmp/smoke
-          VIRTUAL_ENV=/tmp/smoke uv pip install dist/*.whl
-          cd /tmp
-          VIRTUAL_ENV=/tmp/smoke uv run --no-project python "$FORGEJO_WORKSPACE/.forgejo/scripts/smoke_import.py"
+          smoke_venv="$RUNNER_TEMP/smoke"
+          uv venv "$smoke_venv"
+          VIRTUAL_ENV="$smoke_venv" uv pip install dist/*.whl
+          cd "$RUNNER_TEMP"
+          VIRTUAL_ENV="$smoke_venv" uv run --no-project python "$GITHUB_WORKSPACE/.github/scripts/smoke_import.py"
 
       - name: Generate SBOM (CycloneDX)
         run: uvx cyclonedx-py environment --output-format json --outfile dist/jafaal-sbom.cdx.json
@@ -113,15 +110,37 @@ jobs:
           cat SHA256SUMS
 
       - name: Upload build artifacts
-        uses: https://data.forgejo.org/actions/upload-artifact@v3
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: jafaal-dist
           path: dist/
+          if-no-files-found: error
           retention-days: 90
 
+  publish:
+    name: Publish to PyPI
+    if: ${{ startsWith(github.ref, 'refs/tags/v') && inputs.dry-run != true }}
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/jafaal
+    permissions:
+      id-token: write
+    steps:
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: false
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: jafaal-dist
+          path: dist/
+
+      - name: Generate PEP 740 attestations
+        uses: astral-sh/attest-action@f589a42a7efb6fe400b4f400de60b4bc90390027 # v0.0.6
+
       - name: Publish to PyPI
-        if: ${{ startsWith(forgejo.ref, 'refs/tags/v') && inputs.dry-run != true }}
-        env:
-          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
-        # The SBOM and checksums are release artifacts, not distributions.
-        run: uv publish dist/*.whl dist/*.tar.gz
+        run: uv publish --trusted-publishing always dist/*.whl dist/*.tar.gz

@@ -1,7 +1,7 @@
 site_name: JAFAAL documentation
 site_description: Just Another FastAPI Authentication Library
 site_url: https://jafaal.endurain.com/
-repo_url: https://codeberg.org/endurain-project/jafaal
+repo_url: https://github.com/endurain-project/jafaal
 theme:
   name: material
   palette:

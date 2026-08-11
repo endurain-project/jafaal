@@ -25,11 +25,16 @@ validate the working tree instead of the built artifact::
 from __future__ import annotations
 
 import sys
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any, NoReturn
 
-from sqlalchemy.orm import DeclarativeBase
+from cryptography.fernet import Fernet
+from sqlalchemy import create_engine
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 import jafaal
+from jafaal.adapters.static_settings import StaticSettingsProvider
 
 
 class Base(DeclarativeBase):
@@ -40,6 +45,43 @@ class Users(jafaal.IntPKUserMixin, Base):
     """Minimal host user model - the FK/relationship target JAFAAL requires."""
 
     __tablename__ = "users"
+
+
+class SmokeUserRepository:
+    """Host repository stub; route assembly must not perform user I/O."""
+
+    @staticmethod
+    def _unexpected() -> NoReturn:
+        raise AssertionError("router assembly unexpectedly accessed the user repository")
+
+    def get_by_id(self, user_id: Any, db: Session) -> jafaal.UserProtocol | None:
+        self._unexpected()
+
+    def get_by_email(self, email: str, db: Session) -> jafaal.UserProtocol | None:
+        self._unexpected()
+
+    def get_by_username(self, username: str, db: Session) -> jafaal.UserProtocol | None:
+        self._unexpected()
+
+    def create_local_user(
+        self,
+        username: str,
+        email: str,
+        db: Session,
+        *,
+        is_active: bool,
+        is_verified: bool,
+    ) -> jafaal.UserProtocol:
+        self._unexpected()
+
+    def provision_from_idp(self, identity: jafaal.IdpIdentity, db: Session) -> jafaal.UserProtocol:
+        self._unexpected()
+
+    def sync_from_idp(self, user_id: Any, claims: Mapping[str, Any], db: Session) -> None:
+        self._unexpected()
+
+    def set_email_verified(self, user_id: Any, db: Session, *, activate: bool) -> None:
+        self._unexpected()
 
 
 # ``create_auth_router`` imports and includes every sub-router: auth, sessions,
@@ -66,6 +108,21 @@ def main() -> int:
         return 1
 
     jafaal.map_models(Base)
+    engine = create_engine("sqlite://")
+    jafaal.configure(
+        jafaal.AuthSettings(
+            secrets=jafaal.Secrets(
+                secret_key="s" * 32,
+                fernet_key=Fernet.generate_key().decode(),
+            ),
+            base_url="https://app.test",
+            app_name="Smoke test",
+            environment="test",
+        )
+    )
+    jafaal.configure_sessionmaker(sessionmaker(bind=engine))
+    jafaal.configure_user_repository(SmokeUserRepository())
+    jafaal.configure_settings_provider(StaticSettingsProvider())
     router = jafaal.create_auth_router()
 
     if len(router.routes) != EXPECTED_SUB_ROUTERS:
