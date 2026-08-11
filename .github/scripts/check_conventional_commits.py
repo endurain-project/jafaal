@@ -52,8 +52,7 @@ def _validate_message(message: str) -> list[str]:
     commit_type = match.group("type")
     if commit_type.lower() not in ALLOWED_TYPES:
         return [
-            f"type '{commit_type}' is not allowed; "
-            f"use one of: {', '.join(ALLOWED_TYPES)}",
+            f"type '{commit_type}' is not allowed; use one of: {', '.join(ALLOWED_TYPES)}",
         ]
     return []
 
@@ -102,8 +101,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     if failures:
         print(
-            f"\n{failures} of {checked} message(s) failed Conventional "
-            "Commits validation.",
+            f"\n{failures} of {checked} message(s) failed Conventional Commits validation.",
             file=sys.stderr,
         )
         return 1

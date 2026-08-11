@@ -308,6 +308,8 @@ ignore = [
 "jafaal/adapters/static_settings.py" = ["S106"]  # false positive on the password_type policy default
 ".forgejo/scripts/check_conventional_commits.py" = ["T201", "W291"]  # CLI helper prints; regex string carries an intentional escaped space
 ".forgejo/scripts/smoke_import.py" = ["T201"]  # CI helper reports its result on stdout
+".github/scripts/check_conventional_commits.py" = ["T201", "W291"]  # CLI helper prints; regex string carries an intentional escaped space
+".github/scripts/smoke_import.py" = ["T201"]  # CI helper reports its result on stdout
 
 [tool.ruff.format]
 quote-style = "double"

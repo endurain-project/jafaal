@@ -13,45 +13,43 @@ on:
     branches:
       - master
       - main
-    paths:
+    paths: &paths
       - jafaal/**
       - tests/**
       - pyproject.toml
       - uv.lock
-      - .forgejo/workflows/test-matrix-jafaal.yml
+      - .github/workflows/test-matrix-jafaal.yml
+      - .github/scripts/smoke_import.py
   pull_request:
     branches:
       - master
       - main
-    paths:
-      - jafaal/**
-      - tests/**
-      - pyproject.toml
-      - uv.lock
-      - .forgejo/workflows/test-matrix-jafaal.yml
+    paths: *paths
+
+permissions:
+  contents: read
 
 concurrency:
-  group: ${{ forgejo.workflow }}-${{ forgejo.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-
   # 1. Every supported Python version on the default SQLite backend.
   test-python-matrix:
     name: jafaal (py${{ matrix.python }} · sqlite)
-    runs-on: local-runner
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         python: ["3.12", "3.13", "3.14"]
     steps:
       - name: Checkout code
-        uses: https://data.forgejo.org/actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
 
       - name: Install uv
-        uses: https://data.forgejo.org/astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Sync dependencies
         run: uv sync --frozen --no-dev --group test --group lint --no-install-project --python ${{ matrix.python }}
@@ -65,7 +63,7 @@ jobs:
   # 2. The suite against a real PostgreSQL server.
   test-postgres:
     name: jafaal (postgres)
-    runs-on: local-runner
+    runs-on: ubuntu-latest
     services:
       postgres:
         image: postgres:17
@@ -84,12 +82,12 @@ jobs:
       JAFAAL_TEST_DATABASE_URL: postgresql+psycopg://jafaal:jafaal@localhost:5432/jafaal
     steps:
       - name: Checkout code
-        uses: https://data.forgejo.org/actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
 
       - name: Install uv
-        uses: https://data.forgejo.org/astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Sync dependencies (with database drivers)
         run: uv sync --frozen --no-dev --group test --group test-db --no-install-project
@@ -100,7 +98,7 @@ jobs:
   # 3. The suite against a real MySQL server.
   test-mysql:
     name: jafaal (mysql)
-    runs-on: local-runner
+    runs-on: ubuntu-latest
     services:
       mysql:
         image: mysql:8.4
@@ -120,12 +118,12 @@ jobs:
       JAFAAL_TEST_DATABASE_URL: mysql+pymysql://jafaal:jafaal@localhost:3306/jafaal
     steps:
       - name: Checkout code
-        uses: https://data.forgejo.org/actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
 
       - name: Install uv
-        uses: https://data.forgejo.org/astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Sync dependencies (with database drivers)
         run: uv sync --frozen --no-dev --group test --group test-db --no-install-project
@@ -137,15 +135,15 @@ jobs:
   #    proves `import jafaal` and router assembly work without mfa/sso/redis.
   import-base-deps:
     name: jafaal (bare import, no extras)
-    runs-on: local-runner
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: https://data.forgejo.org/actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
 
       - name: Install uv
-        uses: https://data.forgejo.org/astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Install base dependencies only (no optional extras, no dev groups)
         # --no-dev installs the base runtime dependencies + the project only;
@@ -159,6 +157,6 @@ jobs:
       - name: Import jafaal and assemble the router without optional extras
         run: |
           set -euo pipefail
-          cp -r .venv /tmp/base-venv
-          cd /tmp
-          VIRTUAL_ENV=/tmp/base-venv uv run --no-project python "$FORGEJO_WORKSPACE/.forgejo/scripts/smoke_import.py"
+          cp -r .venv "$RUNNER_TEMP/base-venv"
+          cd "$RUNNER_TEMP"
+          VIRTUAL_ENV="$RUNNER_TEMP/base-venv" uv run --no-project python "$GITHUB_WORKSPACE/.github/scripts/smoke_import.py"
