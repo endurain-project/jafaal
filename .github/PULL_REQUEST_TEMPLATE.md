@@ -1,16 +1,16 @@
 ## What does this PR do?
- 
+
 A clear description of the change.
- 
+
 ## Related issue
- 
+
 Required for anything beyond a small bug fix or typo.
 Don't forget to reference the issue so it auto-closes works, for example use `Closes #XYZ`
- 
+
 ## Type of change
- 
+
 Check all that apply
- 
+
 - [ ] Bug fix
 - [ ] New feature (exception during freeze; link prior discussion/acknowledgment)
 - [ ] Documentation
@@ -19,7 +19,7 @@ Check all that apply
 - [ ] Other (describe below)
 
 ## Checklist
- 
+
 - [ ] This PR is focused on a single concern
 - [ ] An issue was opened and acknowledged before writing this code (if not a small fix)
 - [ ] If this PR introduces a new feature during freeze, it was discussed and explicitly acknowledged first
@@ -29,5 +29,5 @@ Check all that apply
 - [ ] Commit messages follow Conventional Commits format
 
 ## Notes for the reviewer
- 
+
 Anything that would help review this. Tricky areas, alternative approaches considered, screenshots, etc.
