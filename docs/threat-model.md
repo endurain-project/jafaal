@@ -89,5 +89,5 @@ These hold by construction and are covered by the test suite and the
 ## Reporting
 
 Report suspected vulnerabilities privately — see
-[SECURITY.md](https://codeberg.org/endurain-project/jafaal/src/branch/main/SECURITY.md).
+[SECURITY.md](https://github.com/endurain-project/jafaal/src/branch/main/SECURITY.md).
 Do not open a public issue.

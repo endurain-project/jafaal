@@ -54,10 +54,10 @@ PRs that are too large to review efficiently will be asked to be split before th
 
 ## Getting Started
  
-1. **Fork the repository** on Codeberg
+1. **Fork the repository** on GitHub
 2. **Clone your fork** locally:
    ```bash
-   git clone https://codeberg.org/YOUR_USERNAME/JAFAAL.git
+   git clone https://github.com/YOUR_USERNAME/JAFAAL.git
    ```
 3. **Create a branch** and use a descriptive name:
    ```bash

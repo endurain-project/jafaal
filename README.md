@@ -1,12 +1,12 @@
 # Just Another FastAPI Authentication Library (JAFAAL)
 
-[![License](https://img.shields.io/badge/license-MIT-green)](https://codeberg.org/endurain-project/jafaal/src/branch/main/LICENSE.md)
-[![Release](https://img.shields.io/badge/dynamic/json?url=https://codeberg.org/api/v1/repos/endurain-project/jafaal/releases/latest&query=$.tag_name&label=release&color=blue)](https://codeberg.org/endurain-project/jafaal/releases)
+[![License](https://img.shields.io/badge/license-MIT-green)](https://github.com/endurain-project/jafaal/src/branch/main/LICENSE.md)
+[![Release](https://img.shields.io/badge/dynamic/json?url=https://github.com/api/v1/repos/endurain-project/jafaal/releases/latest&query=$.tag_name&label=release&color=blue)](https://github.com/endurain-project/jafaal/releases)
 [![PyPI version](https://img.shields.io/pypi/v/jafaal)](https://pypi.org/project/jafaal/)
 [![PyPI downloads](https://img.shields.io/pypi/dm/jafaal)](https://pypi.org/project/jafaal/)
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue)](https://pypi.org/project/jafaal/)
 [![Docs](https://img.shields.io/badge/docs-endurain--project.codeberg.page-blue)](https://jafaal.endurain.com/)
-[![Stars](https://img.shields.io/badge/dynamic/json?url=https://codeberg.org/api/v1/repos/endurain-project/jafaal&query=$.stars_count&label=stars&logo=codeberg)](https://codeberg.org/endurain-project/jafaal)
+[![Stars](https://img.shields.io/badge/dynamic/json?url=https://github.com/api/v1/repos/endurain-project/jafaal&query=$.stars_count&label=stars&logo=codeberg)](https://github.com/endurain-project/jafaal)
 
 ## What is JAFAAL?
 
@@ -307,5 +307,5 @@ Contributions are welcomed! Please open an issue to discuss any changes or impro
 This project is licensed under the MIT License - see the [LICENSE](LICENSE.md) file for details.
 
 <div align="center">
-  <sub>Built with ❤️ from Portugal | Part of the <a href="https://codeberg.org/endurain-project">Endurain</a> ecosystem</sub>
+  <sub>Built with ❤️ from Portugal | Part of the <a href="https://github.com/endurain-project">Endurain</a> ecosystem</sub>
 </div>
