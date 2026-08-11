@@ -5,13 +5,13 @@
       <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
     </a>
     <a href="https://github.com/endurain-project/jafaal/releases">
-      <img src="https://img.shields.io/badge/dynamic/json?url=https://github.com/api/v1/repos/endurain-project/jafaal/releases/latest&query=$.tag_name&label=release&color=blue" alt="Release">
+      <img src="https://img.shields.io/badge/dynamic/json?url=https://api.github.com/repos/endurain-project/jafaal/releases/latest&query=$.tag_name&label=release&color=blue" alt="Release">
     </a>
     <a href="https://pypi.org/project/jafaal/">
       <img src="https://img.shields.io/pypi/v/jafaal" alt="PyPI version">
     </a>
     <a href="https://github.com/endurain-project/jafaal">
-      <img src="https://img.shields.io/badge/dynamic/json?url=https://github.com/api/v1/repos/endurain-project/jafaal&query=$.stars_count&label=stars&logo=github" alt="Stars">
+      <img src="https://img.shields.io/badge/dynamic/json?url=https://api.github.com/repos/endurain-project/jafaal&query=$.stars_count&label=stars&logo=github" alt="Stars">
     </a>
 </div>
 

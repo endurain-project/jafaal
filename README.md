@@ -1,12 +1,12 @@
 # Just Another FastAPI Authentication Library (JAFAAL)
 
 [![License](https://img.shields.io/badge/license-MIT-green)](https://github.com/endurain-project/jafaal/blob/main/LICENSE.md)
-[![Release](https://img.shields.io/badge/dynamic/json?url=https://github.com/api/v1/repos/endurain-project/jafaal/releases/latest&query=$.tag_name&label=release&color=blue)](https://github.com/endurain-project/jafaal/releases)
+[![Release](https://img.shields.io/badge/dynamic/json?url=https://api.github.com/repos/endurain-project/jafaal/releases/latest&query=$.tag_name&label=release&color=blue)](https://github.com/endurain-project/jafaal/releases)
 [![PyPI version](https://img.shields.io/pypi/v/jafaal)](https://pypi.org/project/jafaal/)
 [![PyPI downloads](https://img.shields.io/pypi/dm/jafaal)](https://pypi.org/project/jafaal/)
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue)](https://pypi.org/project/jafaal/)
 [![Docs](https://img.shields.io/badge/docs-jafaal.endurain.com-blue)](https://jafaal.endurain.com/)
-[![Stars](https://img.shields.io/badge/dynamic/json?url=https://github.com/api/v1/repos/endurain-project/jafaal&query=$.stars_count&label=stars&logo=github)](https://github.com/endurain-project/jafaal)
+[![Stars](https://img.shields.io/badge/dynamic/json?url=https://api.github.com/repos/endurain-project/jafaal&query=$.stars_count&label=stars&logo=github)](https://github.com/endurain-project/jafaal)
 
 ## What is JAFAAL?
 

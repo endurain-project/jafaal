@@ -307,5 +307,5 @@ Guidance specific to the SSO round trip:
 ## Reporting a vulnerability
 
 Please report suspected vulnerabilities **privately** — see
-[SECURITY.md](https://github.com/endurain-project/jafaal/src/branch/main/SECURITY.md)
+[SECURITY.md](https://github.com/endurain-project/jafaal/blob/main/SECURITY.md)
 for the disclosure process. Do not open a public issue for a security report.
