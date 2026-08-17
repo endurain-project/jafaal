@@ -41,6 +41,7 @@ if TYPE_CHECKING:
     from sqlalchemy.engine import Engine
 
 __all__ = [
+    "MAX_REVISION_LENGTH",
     "VERSION_TABLE",
     "db_revision",
     "downgrade",
@@ -54,6 +55,14 @@ __all__ = [
 #: Dedicated Alembic version table, kept separate from the host's
 #: ``alembic_version`` so the two migration histories never collide in one DB.
 VERSION_TABLE = "jafaal_alembic_version"
+
+#: Hard limit on a revision identifier's length.
+#:
+#: Alembic types the version table's ``version_num`` column as ``String(32)``
+#: and offers no way to widen it, so a longer identifier is silently fine on
+#: SQLite (which ignores ``VARCHAR`` lengths) and fails outright on Postgres.
+#: ``tests/test_migrations.py`` asserts every packaged revision fits.
+MAX_REVISION_LENGTH = 32
 
 _MIGRATIONS_DIR = Path(__file__).resolve().parent
 

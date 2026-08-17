@@ -1,12 +1,25 @@
-"""Tests for the packaged Alembic migrations (``jafaal.migrations``)."""
+"""Tests for the packaged Alembic migrations (``jafaal.migrations``).
+
+Runs against in-memory SQLite by default. Set
+``JAFAAL_TEST_MIGRATIONS_DATABASE_URL`` to a **dedicated, disposable** database
+to run the identical tests against a real server — the CI database matrix does
+this for Postgres and MySQL, which is what proves a revision's DDL is portable
+rather than merely SQLite-shaped.
+
+It deliberately does not reuse ``JAFAAL_TEST_DATABASE_URL``: these tests drop
+every table between cases, and that URL is the one the rest of the suite is
+actively using.
+"""
 
 from __future__ import annotations
+
+import os
 
 import pytest
 
 pytest.importorskip("alembic")
 
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import MetaData, create_engine, inspect
 from sqlalchemy.pool import StaticPool
 
 import jafaal.orm as jafaal_orm
@@ -15,8 +28,18 @@ from jafaal import migrations
 # conftest maps JAFAAL onto its host-owned Base at import; reuse that active base.
 Base = jafaal_orm.get_active_base()
 
+MIGRATIONS_DATABASE_URL = os.environ.get("JAFAAL_TEST_MIGRATIONS_DATABASE_URL")
+
 
 def _fresh_engine():
+    if MIGRATIONS_DATABASE_URL:
+        # A real server persists between tests, so clear it down to bare earth
+        # first — every case here starts from "no JAFAAL schema at all".
+        engine = create_engine(MIGRATIONS_DATABASE_URL)
+        existing = MetaData()
+        existing.reflect(bind=engine)
+        existing.drop_all(bind=engine)
+        return engine
     # A single shared in-memory connection, so tables created by the migration
     # are visible to the follow-up inspection.
     return create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
@@ -101,4 +124,53 @@ def test_stamp_marks_head_for_pre_existing_tables():
     )
     assert migrations.db_revision(engine) is None
     migrations.stamp(engine)
+    assert migrations.db_revision(engine) == migrations.head_revision()
+
+
+def test_every_revision_id_fits_alembics_version_column():
+    """Alembic types ``version_num`` as ``String(32)`` and cannot widen it.
+
+    SQLite ignores ``VARCHAR`` lengths, so an over-long identifier passes there
+    and then fails on Postgres the moment the version row is updated — breaking
+    the upgrade for every deployment on a backend that enforces lengths. Checked
+    statically so it is caught without needing a real server.
+    """
+    from alembic.script import ScriptDirectory
+
+    script = ScriptDirectory.from_config(migrations._config())
+    too_long = {
+        rev.revision: len(rev.revision)
+        for rev in script.walk_revisions()
+        if len(rev.revision) > migrations.MAX_REVISION_LENGTH
+    }
+    assert too_long == {}, f"revision ids exceed Alembic's {migrations.MAX_REVISION_LENGTH}-char column: {too_long}"
+
+
+def test_an_incremental_revision_applies_to_an_older_database():
+    """Exercise a revision's own DDL, not just the baseline.
+
+    ``0001_initial`` builds every table from the *current* models, so on a fresh
+    database each later revision finds its column already present and skips.
+    That makes the incremental path — the one every existing deployment actually
+    takes — invisible to the other tests here. This drops the column back off a
+    database stamped at head and re-runs the upgrade, so ``add_column`` really
+    executes. Against Postgres and MySQL in CI, that is what catches DDL a
+    revision only got away with on SQLite.
+    """
+    engine = _fresh_engine()
+    _create_host_users(engine)
+    migrations.upgrade(engine)
+
+    table, column = "users_local_credentials", "must_change_password"
+    assert column in {col["name"] for col in inspect(engine).get_columns(table)}
+
+    with engine.begin() as connection:
+        connection.exec_driver_sql(f"ALTER TABLE {table} DROP COLUMN {column}")
+        connection.exec_driver_sql(f"DELETE FROM {migrations.VERSION_TABLE}")  # noqa: S608 - fixed identifier
+    migrations.stamp(engine, "0006_oauth_requested_scope")
+    assert column not in {col["name"] for col in inspect(engine).get_columns(table)}
+
+    migrations.upgrade(engine)
+
+    assert column in {col["name"] for col in inspect(engine).get_columns(table)}
     assert migrations.db_revision(engine) == migrations.head_revision()

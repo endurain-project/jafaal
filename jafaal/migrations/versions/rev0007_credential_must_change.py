@@ -1,7 +1,7 @@
 """Add ``must_change_password`` to ``users_local_credentials``.
 
-Revision ID: 0007_local_credential_must_change
-Revises: 0006_oauth_state_requested_scope
+Revision ID: 0007_credential_must_change
+Revises: 0006_oauth_requested_scope
 Create Date: 2026-08-17
 
 A password an operator set — seeding the first administrator, or a CLI

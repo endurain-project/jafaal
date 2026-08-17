@@ -29,6 +29,12 @@ on:
 permissions:
   contents: read
 
+env:
+  # Pin the toolchain so a uv release cannot change a CI result on its own. The
+  # floor/ceiling in pyproject.toml governs which uv may *drive* the project;
+  # this is which one CI actually installs.
+  UV_VERSION: "0.12.5"
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -50,6 +56,8 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
 
       - name: Sync dependencies
         run: uv sync --frozen --no-dev --group test --group lint --no-install-project --python ${{ matrix.python }}
@@ -80,6 +88,9 @@ jobs:
           --health-retries=20
     env:
       JAFAAL_TEST_DATABASE_URL: postgresql+psycopg://jafaal:jafaal@localhost:5432/jafaal
+      # A second, disposable database for the migration tests: they drop every
+      # table between cases, so they must not share the one the suite is using.
+      JAFAAL_TEST_MIGRATIONS_DATABASE_URL: postgresql+psycopg://jafaal:jafaal@localhost:5432/jafaal_migrations
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -88,6 +99,13 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Create the migrations database
+        run: |
+          PGPASSWORD=jafaal psql -h localhost -U jafaal -d jafaal \
+            -c 'CREATE DATABASE jafaal_migrations OWNER jafaal'
 
       - name: Sync dependencies (with database drivers)
         run: uv sync --frozen --no-dev --group test --group test-db --no-install-project
@@ -116,6 +134,9 @@ jobs:
           --health-retries=30
     env:
       JAFAAL_TEST_DATABASE_URL: mysql+pymysql://jafaal:jafaal@localhost:3306/jafaal
+      # A second, disposable database for the migration tests: they drop every
+      # table between cases, so they must not share the one the suite is using.
+      JAFAAL_TEST_MIGRATIONS_DATABASE_URL: mysql+pymysql://jafaal:jafaal@localhost:3306/jafaal_migrations
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -124,6 +145,13 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Create the migrations database
+        run: |
+          mysql -h 127.0.0.1 -P 3306 -u root -proot \
+            -e "CREATE DATABASE jafaal_migrations; GRANT ALL ON jafaal_migrations.* TO 'jafaal'@'%';"
 
       - name: Sync dependencies (with database drivers)
         run: uv sync --frozen --no-dev --group test --group test-db --no-install-project
@@ -144,6 +172,8 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
 
       - name: Install base dependencies only (no optional extras, no dev groups)
         # --no-dev installs the base runtime dependencies + the project only;

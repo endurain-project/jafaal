@@ -1,7 +1,7 @@
 """Add ``requested_scope`` to ``oauth_states``.
 
-Revision ID: 0006_oauth_state_requested_scope
-Revises: 0005_drop_oauth_state_client_type
+Revision ID: 0006_oauth_requested_scope
+Revises: 0005_drop_oauth_client_type
 Create Date: 2026-07-27
 
 RFC 6749 §3.3 lets a client request a narrower ``scope`` than it could have, and

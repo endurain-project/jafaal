@@ -1,6 +1,6 @@
 """Drop the pre-standards ``client_type`` and ``redirect_path`` columns.
 
-Revision ID: 0005_drop_oauth_state_client_type
+Revision ID: 0005_drop_oauth_client_type
 Revises: 0004_oauth_authorization_code
 Create Date: 2026-07-28
 
