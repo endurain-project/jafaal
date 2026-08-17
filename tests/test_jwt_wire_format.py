@@ -17,7 +17,7 @@ from types import SimpleNamespace
 import pytest
 from conftest import replace_settings
 from joserfc import jwt as joserfc_jwt
-from joserfc.errors import MissingClaimError
+from joserfc.errors import InvalidClaimError, MissingClaimError
 from joserfc.jwk import OctKey
 
 import jafaal.settings as settings_mod
@@ -197,8 +197,10 @@ def test_a_token_with_no_token_use_claim_is_rejected():
     claims = tm.decode_token(token).claims
     claims.pop("token_use")
 
+    # Keep the RFC 9068 ``typ`` header intact so this isolates the missing
+    # payload claim rather than tripping the header check first.
     stripped = joserfc_jwt.encode(
-        {"alg": "HS256"},
+        {"alg": "HS256", "typ": "at+jwt"},
         claims,
         OctKey.import_key(settings_mod.get_settings().secrets.secret_key),
     )
@@ -207,6 +209,50 @@ def test_a_token_with_no_token_use_claim_is_rejected():
     # The MissingClaimError cause is load-bearing: the refresh dependency uses
     # it to detect an unusable cookie and clear it rather than looping.
     assert isinstance(excinfo.value.__cause__, MissingClaimError)
+
+
+def _reencode_with_header(tm, token: str, header: dict) -> str:
+    """Re-sign a token's claims under a caller-supplied JOSE header."""
+    return joserfc_jwt.encode(
+        header,
+        tm.decode_token(token).claims,
+        OctKey.import_key(settings_mod.get_settings().secrets.secret_key),
+    )
+
+
+def test_a_token_whose_typ_header_is_absent_is_rejected():
+    # RFC 9068 §4 step 1: a resource server rejects an access token that does
+    # not declare its media type, before it looks at any claim.
+    tm = get_token_manager()
+    _, token = tm.create_token("sid-1", _user(), TokenType.ACCESS)
+    stripped = joserfc_jwt.encode(
+        {"alg": "HS256"},
+        tm.decode_token(token).claims,
+        OctKey.import_key(settings_mod.get_settings().secrets.secret_key),
+    )
+    with pytest.raises(InvalidTokenError):
+        tm.validate_token_expiration(stripped, TokenType.ACCESS)
+
+
+def test_a_refresh_typ_header_is_rejected_where_an_access_token_is_due():
+    # The header alone must stop the swap, independently of ``token_use``.
+    tm = get_token_manager()
+    _, token = tm.create_token("sid-1", _user(), TokenType.ACCESS)
+    swapped = _reencode_with_header(tm, token, {"alg": "HS256", "typ": "rt+jwt"})
+    with pytest.raises(InvalidTokenError) as excinfo:
+        tm.validate_token_expiration(swapped, TokenType.ACCESS)
+    assert isinstance(excinfo.value.__cause__, InvalidClaimError)
+
+
+@pytest.mark.parametrize("declared", ["at+jwt", "AT+JWT", "application/at+jwt", "application/AT+JWT"])
+def test_the_typ_header_comparison_is_case_and_prefix_insensitive(declared):
+    # RFC 9068 §2.1 compares the media type case-insensitively, and RFC 7519
+    # §5.1 lets a producer omit the ``application/`` prefix — a token from a
+    # conforming issuer must verify whichever spelling it chose.
+    tm = get_token_manager()
+    _, token = tm.create_token("sid-1", _user(), TokenType.ACCESS)
+    respelled = _reencode_with_header(tm, token, {"alg": "HS256", "typ": declared})
+    tm.validate_token_expiration(respelled, TokenType.ACCESS)
 
 
 def test_direct_token_manager_construction_emits_the_rfc9068_shape():

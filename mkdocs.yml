@@ -42,6 +42,7 @@ plugins:
 nav:
   - Home: index.md
   - Configuration: configuration.md
+  - Client integration: clients.md
   - Ports & Adapters: ports-and-adapters.md
   - Security: security.md
   - Threat model: threat-model.md

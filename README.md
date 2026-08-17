@@ -76,6 +76,14 @@ uv add jafaal
 
 Requires Python 3.12+.
 
+> [!IMPORTANT]
+> **JAFAAL uses synchronous SQLAlchemy.** Its endpoints and CRUD layer take a
+> `Session`, not an `AsyncSession`. A host whose own code is async can still
+> mount JAFAAL — its routes are declared `def`, so FastAPI runs them in the
+> worker threadpool and they never block the event loop — but JAFAAL's writes
+> will not share a transaction with your `AsyncSession` work. Async support is
+> tracked for a post-1.0 release.
+
 ### Optional features
 
 A minimal "login + JWT + sessions" deployment needs no extras. Multi-factor
@@ -283,9 +291,26 @@ By default JAFAAL runs in a single process with an in-memory state store and no
 rate limiting. For multi-worker/replica deployments, inject a distributed
 `StateStore` and a `RateLimiter`.
 
+## Examples
+
+[`examples/`](examples/) has a complete, runnable app — user model, ports and
+router in one file — plus the two client-side walkthroughs it drives:
+
+```bash
+cd examples/minimal_app
+uv run --with 'jafaal[all]' --with uvicorn uvicorn app:app --reload
+```
+
+- [Web client walkthrough](examples/web_client.md) — cookie refresh, CSRF, page
+  reload, MFA
+- [Mobile client walkthrough](examples/mobile_client.md) — the authorization-code
+  flow with PKCE
+
 ## Documentation
 
 Full documentation lives at [jafaal.endurain.com](https://jafaal.endurain.com/).
+The [client integration reference](https://jafaal.endurain.com/clients/) is the
+HTTP contract your front end codes against.
 
 ## Sponsors
 

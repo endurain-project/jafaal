@@ -98,6 +98,15 @@ uv add jafaal
 
 Requires Python 3.12+.
 
+> [!IMPORTANT]
+> **JAFAAL uses synchronous SQLAlchemy.** Its endpoints and CRUD layer take a
+> `Session`, not an `AsyncSession`, and the session factory you register must be
+> a sync `sessionmaker`. A host whose own code is async can still mount JAFAAL —
+> its routes are declared `def`, so FastAPI runs them in the worker threadpool
+> and they never block the event loop — but JAFAAL's writes will not share a
+> transaction with your `AsyncSession` work. Async support is tracked for a
+> post-1.0 release.
+
 ### Optional features
 
 A minimal "login + JWT + sessions" deployment needs no extras. Install only what
@@ -172,8 +181,13 @@ management, MFA, API keys, SSO, sign-up and password-reset endpoints.
 
 - **[Configuration](configuration.md)** — `AuthSettings`, sessions, scopes, rate
   limiting, and the distributed state store.
+- **[Client integration](clients.md)** — the HTTP contract your web and mobile
+  clients code against: endpoints, wire formats, scopes, and error semantics.
 - **[Ports & Adapters](ports-and-adapters.md)** — the host boundary you implement
   and the ready-made adapters that satisfy it.
 - **[Security](security.md)** — the threat model, built-in protections, and
   deployment hardening.
 - **[API Reference](api.md)** — the full public API.
+
+Prefer to read code? [`examples/`](https://github.com/endurain-project/jafaal/tree/main/examples)
+has a complete runnable app plus web and mobile walkthroughs.

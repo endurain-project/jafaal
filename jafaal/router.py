@@ -17,6 +17,7 @@ from fastapi import (
 from fastapi.responses import RedirectResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 import jafaal._internal.internal_dependencies as jafaal_internal_dependencies
 import jafaal._internal.password_hasher as jafaal_password_hasher
@@ -571,7 +572,7 @@ def verify_mfa_and_login(
     return _finish_login(response, request, user, client, token_manager, db, claimed.scope, claimed.auth_request)
 
 
-async def _grant_refresh_token(
+def _grant_refresh_token(
     response: Response,
     request: Request,
     background_tasks: BackgroundTasks,
@@ -723,8 +724,11 @@ async def _grant_refresh_token(
         # stolen token usable.
         jafaal_sessions_rotated_tokens_utils.invalidate_token_family(session.token_family_id)
         # Best-effort security notification so the host can alert the user; the
-        # 401 below is unaffected by delivery success/failure.
-        await jafaal_ports.adispatch_event(
+        # 401 below is unaffected by delivery success/failure. ``dispatch_event``
+        # hands delivery to the shared dispatch loop instead of awaiting it, so
+        # this stays a synchronous path and the sink's I/O never runs on (and
+        # cannot stall) the caller.
+        jafaal_ports.dispatch_event(
             "on_refresh_token_theft_detected",
             jafaal_ports.RefreshTokenTheftDetected(
                 user_id=token_user_id,
@@ -975,7 +979,11 @@ async def authorize(
                 requested_scope=scope,
             )
         else:
-            next_url = authorization_code_service.begin_local_authorization(
+            # This endpoint must stay async for the identity-provider branch
+            # above, so the local branch's database work is handed to a worker
+            # thread rather than run on the event loop.
+            next_url = await run_in_threadpool(
+                authorization_code_service.begin_local_authorization,
                 request=request,
                 db=db,
                 code_challenge=code_challenge,
@@ -1014,7 +1022,7 @@ async def authorize(
     ),
 )
 @jafaal_rate_limit.limit(jafaal_rate_limit.WRITE)
-async def token_endpoint(
+def token_endpoint(
     response: Response,
     request: Request,
     background_tasks: BackgroundTasks,
@@ -1076,7 +1084,7 @@ async def token_endpoint(
                 "invalid_request",
                 f"'refresh_token' is required when grant_type={jafaal_internal_dependencies.REFRESH_TOKEN_GRANT!r}.",
             )
-        return await _grant_refresh_token(
+        return _grant_refresh_token(
             response,
             request,
             background_tasks,
@@ -1176,7 +1184,7 @@ def _grant_authorization_code(
     ),
 )
 @jafaal_rate_limit.limit(jafaal_rate_limit.WRITE)
-async def refresh_token(
+def refresh_token(
     response: Response,
     request: Request,
     background_tasks: BackgroundTasks,
@@ -1211,7 +1219,7 @@ async def refresh_token(
     Raises:
         JafaalError: If the session or refresh token is invalid.
     """
-    return await _grant_refresh_token(
+    return _grant_refresh_token(
         response,
         request,
         background_tasks,
@@ -1224,7 +1232,7 @@ async def refresh_token(
 
 @router.post("/logout", response_model=jafaal_schema.LogoutResponse)
 @jafaal_rate_limit.limit(jafaal_rate_limit.WRITE)
-async def logout(
+def logout(
     response: Response,
     request: Request,
     refresh: Annotated[
@@ -1274,8 +1282,9 @@ async def logout(
         # Delete the session from the database
         jafaal_sessions_crud.delete_session(session.id, token_user_id, db)
 
-        # Clear all IdP refresh tokens for security
-        await idp_utils.clear_all_idp_tokens(token_user_id, db)
+        # Clear all IdP refresh tokens for security. Local-only, so logout
+        # stays synchronous and its database work runs in the worker thread.
+        idp_utils.clear_local_idp_tokens(token_user_id, db)
 
         jafaal_audit.record(
             jafaal_audit.Event.LOGOUT,

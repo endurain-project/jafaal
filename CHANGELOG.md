@@ -11,9 +11,12 @@ exception `code` slugs, the HTTP surface, the token/cookie wire formats, and the
 `jafaal.audit` event slugs are covered by SemVer; anything under `_core` /
 `_internal`, log message text, and default security parameters are not.
 
-## [1.0.0]
+## [1.0.0rc1]
 
-First release.
+First release candidate. The API surface is frozen for review but not yet
+covered by the SemVer guarantees in [API stability](docs/api-stability.md);
+`1.0.0` follows once the surface has been validated against a production
+consumer.
 
 ### Added
 

@@ -53,6 +53,46 @@ DEFAULT_TOKEN_EXPIRY_SECONDS = 300
 # ahead of the local clock is tolerated up to this bound).
 _REAUTH_CLOCK_SKEW_LEEWAY_SECONDS = 30
 
+# OIDC authorization parameters that *request* a fresh end-user authentication
+# (OIDC Core 1.0 §3.1.2.1). Asking for one obliges the relying party to verify
+# the resulting ``auth_time`` claim — an identity provider is free to ignore
+# either parameter, so an unverified request is a freshness guarantee that
+# silently does not hold.
+_AUTH_FRESHNESS_PARAMS = frozenset({"max_age", "prompt"})
+
+# The only OAuth state purpose whose callback verifies ``auth_time``
+# (:meth:`IdentityProviderService._verify_reauth_freshness`).
+_FRESHNESS_ENFORCING_PURPOSE = "stepup"
+
+
+def _reject_unenforced_freshness_params(
+    authorize_extra_params: dict[str, str] | None,
+    purpose: str | None,
+) -> None:
+    """Refuse freshness parameters on a flow whose callback will not verify them.
+
+    ``max_age`` / ``prompt=login`` are only meaningful if someone checks the
+    ``auth_time`` that comes back. JAFAAL does that on the step-up path alone,
+    so requesting freshness on any other flow would hand the caller a guarantee
+    it never actually enforces. Failing closed is the honest outcome.
+
+    Args:
+        authorize_extra_params: Extra authorization-request query parameters.
+        purpose: The OAuth state's purpose.
+
+    Raises:
+        InvalidRequestError: If a freshness parameter is requested on a flow
+            that does not verify ``auth_time``.
+    """
+    if not authorize_extra_params or purpose == _FRESHNESS_ENFORCING_PURPOSE:
+        return
+    requested = _AUTH_FRESHNESS_PARAMS.intersection(authorize_extra_params)
+    if requested:
+        raise jafaal_exceptions.InvalidRequestError(
+            f"{', '.join(sorted(requested))} may only be requested on a step-up re-authentication, "
+            "which is the only flow that verifies the resulting auth_time claim."
+        )
+
 
 def _oauth_client_cls() -> Any:
     """Return authlib's ``AsyncOAuth2Client``, or fail fast if ``jafaal[sso]`` is missing."""
@@ -410,6 +450,8 @@ class IdentityProviderService:
             # Validate user_id matches (security check for link mode)
             if oauth_state_obj.user_id != user_id:
                 raise jafaal_exceptions.InternalError("OAuth state user mismatch")
+
+            _reject_unenforced_freshness_params(authorize_extra_params, oauth_state_obj.purpose)
 
             state = oauth_state_id
             nonce = oauth_state_obj.nonce

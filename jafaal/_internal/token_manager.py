@@ -121,6 +121,40 @@ def _validate_token_use(claims: dict[str, Any], expected_type: TokenType) -> Non
         raise InvalidClaimError(TOKEN_USE_CLAIM)
 
 
+def _validate_typ_header(header: dict[str, Any], expected_type: TokenType) -> None:
+    """Assert the JOSE ``typ`` header names ``expected_type``'s media type.
+
+    RFC 9068 §4 step 1 requires a resource server to reject an access token
+    whose ``typ`` header is not ``at+jwt`` *before* inspecting its claims, so a
+    token minted for another purpose cannot be replayed as an access token.
+    JAFAAL validates the ``token_use`` payload claim too; the header check is
+    the one the RFC mandates, and it is what makes a token JAFAAL issues
+    verifiable by a stock third-party resource server that only checks ``typ``.
+
+    Per RFC 9068 §2.1 the comparison ignores case and tolerates the optional
+    ``application/`` prefix that RFC 7519 §5.1 permits a producer to omit.
+
+    Raises the same joserfc errors the claims registry would, so the caller's
+    existing handlers map them consistently — in particular, an absent header
+    surfaces as ``MissingClaimError``, which the refresh-token dependency uses
+    to detect an unusable cookie and clear it rather than looping.
+
+    Args:
+        header: The decoded JOSE header.
+        expected_type: The token type the caller requires.
+
+    Raises:
+        MissingClaimError: If the header is not present.
+        InvalidClaimError: If the token declares a different media type.
+    """
+    declared = header.get("typ")
+    if not isinstance(declared, str):
+        raise MissingClaimError("typ")
+    normalized = declared.lower().removeprefix("application/")
+    if normalized != _TYP_HEADER_BY_TOKEN_TYPE[expected_type]:
+        raise InvalidClaimError("typ")
+
+
 class TokenManager:
     """Issue, decode, and validate JWTs (and mint CSRF tokens) for user sessions.
 
@@ -410,6 +444,7 @@ class TokenManager:
 
             # Decode the token to get the payload
             payload = self.decode_token(token)
+            _validate_typ_header(payload.header, expected_type)
             _validate_token_use(payload.claims, expected_type)
 
             # Validate token claims (incl. expiration and typ)

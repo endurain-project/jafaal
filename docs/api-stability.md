@@ -30,7 +30,7 @@ because scheduling is necessarily a host concern.
 ### 2. Exception `code` slugs
 
 Every `JafaalError` subclass carries a stable, machine-readable
-[`code`](../jafaal/exceptions.py) — `"invalid_credentials"`, `"token_expired"`,
+[`code`](https://github.com/endurain-project/jafaal/blob/main/jafaal/exceptions.py) — `"invalid_credentials"`, `"token_expired"`,
 `"missing_scope"`, and so on. These are the framework-neutral API contract: a
 non-HTTP host switches on them, and a frontend maps them to messages. Slugs are
 never renamed within a major version. New ones may be added.

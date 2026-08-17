@@ -5,6 +5,7 @@ from typing import Annotated
 
 from fastapi import Depends, Request, Security, status
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 import jafaal._internal.services.authorization_code_service as authorization_code_service
 import jafaal.dependencies as jafaal_dependencies
@@ -12,6 +13,7 @@ import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_providers.crud as idp_crud
 import jafaal.identity_providers.dependencies as idp_dependencies
 import jafaal.identity_providers.links.crud as links_crud
+import jafaal.identity_providers.models as idp_models
 import jafaal.identity_providers.schema as idp_schema
 import jafaal.identity_providers.service as idp_service
 import jafaal.identity_providers.utils as idp_utils
@@ -223,27 +225,35 @@ async def initiate_step_up_reauth(
 
     authorization_code_service.validate_client_and_redirect_uri(body.client_id, body.redirect_uri)
 
-    idp = idp_crud.get_identity_provider(idp_id, db)
-    if not idp or not idp.enabled:
-        raise jafaal_exceptions.NotFoundError("Identity provider not found or disabled")
-
-    link = links_crud.get_user_identity_provider_by_user_id_and_idp_id(token_user_id, idp_id, db)
-    if not link:
-        raise jafaal_exceptions.InvalidRequestError("This identity provider is not linked to your account.")
-
     state_id, nonce = oauth_state_utils.create_state_id_and_nonce()
-    oauth_state_crud.create_oauth_state(
-        db=db,
-        state_id=state_id,
-        nonce=nonce,
-        ip_address=network.get_ip_address(request),
-        idp_id=idp_id,
-        user_id=token_user_id,
-        purpose="stepup",
-        client_id=body.client_id,
-        redirect_uri=body.redirect_uri,
-        client_state=body.state,
-    )
+
+    def _prepare_reauth() -> idp_models.IdentityProvider:
+        """Resolve the provider, assert the link, and park the OAuth state."""
+        idp = idp_crud.get_identity_provider(idp_id, db)
+        if not idp or not idp.enabled:
+            raise jafaal_exceptions.NotFoundError("Identity provider not found or disabled")
+
+        link = links_crud.get_user_identity_provider_by_user_id_and_idp_id(token_user_id, idp_id, db)
+        if not link:
+            raise jafaal_exceptions.InvalidRequestError("This identity provider is not linked to your account.")
+
+        oauth_state_crud.create_oauth_state(
+            db=db,
+            state_id=state_id,
+            nonce=nonce,
+            ip_address=network.get_ip_address(request),
+            idp_id=idp_id,
+            user_id=token_user_id,
+            purpose="stepup",
+            client_id=body.client_id,
+            redirect_uri=body.redirect_uri,
+            client_state=body.state,
+        )
+        return idp
+
+    # This endpoint must stay async for the provider round trip below, so its
+    # database work is handed to a worker thread rather than run on the loop.
+    idp = await run_in_threadpool(_prepare_reauth)
 
     authorization_url = await idp_service.idp_service.initiate_link(
         idp,

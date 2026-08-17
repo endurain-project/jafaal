@@ -446,6 +446,62 @@ async def clear_all_idp_tokens(user_id: UserId, db: Session, revoke_at_idp: bool
         - All errors are logged with appropriate severity levels (debug, info, warning).
     """
     try:
+        if revoke_at_idp:
+            await _revoke_idp_tokens_at_providers(user_id, db)
+        clear_local_idp_tokens(user_id, db)
+    except Exception as err:
+        # Catch-all for unexpected errors (e.g., database query failure)
+        logger.warning(f"Error retrieving IdP links for user {user_id} during logout: {err}", exc_info=err)
+        # Don't raise - IdP token clearing is a best-effort security measure
+
+
+async def _revoke_idp_tokens_at_providers(user_id: UserId, db: Session) -> None:
+    """Best-effort RFC 7009 revocation of every linked IdP's stored token.
+
+    Failures are logged and swallowed: local clearing is what actually ends the
+    session, and it must proceed whether or not the provider cooperated.
+
+    Args:
+        user_id: The user whose provider tokens should be revoked upstream.
+        db: The database session to use for queries.
+    """
+    for link in jafaal_identity_links_crud.get_user_identity_providers_by_user_id(user_id, db):
+        try:
+            revoked = await idp_service.idp_service.revoke_idp_token(user_id, link.idp_id, db)
+            if revoked:
+                logger.info(f"Revoked IdP token at provider for user {user_id}, idp {link.idp_id}")
+            else:
+                logger.debug(
+                    f"IdP token revocation not supported or failed for user {user_id}, idp {link.idp_id}. "
+                    "Will clear locally."
+                )
+        except Exception as revoke_err:
+            logger.warning(
+                f"Error revoking IdP token for user {user_id}, idp {link.idp_id}: {revoke_err}. Will clear locally.",
+                exc_info=revoke_err,
+            )
+
+
+def clear_local_idp_tokens(user_id: UserId, db: Session) -> None:
+    """Clear every stored IdP refresh token for a user, locally only.
+
+    The synchronous half of :func:`clear_all_idp_tokens`, split out so a caller
+    that does not need upstream revocation — logout, which is otherwise pure
+    database work — stays synchronous and runs in FastAPI's worker thread rather
+    than blocking the event loop on database I/O.
+
+    Args:
+        user_id: The ID of the user whose IdP tokens should be cleared.
+        db: The database session to use for queries.
+
+    Returns:
+        None
+
+    Raises:
+        This function does not raise. Every failure is logged so logout is never
+        interrupted by best-effort cleanup.
+    """
+    try:
         # Get all IdP links for this user
         idp_links = jafaal_identity_links_crud.get_user_identity_providers_by_user_id(user_id, db)
 
@@ -453,29 +509,8 @@ async def clear_all_idp_tokens(user_id: UserId, db: Session, revoke_at_idp: bool
             # User has no IdP links - nothing to clear
             return
 
-        # Clear tokens for each IdP link
         for link in idp_links:
             try:
-                # Optionally attempt to revoke token at IdP first (RFC 7009)
-                if revoke_at_idp:
-                    try:
-                        revoked = await idp_service.idp_service.revoke_idp_token(user_id, link.idp_id, db)
-                        if revoked:
-                            logger.info(f"Revoked IdP token at provider for user {user_id}, idp {link.idp_id}")
-                        else:
-                            logger.debug(
-                                f"IdP token revocation not supported or failed for user {user_id}, idp {link.idp_id}. "
-                                "Will clear locally."
-                            )
-                    except Exception as revoke_err:
-                        # Log revocation failure but continue with local clearing
-                        logger.warning(
-                            f"Error revoking IdP token for user {user_id}, idp {link.idp_id}: {revoke_err}. "
-                            "Will clear locally.",
-                            exc_info=revoke_err,
-                        )
-
-                # Always clear locally regardless of revocation result
                 success = jafaal_identity_links_crud.clear_user_identity_provider_refresh_token_by_user_id_and_idp_id(
                     user_id, link.idp_id, db
                 )

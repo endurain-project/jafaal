@@ -27,3 +27,6 @@ devscripts/
 # build artifacts
 dist/
 *.egg-info/
+
+# example app scratch database
+examples/**/*.db

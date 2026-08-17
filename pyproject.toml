@@ -1,13 +1,13 @@
 [project]
 name = "jafaal"
-version = "1.0.0"
+version = "1.0.0rc1"
 description = "Just Another FastAPI Authentication Library"
 authors = [{name = "João Vitória Silva", email = "joao@endurain.com"}]
 license = {text = "MIT"}
 readme = {file = "README.md", content-type = "text/markdown"}
 requires-python = ">=3.12,<4.0"
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
+    "Development Status :: 4 - Beta",
     "Framework :: FastAPI",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
@@ -306,6 +306,7 @@ ignore = [
 "jafaal/schema.py" = ["S105", "S106"]  # false positive on token_type Literal defaults
 "jafaal/utils.py" = ["S105", "S106"]  # false positive on cookie name constants
 "jafaal/adapters/static_settings.py" = ["S106"]  # false positive on the password_type policy default
+"examples/**/*.py" = ["S106"]  # false positives on token_delivery / password_type keyword defaults
 ".github/scripts/check_conventional_commits.py" = ["T201", "W291"]  # CLI helper prints; regex string carries an intentional escaped space
 ".github/scripts/smoke_import.py" = ["T201"]  # CI helper reports its result on stdout
 
