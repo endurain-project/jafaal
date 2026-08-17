@@ -67,8 +67,13 @@ print("EXAMPLE_OK")
 
 def test_the_example_app_runs_a_full_login_and_refresh():
     """The documented example must actually work against the current library."""
+    repo_root = EXAMPLE_DIR.parent.parent
     env = dict(os.environ)
     env["JAFAAL_SECRET_KEY"] = "example-smoke-test-secret-key-32-bytes!"
+    # The subprocess runs from the example directory, so put the working tree on
+    # its path: the example must be exercised against *this* checkout whether or
+    # not jafaal happens to be installed in the environment.
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(repo_root), env.get("PYTHONPATH", "")]))
 
     result = subprocess.run(
         [sys.executable, "-c", _DRIVER],

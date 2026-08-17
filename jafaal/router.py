@@ -22,6 +22,7 @@ from starlette.concurrency import run_in_threadpool
 import jafaal._internal.internal_dependencies as jafaal_internal_dependencies
 import jafaal._internal.password_hasher as jafaal_password_hasher
 import jafaal._internal.security_stores as jafaal_security_stores
+import jafaal._internal.services.account_security_service as account_security_service
 import jafaal._internal.services.authorization_code_service as authorization_code_service
 import jafaal._internal.services.token_admin_service as token_admin_service
 import jafaal._internal.token_manager as jafaal_token_manager
@@ -1297,6 +1298,78 @@ def logout(
     if client.uses_cookie_delivery:
         jafaal_utils.clear_refresh_token_cookies(response)
     return {"message": "Logout successful"}
+
+
+@router.post(
+    "/password/change",
+    response_model=jafaal_schema.PasswordChangeResponse,
+    summary="Change the authenticated user's password",
+    description=(
+        "Replaces the caller's own password after **step-up verification** — a valid access token alone is "
+        "not enough, because a password change grants persistent account access.\n\n"
+        "Supply `current_password` when the account has a local password, and `mfa_code` when MFA is "
+        "enabled. An SSO-only account with no MFA has no factor to verify and is refused; it must "
+        "re-authenticate with its identity provider first (`/auth/idp/step-up/reauth/{idp_id}`).\n\n"
+        "On success every credential the old password could still reach is revoked — other sessions, API "
+        "keys, outstanding reset tokens, pending MFA tickets, step-up grants. The caller's own session is "
+        "preserved, so the client keeps its tokens and does not need to log in again.\n\n"
+        "This is also the endpoint that clears a `password_change_required` condition."
+    ),
+)
+@jafaal_rate_limit.limit(jafaal_rate_limit.SENSITIVE)
+def change_password(
+    data: jafaal_schema.PasswordChangeRequest,
+    token_user_id: Annotated[
+        jafaal_orm.UserId,
+        Depends(jafaal_dependencies.get_sub_from_access_token),
+    ],
+    session_id: Annotated[
+        str,
+        Depends(jafaal_dependencies.get_sid_from_access_token),
+    ],
+    identity_service: Annotated[
+        jafaal_identity_service.LocalCredentialStore,
+        Depends(jafaal_identity_service.get_identity_service),
+    ],
+    step_up_store: Annotated[
+        jafaal_dependencies.StepUpStore,
+        Depends(jafaal_dependencies.get_step_up_attempts),
+    ],
+    db: Annotated[Session, Depends(jafaal_orm.get_db)],
+) -> dict:
+    """Change the authenticated user's own password.
+
+    Args:
+        data: Step-up factors, the new password, and the session-revocation
+            preference.
+        token_user_id: The authenticated user (from the access token ``sub``).
+        session_id: The caller's session (from ``sid``), preserved across the
+            revocation so changing a password does not log the user out of the
+            device they are doing it from.
+        identity_service: Credential store used for verification and the write.
+        step_up_store: Step-up lockout store.
+        db: Database session.
+
+    Returns:
+        The number of other sessions revoked.
+
+    Raises:
+        JafaalError: 401 if step-up verification fails, 422 if the new password
+            fails the configured policy or appears in the breach corpus, 429 if
+            step-up is locked out.
+    """
+    revoked = account_security_service.change_own_password(
+        token_user_id,
+        data.current_password or "",
+        data.new_password,
+        data.mfa_code,
+        identity_service,
+        step_up_store,
+        db,
+        revoke_other_sessions=data.revoke_other_sessions,
+        current_session_id=session_id,
+    )
+    return {"message": "Password changed", "revoked_sessions": revoked}
 
 
 @router.post("/introspect", response_model=jafaal_schema.TokenIntrospectionResponse)

@@ -93,6 +93,43 @@ class StepUpVerification(BaseModel):
     )
 
 
+class PasswordChangeRequest(StepUpVerification):
+    """Self-service password change, on top of the step-up factors.
+
+    Attributes:
+        new_password: The replacement password, held to the account tier's
+            policy and screened against the installed breach corpus.
+        revoke_other_sessions: Whether to end the caller's other sessions.
+    """
+
+    new_password: StrictStr = Field(
+        ...,
+        min_length=1,
+        max_length=PASSWORD_FIELD_MAX_LENGTH,
+        description="The new password.",
+    )
+    revoke_other_sessions: bool = Field(
+        default=True,
+        description=(
+            "End every other session for this account (default). 'Change my password' is what a user does "
+            "when they think they are compromised, so leaving the attacker's session live is the one "
+            "outcome that makes it pointless. Set false for a routine rotation."
+        ),
+    )
+
+
+class PasswordChangeResponse(BaseModel):
+    """Result of a successful password change."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    message: StrictStr = Field(default="Password changed", description="Human-readable confirmation.")
+    revoked_sessions: int = Field(
+        default=0,
+        description="How many other sessions were ended. The caller's own session is preserved.",
+    )
+
+
 class MFARequiredResponse(BaseModel):
     """
     Response indicating MFA verification is required.

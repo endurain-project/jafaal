@@ -159,6 +159,8 @@ from .schema import (
     LogoutResponse,
     MFALoginRequest,
     MFARequiredResponse,
+    PasswordChangeRequest,
+    PasswordChangeResponse,
     SignUpRequest,
     StepUpVerification,
     TokenIntrospectionResponse,
@@ -381,6 +383,8 @@ __all__ = [
     "MFALoginRequest",
     "MFARequiredResponse",
     "SignUpRequest",
+    "PasswordChangeRequest",
+    "PasswordChangeResponse",
     "StepUpVerification",
     "TokenIntrospectionResponse",
     # Password hashing

@@ -83,6 +83,14 @@ consumer.
   caller must establish that itself. `human_chosen=False` skips the composition
   policy and breach screening for a secret the host generated, where neither
   applies; it is named for the assertion the caller has to be able to make.
+- **`POST /auth/password/change`**, the self-service password change. Step-up
+  gated (`current_password`, plus `mfa_code` when MFA is enabled), because a
+  valid access token alone must not be enough to seize an account. Revokes
+  everything the old password could reach while **preserving the caller's own
+  session**, so changing a password does not log you out of the device you did
+  it from, and reports how many other sessions it ended. It is also the way out
+  of a `password_change_required` condition — previously every host had to build
+  this endpoint itself.
 - **Optional forced password change.** `set_password(..., must_change=True)`
   marks the credential, and login then fails with `password_change_required`
   until a new password is written — so a bootstrap or support-desk password,

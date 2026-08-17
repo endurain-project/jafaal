@@ -101,7 +101,7 @@ def change_own_password(
     db: Session,
     revoke_other_sessions: bool = True,
     current_session_id: str | None = None,
-) -> None:
+) -> int:
     """
     Change a user's own password after step-up verification.
 
@@ -124,7 +124,8 @@ def change_own_password(
             logged out.
 
     Returns:
-        None.
+        The number of other sessions revoked (``0`` when
+        ``revoke_other_sessions`` is off).
 
     Raises:
         JafaalError: If step-up verification or persistence fails.
@@ -170,6 +171,7 @@ def change_own_password(
 
     logger.info(f"User {user_id} changed password (step-up verified)")
     jafaal_audit.record(jafaal_audit.Event.PASSWORD_CHANGED, user_id=user_id, actor="self")
+    return revoked
 
 
 def change_managed_user_password(

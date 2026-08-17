@@ -42,11 +42,28 @@ Do not hard-code endpoint URLs; read them from the metadata document.
 | `POST` | `/auth/login` | form: `username`, `password`, `client_id`, optional `auth_request` | Token bundle, or a `202` MFA challenge |
 | `POST` | `/auth/mfa/verify` | JSON: `mfa_token`, `mfa_code`, `client_id` | Token bundle |
 | `POST` | `/auth/refresh` | form: `client_id` | Rotated token bundle |
+| `POST` | `/auth/password/change` | JSON: `new_password`, `current_password`/`mfa_code` as applicable, optional `revoke_other_sessions` | `{"message", "revoked_sessions"}` |
 | `POST` | `/auth/logout` | form: `client_id` | `{"message": "Logout successful"}` |
 
 `/auth/login` is a **first-party** endpoint, not an OAuth grant. It is
 deliberately not the resource-owner password-credentials grant (removed by
 OAuth 2.1) and is not advertised in the discovery document.
+
+### Changing a password
+
+`/auth/password/change` requires **step-up**: a valid access token is not enough,
+because a password change grants persistent account access. Send
+`current_password` when the account has a local password and `mfa_code` when MFA
+is enabled. An SSO-only account with no MFA has no factor to verify and is
+refused until it re-authenticates with its provider.
+
+On success every credential the old password could still reach is revoked —
+other sessions, API keys, outstanding reset tokens, pending MFA tickets, step-up
+grants. **The caller's own session is preserved**, so the client keeps its tokens
+and the user is not logged out of the device they changed it from. Pass
+`revoke_other_sessions: false` for a routine rotation.
+
+This is also how a `password_change_required` condition is cleared.
 
 ### Token bundle
 
