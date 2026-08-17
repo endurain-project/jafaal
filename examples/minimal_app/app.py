@@ -225,25 +225,16 @@ jafaal.configure_password_breach_checker(HibpBreachChecker())
 def _seed_demo_account() -> None:
     """Create the demo login on first start.
 
-    Shows the supported way to set a password outside an HTTP request: hash it
-    with the configured hasher, then hand the digest to the identity service.
     JAFAAL stores credentials in its own table, so the user row and the
     credential must land in one transaction — hence the single unit of work.
     """
-    # Imported here, not at module scope: anything that touches JAFAAL's ORM
-    # models only becomes importable once ``map_models()`` has run.
-    from jafaal.identity_service import DefaultIdentityService
-
     with SessionLocal() as db, jafaal.unit_of_work(db):
         if db.execute(select(Users).where(Users.username == "demo")).scalar_one_or_none():
             return
         user = Users(username="demo", email="demo@example.com", is_active=True, is_verified=True)
         db.add(user)
         db.flush()
-
-        hasher = jafaal.get_password_hasher()
-        identity = DefaultIdentityService(db, jafaal.get_token_manager(), hasher)
-        identity.set_local_password_hash(user.id, hasher.hash_password("correct-horse-battery-staple"))
+        jafaal.set_password(user.id, "correct-horse-battery-staple", db)
         logging.info("Seeded demo account (demo / correct-horse-battery-staple)")
 
 

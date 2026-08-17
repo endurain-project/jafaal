@@ -86,7 +86,9 @@ __all__ = [
     "DefaultIdentityService",
     "IdentityService",
     "LocalCredentialStore",
+    "clear_password",
     "get_identity_service",
+    "set_password",
 ]
 
 
@@ -1002,3 +1004,89 @@ def get_identity_service(
             bound to this request's dependencies.
     """
     return DefaultIdentityService(db, token_manager, password_hasher)
+
+
+# ---------------------------------------------------------------------------
+# Host-facing credential management
+# ---------------------------------------------------------------------------
+
+
+def set_password(
+    user_id: UserId,
+    password: str,
+    db: Session,
+    *,
+    validate: bool = True,
+) -> None:
+    """Set or replace a user's local password, outside an HTTP request.
+
+    The supported way to seed an initial administrator, run a CLI
+    ``reset-password`` command, or migrate an account onto a local credential.
+    JAFAAL's own routes reach the same credential store through their
+    step-up-verified endpoints; this is the equivalent for code that has already
+    established the caller is allowed to do it.
+
+    Participates in the caller's transaction and **does not commit** — wrap it in
+    :func:`jafaal.unit_of_work` (or your own ``session.begin()``) so the
+    credential lands atomically with whatever else you are writing::
+
+        with jafaal.unit_of_work(db):
+            user = repo.create_local_user("admin", "admin@example.com", db,
+                                          is_active=True, is_verified=True)
+            jafaal.set_password(user.id, os.environ["ADMIN_PASSWORD"], db)
+
+    Args:
+        user_id: The user to write the credential for. The account's tier
+            selects the admin or regular minimum length.
+        password: The plaintext password.
+        db: Active database session.
+        validate: Enforce the host's password policy and breach screening
+            (the default). Pass ``False`` only for a high-entropy secret your
+            own code generated, where a human-oriented policy is meaningless —
+            never for a password a person chose or supplied.
+
+    Raises:
+        NotFoundError: If ``user_id`` does not resolve to a user.
+        PasswordPolicyError: If ``validate`` is set and the password fails the
+            configured policy or appears in the installed breach corpus.
+    """
+    # Imported here rather than at module scope: password_policy imports this
+    # module for typing, so a top-level import would be circular at runtime.
+    import jafaal.password_policy as jafaal_password_policy
+
+    user = jafaal_ports.get_user_repository().get_by_id(user_id, db)
+    if user is None:
+        raise jafaal_exceptions.NotFoundError("User not found")
+
+    service = DefaultIdentityService(
+        db,
+        jafaal_token_manager.get_token_manager(),
+        jafaal_password_hasher.get_password_hasher(),
+    )
+    if validate:
+        password_hash = jafaal_password_policy.validate_and_hash_for_user(
+            service,
+            jafaal_ports.is_superuser(user),
+            password,
+        )
+    else:
+        password_hash = service.hash_password(password)
+    service.set_local_password_hash(user_id, password_hash)
+
+
+def clear_password(user_id: UserId, db: Session) -> None:
+    """Remove a user's local password credential, leaving the account SSO-only.
+
+    A no-op when the account already has no local credential. Like
+    :func:`set_password`, this participates in the caller's transaction and does
+    not commit.
+
+    Args:
+        user_id: The user whose credential should be removed.
+        db: Active database session.
+    """
+    DefaultIdentityService(
+        db,
+        jafaal_token_manager.get_token_manager(),
+        jafaal_password_hasher.get_password_hasher(),
+    ).clear_local_password(user_id)

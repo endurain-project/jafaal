@@ -160,7 +160,7 @@ class Secrets:
 
     def __post_init__(self) -> None:
         if not self.secret_key:
-            raise ValueError("Secrets.secret_key is required")
+            raise ValueError("Secrets.secret_key is required.")
         if len(self.secret_key) < MIN_SECRET_KEY_LENGTH:
             raise ValueError(
                 f"Secrets.secret_key is too short (got {len(self.secret_key)} characters, "
@@ -168,7 +168,7 @@ class Secrets:
                 "generate one with e.g. secrets.token_urlsafe(32)."
             )
         if not self.fernet_key:
-            raise ValueError("Secrets.fernet_key is required")
+            raise ValueError("Secrets.fernet_key is required.")
         try:
             Fernet(self.fernet_key.encode())
         except Exception as err:
@@ -254,11 +254,11 @@ class TokenSettings:
                 f"TokenSettings.algorithm={self.algorithm!r} is not in the allow-list {sorted(ALLOWED_ALGORITHMS)}"
             )
         if self.access_token_expire_minutes <= 0:
-            raise ValueError("TokenSettings.access_token_expire_minutes must be positive")
+            raise ValueError("TokenSettings.access_token_expire_minutes must be positive.")
         if self.refresh_token_expire_days <= 0:
-            raise ValueError("TokenSettings.refresh_token_expire_days must be positive")
+            raise ValueError("TokenSettings.refresh_token_expire_days must be positive.")
         if self.leeway_seconds < 0:
-            raise ValueError("TokenSettings.leeway_seconds must be non-negative")
+            raise ValueError("TokenSettings.leeway_seconds must be non-negative.")
 
     @property
     def is_asymmetric(self) -> bool:
@@ -322,7 +322,7 @@ class SessionSettings:
 
     def __post_init__(self) -> None:
         if self.idle_timeout_hours <= 0:
-            raise ValueError("SessionSettings.idle_timeout_hours must be positive")
+            raise ValueError("SessionSettings.idle_timeout_hours must be positive.")
         if self.absolute_timeout_hours <= 0:
             raise ValueError(
                 "SessionSettings.absolute_timeout_hours must be positive: a session's lifetime is "
@@ -378,11 +378,11 @@ class PasswordSettings:
 
     def __post_init__(self) -> None:
         if self.argon2_time_cost <= 0:
-            raise ValueError("PasswordSettings.argon2_time_cost must be positive")
+            raise ValueError("PasswordSettings.argon2_time_cost must be positive.")
         if self.argon2_memory_cost <= 0:
-            raise ValueError("PasswordSettings.argon2_memory_cost must be positive")
+            raise ValueError("PasswordSettings.argon2_memory_cost must be positive.")
         if self.argon2_parallelism <= 0:
-            raise ValueError("PasswordSettings.argon2_parallelism must be positive")
+            raise ValueError("PasswordSettings.argon2_parallelism must be positive.")
         if self.max_length < 64:
             raise ValueError(
                 "PasswordSettings.max_length must be at least 64 so long passphrases are "
@@ -483,7 +483,7 @@ class WebAuthnSettings:
         if self.attestation not in ("none", "direct"):
             raise ValueError(f"WebAuthnSettings.attestation must be 'none' or 'direct' (got {self.attestation!r}).")
         if self.challenge_ttl_seconds <= 0:
-            raise ValueError("WebAuthnSettings.challenge_ttl_seconds must be positive")
+            raise ValueError("WebAuthnSettings.challenge_ttl_seconds must be positive.")
 
 
 # ===========================================================================
@@ -539,13 +539,13 @@ class SsoSettings:
 
     def __post_init__(self) -> None:
         if self.step_up_reauth_max_age_seconds <= 0:
-            raise ValueError("SsoSettings.step_up_reauth_max_age_seconds must be positive")
+            raise ValueError("SsoSettings.step_up_reauth_max_age_seconds must be positive.")
         if self.step_up_grant_ttl_seconds <= 0:
-            raise ValueError("SsoSettings.step_up_grant_ttl_seconds must be positive")
+            raise ValueError("SsoSettings.step_up_grant_ttl_seconds must be positive.")
         if self.id_token_leeway_seconds < 0:
-            raise ValueError("SsoSettings.id_token_leeway_seconds must be non-negative")
+            raise ValueError("SsoSettings.id_token_leeway_seconds must be non-negative.")
         if self.max_response_bytes <= 0:
-            raise ValueError("SsoSettings.max_response_bytes must be positive")
+            raise ValueError("SsoSettings.max_response_bytes must be positive.")
 
 
 # ===========================================================================
@@ -707,7 +707,7 @@ class OAuthClient:
 
     def __post_init__(self) -> None:
         if not self.client_id:
-            raise ValueError("OAuthClient.client_id is required")
+            raise ValueError("OAuthClient.client_id is required.")
         if self.token_delivery not in TOKEN_DELIVERY_MODES:
             raise ValueError(
                 f"OAuthClient(client_id={self.client_id!r}).token_delivery must be one of "

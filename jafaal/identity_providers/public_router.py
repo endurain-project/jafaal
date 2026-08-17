@@ -20,6 +20,7 @@ from uuid import uuid4
 from fastapi import Depends, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 import jafaal._internal.password_hasher as jafaal_password_hasher
 import jafaal._internal.services.authorization_code_service as authorization_code_service
@@ -210,6 +211,111 @@ def _audit_state_ip_mismatch(
     )
 
 
+def _resolve_callback_target(
+    idp_slug: str,
+    state: str,
+    iss: str | None,
+    db: Session,
+) -> tuple[idp_models.IdentityProvider, oauth_state_models.OAuthState]:
+    """Resolve the provider and the unused OAuth state a callback names.
+
+    Everything here fails *before* there is a validated redirect target, so its
+    errors are rendered rather than redirected.
+
+    Args:
+        idp_slug: Provider slug from the callback URL.
+        state: The opaque state parameter.
+        iss: The provider's ``iss`` parameter, if it sent one.
+        db: Active database session.
+
+    Returns:
+        The provider and its OAuth state.
+
+    Raises:
+        NotFoundError: If the provider is unknown or disabled.
+        InvalidRequestError: If the issuer does not match, or the state is
+            unknown, expired, or already used.
+    """
+    idp = idp_crud.get_identity_provider_by_slug(idp_slug, db)
+    if not idp or not idp.enabled:
+        raise jafaal_exceptions.NotFoundError("Identity provider not found or disabled")
+
+    # RFC 9207 mix-up defence, checked before the code is sent anywhere.
+    _reject_issuer_mismatch(idp, iss)
+
+    oauth_state = oauth_state_crud.get_oauth_state_by_id_and_not_used(state, db)
+    if not oauth_state:
+        logger.warning(f"OAuth state not found in database: {state[:8]}...")
+        raise jafaal_exceptions.InvalidRequestError("Invalid or expired OAuth state")
+
+    return idp, oauth_state
+
+
+def _claim_callback_state(
+    idp: idp_models.IdentityProvider,
+    oauth_state: oauth_state_models.OAuthState,
+    state: str,
+    request: Request,
+) -> None:
+    """Bind the state to this provider and claim it, single-use.
+
+    Args:
+        idp: The provider named by the callback URL.
+        oauth_state: The state resolved from the ``state`` parameter.
+        state: The raw state parameter, for the conditional update.
+        request: The incoming request, for source-IP auditing.
+
+    Raises:
+        InvalidRequestError: If the state belongs to another provider, or was
+            already consumed (replay or a lost race).
+    """
+    # Bind the OAuth state to the IdP named in the callback URL.
+    # The `idp` is resolved from the URL slug while the `oauth_state`
+    # is looked up by the opaque `state` parameter; without this check
+    # a state minted during one provider's login could be replayed
+    # against a different provider's callback. Cross-provider misuse is
+    # already blocked cryptographically (the code is exchanged at the
+    # URL-IdP's token endpoint and the ID token is verified against that
+    # IdP's JWKS), but asserting the binding here fails fast and protects
+    # deployments where two IdP entries share an authorization server.
+    if oauth_state.idp_id is not None and oauth_state.idp_id != idp.id:
+        logger.warning(
+            f"OAuth state IdP mismatch for state {state[:8]}...: "
+            f"state.idp_id={oauth_state.idp_id}, callback idp.id={idp.id}"
+        )
+        raise jafaal_exceptions.InvalidRequestError("Invalid or expired OAuth state")
+
+    _audit_state_ip_mismatch(oauth_state, idp.slug, request)
+
+    # Mark state as used atomically (prevents replay attacks).
+    # Two concurrent callbacks can both reach this point with the same
+    # `oauth_state` row in memory; only the caller whose conditional UPDATE
+    # actually flips `used=False -> True` is allowed to continue. Losing
+    # races (replays, double-submits) abort here with a generic 400 so we
+    # do not leak whether the state existed but was already consumed.
+    #
+    # Claimed on its own session so the claim commits immediately, for two
+    # reasons. It must be durable independently of the rest of this request:
+    # otherwise an attacker who can make the callback fail after this point
+    # would release the state and be free to replay the authorization code.
+    # And the request transaction must not stay open across the several
+    # outbound HTTP calls handle_callback then makes (discovery, token
+    # exchange, JWKS, userinfo), which would pin a pooled connection — and
+    # this row's lock — for their combined timeout.
+    with jafaal_orm.autonomous_session() as claim_db:
+        claimed = oauth_state_crud.mark_oauth_state_used(state, claim_db)
+    if not claimed:
+        logger.warning(f"OAuth state replay/race rejected: {state[:8]}...")
+        jafaal_audit.record(
+            jafaal_audit.Event.OAUTH_STATE_REPLAY_REJECTED,
+            outcome=jafaal_audit.Outcome.BLOCKED,
+            level=logging.WARNING,
+            idp=idp.slug,
+            ip=network.get_ip_address(request),
+        )
+        raise jafaal_exceptions.InvalidRequestError("Invalid or expired OAuth state")
+
+
 def _return_to_client(oauth_state: oauth_state_models.OAuthState, params: dict[str, str]) -> RedirectResponse:
     """Redirect the browser back to the client that started the flow.
 
@@ -349,66 +455,14 @@ async def handle_callback(
     """
     oauth_state = None
     try:
-        # Get the identity provider
-        idp = idp_crud.get_identity_provider_by_slug(idp_slug, db)
-        if not idp or not idp.enabled:
-            raise jafaal_exceptions.NotFoundError("Identity provider not found or disabled")
-
-        # RFC 9207 mix-up defence, checked before the code is sent anywhere.
-        _reject_issuer_mismatch(idp, iss)
-
-        # Lookup OAuth state from database (mandatory for all clients)
-        oauth_state = oauth_state_crud.get_oauth_state_by_id_and_not_used(state, db)
-
-        if not oauth_state:
-            logger.warning(f"OAuth state not found in database: {state[:8]}...")
-            raise jafaal_exceptions.InvalidRequestError("Invalid or expired OAuth state")
-
-        # Bind the OAuth state to the IdP named in the callback URL.
-        # The `idp` is resolved from the URL slug while the `oauth_state`
-        # is looked up by the opaque `state` parameter; without this check
-        # a state minted during one provider's login could be replayed
-        # against a different provider's callback. Cross-provider misuse is
-        # already blocked cryptographically (the code is exchanged at the
-        # URL-IdP's token endpoint and the ID token is verified against that
-        # IdP's JWKS), but asserting the binding here fails fast and protects
-        # deployments where two IdP entries share an authorization server.
-        if oauth_state.idp_id is not None and oauth_state.idp_id != idp.id:
-            logger.warning(
-                f"OAuth state IdP mismatch for state {state[:8]}...: "
-                f"state.idp_id={oauth_state.idp_id}, callback idp.id={idp.id}"
-            )
-            raise jafaal_exceptions.InvalidRequestError("Invalid or expired OAuth state")
-
-        _audit_state_ip_mismatch(oauth_state, idp.slug, request)
-
-        # Mark state as used atomically (prevents replay attacks).
-        # Two concurrent callbacks can both reach this point with the same
-        # `oauth_state` row in memory; only the caller whose conditional UPDATE
-        # actually flips `used=False -> True` is allowed to continue. Losing
-        # races (replays, double-submits) abort here with a generic 400 so we
-        # do not leak whether the state existed but was already consumed.
-        #
-        # Claimed on its own session so the claim commits immediately, for two
-        # reasons. It must be durable independently of the rest of this request:
-        # otherwise an attacker who can make the callback fail after this point
-        # would release the state and be free to replay the authorization code.
-        # And the request transaction must not stay open across the several
-        # outbound HTTP calls handle_callback then makes (discovery, token
-        # exchange, JWKS, userinfo), which would pin a pooled connection — and
-        # this row's lock — for their combined timeout.
-        with jafaal_orm.autonomous_session() as claim_db:
-            claimed = oauth_state_crud.mark_oauth_state_used(state, claim_db)
-        if not claimed:
-            logger.warning(f"OAuth state replay/race rejected: {state[:8]}...")
-            jafaal_audit.record(
-                jafaal_audit.Event.OAUTH_STATE_REPLAY_REJECTED,
-                outcome=jafaal_audit.Outcome.BLOCKED,
-                level=logging.WARNING,
-                idp=idp.slug,
-                ip=network.get_ip_address(request),
-            )
-            raise jafaal_exceptions.InvalidRequestError("Invalid or expired OAuth state")
+        # Split in two so the error paths keep their reporting channel: nothing
+        # resolved yet means there is no validated redirect target and the
+        # failure must be rendered, whereas a failure after the state resolves
+        # is reported *at* the client's redirect URI (RFC 6749 §4.1.2.1).
+        # Both halves are pure database work and this endpoint must stay async
+        # for the provider round trips below, so each runs in a worker thread.
+        idp, oauth_state = await run_in_threadpool(_resolve_callback_target, idp_slug, state, iss, db)
+        await run_in_threadpool(_claim_callback_state, idp, oauth_state, state, request)
 
         logger.debug(f"OAuth callback received for state {state[:8]}... (purpose={oauth_state.purpose})")
 

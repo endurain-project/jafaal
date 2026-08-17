@@ -91,6 +91,16 @@ protections and the deployment steps you are responsible for.
   concurrent verifications of the same code cannot both succeed. On a state-store
   outage this fails **closed** by default (configurable via
   `totp_replay_fail_open`).
+- **Backup-code verification leaks the remaining count, deliberately.** The
+  verification loop does not short-circuit on a match, so latency is independent
+  of *which* code matched. It is, however, proportional to how many unused codes
+  remain — one Argon2 verification each — and drops to nearly nothing once none
+  are left. That is observable to anyone already holding a valid `mfa_token`,
+  i.e. someone who has already passed the password factor for that account.
+  Equalising it would mean padding every call to the maximum code count and
+  paying the full Argon2 cost on every MFA attempt. What leaks is a count of
+  remaining recovery codes, not a credential, so the trade is not worth making;
+  progressive MFA lockout remains the guard against guessing.
 
 ### Network & abuse
 

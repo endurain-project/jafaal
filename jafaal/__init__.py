@@ -227,6 +227,7 @@ if TYPE_CHECKING:
         reset_api_key_scopes,
     )
     from .dependencies import check_auth_scopes
+    from .identity_service import clear_password, set_password
     from .utils import (
         authenticate_user,
         complete_login,
@@ -243,6 +244,8 @@ _LAZY_EXPORTS: dict[str, str] = {
     "oauth2_scheme": "jafaal._internal.internal_dependencies",
     "validate_access_token_or_api_key": "jafaal._internal.internal_dependencies",
     "check_auth_scopes": "jafaal.dependencies",
+    "clear_password": "jafaal.identity_service",
+    "set_password": "jafaal.identity_service",
     "authenticate_user": "jafaal.utils",
     "complete_login": "jafaal.utils",
     "create_tokens": "jafaal.utils",
@@ -424,6 +427,7 @@ __all__ = [
     "authenticate_user",
     "check_auth_scopes",
     "cleanup_expired_pending_mfa_logins",
+    "clear_password",
     "clear_pending_mfa_for_user",
     "complete_login",
     "create_tokens",
@@ -438,5 +442,6 @@ __all__ = [
     "get_token_manager",
     "header_csrf_token_scheme",
     "oauth2_scheme",
+    "set_password",
     "validate_access_token_or_api_key",
 ]

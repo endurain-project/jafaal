@@ -27,6 +27,31 @@ Names reachable through a submodule but absent from `jafaal.__all__` are not
 public. `jafaal.maintenance` is the one exception: its `__all__` is public too,
 because scheduling is necessarily a host concern.
 
+#### Extension surface
+
+A subset of `__all__` exists so a host can **replace** a JAFAAL component or
+drive a flow itself, rather than because a normal integration needs it. Wiring
+an auth library up should not require any of it, and freezing internals nobody
+integrates against is how a library ends up carrying design mistakes for years.
+
+These names are still supported, and still documented, but they carry a weaker
+promise: they may change in a **minor** release, after at least one release
+during which the old form keeps working and emits a `DeprecationWarning`.
+
+| Group | Names |
+|---|---|
+| Test hooks | `reset`, `reset_api_key_scopes`, `reset_ports`, `reset_rate_limiter`, `reset_scopes`, `reset_state_store` |
+| State-store payloads and stores | `FailedLoginAttempts`, `PendingLogin`, `PendingMFALogin`, `StepUpAttempts`, `StepUpStore`, `StepUpVerification`, `TieredFailureOutcome` |
+| Token machinery | `TokenManager`, `TokenType` |
+| Low-level flow helpers | `authenticate_user`, `complete_login`, `create_tokens` |
+| Pending-MFA maintenance | `cleanup_expired_pending_mfa_logins`, `clear_pending_mfa_for_user` |
+| Component accessors mirroring `configure_*` | `get_event_sink`, `get_failed_login_attempts`, `get_password_breach_checker`, `get_password_hasher`, `get_pending_mfa_store`, `get_rate_limiter`, `get_scope_resolver`, `get_settings_provider`, `get_state_store`, `get_step_up_attempts`, `get_token_manager`, `get_user_repository` |
+
+Everything else in `__all__` — the settings objects, the ports, the exceptions,
+the router factories, the transaction helpers, the user mixins, the request and
+response schemas, the FastAPI dependencies, and `configure_*` — is covered by
+the full SemVer promise above.
+
 ### 2. Exception `code` slugs
 
 Every `JafaalError` subclass carries a stable, machine-readable

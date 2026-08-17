@@ -6,6 +6,7 @@ import base64
 import hashlib
 import logging
 import secrets as secrets_module
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any, cast
@@ -13,6 +14,7 @@ from typing import Any, cast
 import httpx
 from fastapi import Request
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 import jafaal._internal.password_hasher as jafaal_password_hasher
 import jafaal._internal.security_stores as jafaal_security_stores
@@ -63,6 +65,29 @@ _AUTH_FRESHNESS_PARAMS = frozenset({"max_age", "prompt"})
 # The only OAuth state purpose whose callback verifies ``auth_time``
 # (:meth:`IdentityProviderService._verify_reauth_freshness`).
 _FRESHNESS_ENFORCING_PURPOSE = "stepup"
+
+
+@dataclass(frozen=True)
+class _OidcCallbackEndpoints:
+    """Provider endpoints resolved once per callback, before any database work."""
+
+    userinfo_endpoint: str | None
+    jwks_uri: str | None
+    expected_issuer: str | None
+
+
+@dataclass(frozen=True)
+class _CallbackIdentity:
+    """What the provider asserted, once verified and before it is acted on.
+
+    Separating this from the mode-specific completion is what keeps the
+    callback's outbound half (HTTP) and its persistence half (database)
+    from interleaving.
+    """
+
+    subject: str
+    userinfo: dict[str, Any]
+    token_response: dict[str, Any]
 
 
 def _reject_unenforced_freshness_params(
@@ -277,6 +302,130 @@ class IdentityProviderService:
             follow_redirects=False,
         )
 
+    async def _resolve_authorization_endpoint(self, idp: idp_models.IdentityProvider) -> str:
+        """Return the provider's authorization endpoint, discovering it if needed.
+
+        Args:
+            idp: The identity provider.
+
+        Returns:
+            The absolute authorization-endpoint URL.
+
+        Raises:
+            IdentityProviderError: If the endpoint is neither configured nor
+                discoverable from the issuer URL.
+        """
+        authorization_endpoint = idp.authorization_endpoint
+        if not authorization_endpoint and idp.issuer_url:
+            config = await self.get_oidc_configuration(idp)
+            if config:
+                authorization_endpoint = config.get("authorization_endpoint")
+
+        if not authorization_endpoint:
+            raise jafaal_exceptions.IdentityProviderError(
+                f"Identity provider {idp.name} authorization "
+                "endpoint could not be resolved. Verify the "
+                "issuer URL is reachable; if it is on a "
+                "private network, add its host or CIDR to "
+                "SSRF_ALLOWED_HOSTS."
+            )
+        return authorization_endpoint
+
+    @staticmethod
+    def _require_oauth_state(
+        oauth_state_id: str | None,
+        db: Session,
+        missing_id_message: str,
+    ) -> oauth_state_models.OAuthState:
+        """Load the unused OAuth state the authorization request is bound to.
+
+        Args:
+            oauth_state_id: The state ID the caller parked, if any.
+            db: Active database session.
+            missing_id_message: Error text when no state ID was supplied.
+
+        Returns:
+            The OAuth state row.
+
+        Raises:
+            InternalError: If no state ID was supplied, or it does not resolve
+                to an unused state.
+        """
+        if not oauth_state_id:
+            raise jafaal_exceptions.InternalError(missing_id_message)
+        oauth_state_obj = oauth_state_crud.get_oauth_state_by_id_and_not_used(oauth_state_id, db)
+        if not oauth_state_obj:
+            raise jafaal_exceptions.InternalError("OAuth state not found")
+        return oauth_state_obj
+
+    def _build_authorization_url(
+        self,
+        idp: idp_models.IdentityProvider,
+        authorization_endpoint: str,
+        oauth_state: oauth_state_models.OAuthState,
+        db: Session,
+        *,
+        authorize_extra_params: dict[str, str] | None = None,
+    ) -> str:
+        """Mint the upstream PKCE pair and build the provider redirect URL.
+
+        Shared by the login and link flows, which differ only in the checks
+        their callers run beforehand and the extra authorization parameters
+        they pass.
+
+        Args:
+            idp: The identity provider.
+            authorization_endpoint: The resolved authorization endpoint.
+            oauth_state: The state this authorization request is bound to.
+            db: Active database session.
+            authorize_extra_params: Extra query parameters appended to the
+                authorization request.
+
+        Returns:
+            The absolute URL to redirect the user agent to.
+        """
+        # Enforce encrypted transport for the browser-facing authorization
+        # endpoint when idp_require_https is on (the redirect carries the
+        # state, nonce and PKCE challenge to the IdP).
+        if _idp_require_https():
+            network.require_https_url(authorization_endpoint)
+
+        redirect_uri = self._get_redirect_uri(idp.slug)
+        scopes = idp.scopes or "openid profile email"
+
+        # Upstream PKCE (RFC 7636): bind this authorization request to a secret
+        # code_verifier so an intercepted authorization code cannot be redeemed
+        # without it. The verifier is stored (encrypted) against the OAuth state
+        # and replayed on the token exchange in handle_callback.
+        code_verifier = _generate_pkce_verifier()
+        oauth_state_crud.set_upstream_code_verifier(oauth_state.id, crypto.encrypt_token_fernet(code_verifier), db)
+        code_challenge = _pkce_challenge_s256(code_verifier)
+
+        client = self._create_oauth_client_for_authorization(idp, redirect_uri, scopes)
+
+        authorization_url, _ = client.create_authorization_url(
+            authorization_endpoint,
+            state=oauth_state.id,
+            nonce=oauth_state.nonce,
+            code_challenge=code_challenge,
+            code_challenge_method="S256",
+            **(authorize_extra_params or {}),
+        )
+        return authorization_url
+
+    def _create_oauth_client_for_authorization(
+        self,
+        idp: idp_models.IdentityProvider,
+        redirect_uri: str,
+        scopes: str,
+    ) -> Any:
+        """Build the authlib client used to construct an authorization URL."""
+        return _oauth_client_cls()(
+            client_id=self._decrypt_client_id(idp),
+            redirect_uri=redirect_uri,
+            scope=scopes,
+        )
+
     async def initiate_login(
         self,
         idp: idp_models.IdentityProvider,
@@ -304,66 +453,16 @@ class IdentityProviderService:
             JafaalError: If the identity provider is not properly configured or if an error occurs during initiation.
         """
         try:
-            client_id = self._decrypt_client_id(idp)
-
-            # Get endpoints
-            authorization_endpoint = idp.authorization_endpoint
-
-            # Try OIDC discovery if issuer URL is provided
-            if not authorization_endpoint and idp.issuer_url:
-                config = await self.get_oidc_configuration(idp)
-                if config:
-                    authorization_endpoint = config.get("authorization_endpoint")
-
-            if not authorization_endpoint:
-                raise jafaal_exceptions.IdentityProviderError(
-                    f"Identity provider {idp.name} authorization "
-                    "endpoint could not be resolved. Verify the "
-                    "issuer URL is reachable; if it is on a "
-                    "private network, add its host or CIDR to "
-                    "SSRF_ALLOWED_HOSTS."
-                )
-
-            # Retrieve database-backed OAuth state (mandatory for all clients)
-            if not oauth_state_id:
-                raise jafaal_exceptions.InternalError("OAuth state ID is required (PKCE mandatory)")
-
-            oauth_state_obj = oauth_state_crud.get_oauth_state_by_id_and_not_used(oauth_state_id, db)
-            if not oauth_state_obj:
-                raise jafaal_exceptions.InternalError("OAuth state not found")
-
-            state = oauth_state_id
-            nonce = oauth_state_obj.nonce
-
-            # Enforce encrypted transport for the browser-facing authorization
-            # endpoint when idp_require_https is on (the redirect carries the
-            # state, nonce and PKCE challenge to the IdP).
-            if _idp_require_https():
-                network.require_https_url(authorization_endpoint)
-
-            # Build authorization URL
-            redirect_uri = self._get_redirect_uri(idp.slug)
-            scopes = idp.scopes or "openid profile email"
-
-            # Upstream PKCE (RFC 7636): bind this authorization request to a
-            # secret code_verifier so an intercepted authorization code cannot
-            # be redeemed without it. The verifier is stored (encrypted) against
-            # the OAuth state and replayed on the token exchange in handle_callback.
-            code_verifier = _generate_pkce_verifier()
-            oauth_state_crud.set_upstream_code_verifier(state, crypto.encrypt_token_fernet(code_verifier), db)
-            code_challenge = _pkce_challenge_s256(code_verifier)
-
-            client = _oauth_client_cls()(client_id=client_id, redirect_uri=redirect_uri, scope=scopes)
-
-            authorization_url, _ = client.create_authorization_url(
-                authorization_endpoint,
-                state=state,
-                nonce=nonce,
-                code_challenge=code_challenge,
-                code_challenge_method="S256",
+            authorization_endpoint = await self._resolve_authorization_endpoint(idp)
+            # The endpoint resolution above may hit the network, so this method
+            # must stay async; its database tail is handed to a worker thread
+            # rather than run on the event loop.
+            oauth_state_obj = await run_in_threadpool(
+                self._require_oauth_state, oauth_state_id, db, "OAuth state ID is required (PKCE mandatory)"
             )
-
-            return authorization_url
+            return await run_in_threadpool(
+                self._build_authorization_url, idp, authorization_endpoint, oauth_state_obj, db
+            )
 
         except jafaal_exceptions.JafaalError:
             raise
@@ -419,33 +518,10 @@ class IdentityProviderService:
             - OAuth state is stored in database with user_id to indicate link mode.
         """
         try:
-            client_id = self._decrypt_client_id(idp)
-
-            # Get endpoints
-            authorization_endpoint = idp.authorization_endpoint
-
-            # Try OIDC discovery if issuer URL is provided
-            if not authorization_endpoint and idp.issuer_url:
-                config = await self.get_oidc_configuration(idp)
-                if config:
-                    authorization_endpoint = config.get("authorization_endpoint")
-
-            if not authorization_endpoint:
-                raise jafaal_exceptions.IdentityProviderError(
-                    f"Identity provider {idp.name} authorization "
-                    "endpoint could not be resolved. Verify the "
-                    "issuer URL is reachable; if it is on a "
-                    "private network, add its host or CIDR to "
-                    "SSRF_ALLOWED_HOSTS."
-                )
-
-            # Retrieve database-backed OAuth state (required for link mode)
-            if not oauth_state_id:
-                raise jafaal_exceptions.InternalError("OAuth state ID is required for secure linking")
-
-            oauth_state_obj = oauth_state_crud.get_oauth_state_by_id_and_not_used(oauth_state_id, db)
-            if not oauth_state_obj:
-                raise jafaal_exceptions.InternalError("OAuth state not found")
+            authorization_endpoint = await self._resolve_authorization_endpoint(idp)
+            oauth_state_obj = await run_in_threadpool(
+                self._require_oauth_state, oauth_state_id, db, "OAuth state ID is required for secure linking"
+            )
 
             # Validate user_id matches (security check for link mode)
             if oauth_state_obj.user_id != user_id:
@@ -453,39 +529,14 @@ class IdentityProviderService:
 
             _reject_unenforced_freshness_params(authorize_extra_params, oauth_state_obj.purpose)
 
-            state = oauth_state_id
-            nonce = oauth_state_obj.nonce
-
-            # Enforce encrypted transport for the browser-facing authorization
-            # endpoint when idp_require_https is on (the redirect carries the
-            # state, nonce and PKCE challenge to the IdP).
-            if _idp_require_https():
-                network.require_https_url(authorization_endpoint)
-
-            # Build authorization URL
-            redirect_uri = self._get_redirect_uri(idp.slug)
-            scopes = idp.scopes or "openid profile email"
-
-            # Upstream PKCE (RFC 7636): bind this authorization request to a
-            # secret code_verifier so an intercepted authorization code cannot
-            # be redeemed without it. The verifier is stored (encrypted) against
-            # the OAuth state and replayed on the token exchange in handle_callback.
-            code_verifier = _generate_pkce_verifier()
-            oauth_state_crud.set_upstream_code_verifier(state, crypto.encrypt_token_fernet(code_verifier), db)
-            code_challenge = _pkce_challenge_s256(code_verifier)
-
-            client = _oauth_client_cls()(client_id=client_id, redirect_uri=redirect_uri, scope=scopes)
-
-            authorization_url, _ = client.create_authorization_url(
+            return await run_in_threadpool(
+                self._build_authorization_url,
+                idp,
                 authorization_endpoint,
-                state=state,
-                nonce=nonce,
-                code_challenge=code_challenge,
-                code_challenge_method="S256",
-                **(authorize_extra_params or {}),
+                oauth_state_obj,
+                db,
+                authorize_extra_params=authorize_extra_params,
             )
-
-            return authorization_url
 
         except jafaal_exceptions.JafaalError:
             raise
@@ -560,206 +611,20 @@ class IdentityProviderService:
             elif is_step_up_mode:
                 logger.debug(f"Step-up re-auth mode detected for IdP {idp.name}, user_id={link_user_id}")
 
-            # Decrypt credentials and resolve endpoints using helper methods
-            client_id = self._decrypt_client_id(idp)
-            client_secret = self._decrypt_client_secret(idp)
-            token_endpoint = await self.discovery.resolve_token_endpoint(idp)
+            identity = await self._exchange_code_for_identity(idp, code, oauth_state)
 
-            # Get OIDC configuration (for userinfo, jwks_uri, issuer)
-            userinfo_endpoint = idp.userinfo_endpoint
-            jwks_uri = None
-            expected_issuer = None
-
-            if idp.issuer_url:
-                try:
-                    config = await self.get_oidc_configuration(idp)
-                    if config:
-                        # Get userinfo endpoint if not manually configured
-                        if not userinfo_endpoint:
-                            userinfo_endpoint = config.get("userinfo_endpoint")
-
-                        # Get JWKS URI for ID token verification
-                        jwks_uri = config.get("jwks_uri")
-                        expected_issuer = config.get("issuer")
-
-                        logger.debug(
-                            f"OIDC discovery complete for {idp.name}: "
-                            f"userinfo={bool(userinfo_endpoint)}, "
-                            f"jwks_uri={bool(jwks_uri)}, "
-                            f"issuer={bool(expected_issuer)}"
-                        )
-                except Exception as err:
-                    # Fail closed. The IdP declares an ``issuer_url``, so this
-                    # flow is OIDC and the ID token is meant to be verified
-                    # against the discovered JWKS. Continuing without it would
-                    # silently skip signature, issuer and nonce validation and
-                    # fall back to trusting the userinfo response alone — the
-                    # exact downgrade an attacker able to disrupt discovery would
-                    # want. A transient outage becomes a failed login, not an
-                    # unverified one.
-                    logger.error(f"OIDC discovery failed for IdP {idp.name}: {err}", exc_info=err)
-                    jafaal_audit.record(
-                        jafaal_audit.Event.IDP_DISCOVERY_FAILED,
-                        outcome=jafaal_audit.Outcome.FAILURE,
-                        level=logging.ERROR,
-                        idp=idp.slug,
-                        reason=type(err).__name__,
-                    )
-                    raise jafaal_exceptions.IdentityProviderError(
-                        f"Could not reach the {idp.name} discovery endpoint, so the ID token cannot be "
-                        "verified. Please try again later."
-                    ) from err
-
-                if not jwks_uri:
-                    # Discovery succeeded but published no JWKS: there is no way
-                    # to verify the ID token, so the same reasoning applies.
-                    logger.error(f"OIDC discovery for IdP {idp.name} returned no jwks_uri")
-                    jafaal_audit.record(
-                        jafaal_audit.Event.IDP_DISCOVERY_FAILED,
-                        outcome=jafaal_audit.Outcome.FAILURE,
-                        level=logging.ERROR,
-                        idp=idp.slug,
-                        reason="no_jwks_uri",
-                    )
-                    raise jafaal_exceptions.IdentityProviderError(
-                        f"Identity provider {idp.name} publishes no JWKS, so its ID token cannot be verified."
-                    )
-
-            # Retrieve nonce from database state
-            expected_nonce = oauth_state.nonce
-
-            # Exchange code for tokens
-            redirect_uri = self._get_redirect_uri(idp.slug)
-
-            try:
-                client = self._create_oauth_client(
-                    client_id=client_id,
-                    client_secret=client_secret,
-                    redirect_uri=redirect_uri,
-                )
-
-                token_kwargs: dict[str, Any] = {"grant_type": "authorization_code", "code": code}
-                # Upstream PKCE: replay the stored code_verifier so the IdP can
-                # bind this token exchange to the earlier authorization request
-                # (defends against authorization-code injection/interception).
-                if oauth_state.upstream_code_verifier:
-                    token_kwargs["code_verifier"] = crypto.decrypt_token_fernet(oauth_state.upstream_code_verifier)
-
-                token_response = await client.fetch_token(token_endpoint, **token_kwargs)
-            except httpx.TimeoutException as err:
-                logger.error(f"Timeout connecting to IdP {idp.name} token endpoint: {err}", exc_info=err)
-                raise jafaal_exceptions.IdentityProviderTimeoutError(
-                    f"Identity provider {idp.name} is not responding. Please try again later."
-                ) from err
-            except httpx.HTTPStatusError as err:
-                logger.error(
-                    f"HTTP error from IdP {idp.name} token endpoint: {err.response.status_code} - {err.response.text}",
-                    exc_info=err,
-                )
-                # Check for common OAuth2 error responses
-                if err.response.status_code == 400:
-                    detail = "Authorization code is invalid or expired. Please try logging in again."
-                elif err.response.status_code == 401:
-                    detail = f"Identity provider {idp.name} rejected the authentication request. Please contact administrator."
-                else:
-                    detail = f"Identity provider {idp.name} returned an error. Please try again later."
-
-                raise jafaal_exceptions.IdentityProviderError(detail) from err
-            except httpx.RequestError as err:
-                logger.error(f"Network error connecting to IdP {idp.name}: {err}", exc_info=err)
-                raise jafaal_exceptions.IdentityProviderError(
-                    f"Unable to connect to identity provider {idp.name}. Please check your network connection."
-                ) from err
-            except Exception as err:
-                logger.error(f"Unexpected error during token exchange with IdP {idp.name}: {err}", exc_info=err)
-                raise jafaal_exceptions.InternalError("Failed to complete authentication. Please try again.") from err
-
-            # Get user information with ID token verification
-            userinfo = await self._get_userinfo(
-                token_response=token_response,
-                userinfo_endpoint=userinfo_endpoint,
-                client=client,
-                jwks_uri=jwks_uri,
-                expected_issuer=expected_issuer,
-                expected_audience=client_id,
-                expected_nonce=expected_nonce,
-                # OIDC providers must present a verifiable ID token; oauth2 providers
-                # legitimately identify the user via userinfo only.
-                require_verified_id_token=(idp.provider_type == "oidc"),
-            )
-
-            # Extract subject (unique user identifier)
-            subject = userinfo.get("sub") or userinfo.get("id")
-            if not subject:
-                logger.error(f"IdP {idp.name} did not provide 'sub' or 'id' claim in userinfo: {list(userinfo.keys())}")
-                raise jafaal_exceptions.IdentityProviderError(
-                    f"Identity provider {idp.name} did not provide required user identifier. Please contact administrator."
-                )
-
-            # Handle link mode differently from login mode
+            # Everything past this point is database work with no outbound I/O,
+            # so it is handed to a worker thread: this endpoint must stay async
+            # for the provider round trips above, and blocking the event loop on
+            # the database for the rest of the callback would stall every other
+            # request in the process.
             if is_step_up_mode and link_user_id is not None:
-                # STEP-UP RE-AUTH MODE: verify a fresh IdP sign-in and mint a grant
-                return await self._handle_step_up_callback(idp, link_user_id, subject, userinfo, db)
-
+                return await run_in_threadpool(
+                    self._handle_step_up_callback, idp, link_user_id, identity.subject, identity.userinfo, db
+                )
             if is_link_mode and link_user_id:
-                # LINK MODE: Associate IdP with existing authenticated user
-
-                # Verify user exists
-                user = jafaal_ports.get_user_repository().get_by_id(link_user_id, db)
-                if not user:
-                    raise jafaal_exceptions.NotFoundError("User not found")
-
-                # Check if this IdP subject is already linked to ANY user
-                existing_link = jafaal_identity_links_crud.get_user_identity_provider_by_subject_and_idp_id(
-                    idp.id, subject, db
-                )
-                if existing_link:
-                    # Check if it's already linked to THIS user
-                    if existing_link.user_id == link_user_id:
-                        raise jafaal_exceptions.ConflictError(
-                            f"This {idp.name} account is already linked to your account"
-                        )
-                    else:
-                        # Linked to a DIFFERENT user - security issue
-                        raise jafaal_exceptions.ConflictError(
-                            f"This {idp.name} account is already linked to another user"
-                        )
-
-                # Create the link
-                jafaal_identity_links_crud.create_user_identity_provider(
-                    user_id=link_user_id, idp_id=idp.id, idp_subject=subject, db=db
-                )
-
-                # Update user info if sync is enabled
-                if idp.sync_user_info:
-                    user = await self._update_user_from_idp(user, idp, userinfo, db)
-
-                # Store IdP tokens for future use
-                await self._store_idp_tokens(link_user_id, idp.id, token_response, db)
-
-                logger.info(f"User {user.username} (id={link_user_id}) linked IdP {idp.name} (subject={subject})")
-
-                # Return special structure for link mode (no new session created)
-                return {
-                    "user": user,
-                    "token_data": token_response,
-                    "userinfo": userinfo,
-                    "mode": "link",  # Indicate this was a link operation
-                }
-            else:
-                # LOGIN MODE: Find or create user and establish session
-                user = await self._find_or_create_user(idp, subject, userinfo, db)
-
-                # Store IdP tokens for future session renewal
-                await self._store_idp_tokens(user.id, idp.id, token_response, db)
-
-                logger.info(f"User {user.username} authenticated via IdP {idp.name}")
-
-                return {
-                    "user": user,
-                    "token_data": token_response,
-                    "userinfo": userinfo,
-                }
+                return await run_in_threadpool(self._complete_link_callback, idp, link_user_id, identity, db)
+            return await run_in_threadpool(self._complete_login_callback, idp, identity, db)
 
         except jafaal_exceptions.JafaalError:
             # Re-raise JafaalErrors as-is (already have proper status codes and messages)
@@ -771,7 +636,287 @@ class IdentityProviderService:
                 f"An unexpected error occurred during authentication with {idp.name}. Please try again or contact administrator."
             ) from err
 
-    async def _handle_step_up_callback(
+    async def _exchange_code_for_identity(
+        self,
+        idp: idp_models.IdentityProvider,
+        code: str,
+        oauth_state: oauth_state_models.OAuthState,
+    ) -> _CallbackIdentity:
+        """Redeem the authorization code and resolve the provider's assertion.
+
+        The outbound half of the callback, identical for every mode: resolve the
+        provider's endpoints, exchange the code for tokens, fetch and verify the
+        user's claims, and pin down the subject. Touches no database, so the
+        mode-specific completion that follows can run off the event loop.
+
+        Args:
+            idp: The identity provider.
+            code: The authorization code from the callback.
+            oauth_state: The state this callback is bound to.
+
+        Returns:
+            The verified subject, claims, and token response.
+
+        Raises:
+            JafaalError: If discovery, the token exchange, or claim verification
+                fails, or the provider asserted no subject.
+        """
+        client_id = self._decrypt_client_id(idp)
+        client_secret = self._decrypt_client_secret(idp)
+        token_endpoint = await self.discovery.resolve_token_endpoint(idp)
+        endpoints = await self._resolve_oidc_callback_endpoints(idp)
+
+        redirect_uri = self._get_redirect_uri(idp.slug)
+        client = self._create_oauth_client(
+            client_id=client_id,
+            client_secret=client_secret,
+            redirect_uri=redirect_uri,
+        )
+        token_response = await self._exchange_authorization_code(idp, code, oauth_state, client, token_endpoint)
+
+        userinfo = await self._get_userinfo(
+            token_response=token_response,
+            userinfo_endpoint=endpoints.userinfo_endpoint,
+            client=client,
+            jwks_uri=endpoints.jwks_uri,
+            expected_issuer=endpoints.expected_issuer,
+            expected_audience=client_id,
+            expected_nonce=oauth_state.nonce,
+            # OIDC providers must present a verifiable ID token; oauth2 providers
+            # legitimately identify the user via userinfo only.
+            require_verified_id_token=(idp.provider_type == "oidc"),
+        )
+
+        subject = userinfo.get("sub") or userinfo.get("id")
+        if not subject:
+            logger.error(f"IdP {idp.name} did not provide 'sub' or 'id' claim in userinfo: {list(userinfo.keys())}")
+            raise jafaal_exceptions.IdentityProviderError(
+                f"Identity provider {idp.name} did not provide required user identifier. Please contact administrator."
+            )
+
+        return _CallbackIdentity(subject=subject, userinfo=userinfo, token_response=token_response)
+
+    async def _resolve_oidc_callback_endpoints(self, idp: idp_models.IdentityProvider) -> _OidcCallbackEndpoints:
+        """Resolve the userinfo endpoint, JWKS URI and issuer for a callback.
+
+        Fails **closed** when the provider declares an ``issuer_url``: that makes
+        the flow OIDC, so the ID token is meant to be verified against the
+        discovered JWKS. Continuing without it would silently skip signature,
+        issuer and nonce validation and fall back to trusting the userinfo
+        response alone — the exact downgrade an attacker able to disrupt
+        discovery would want. A transient outage becomes a failed login, not an
+        unverified one.
+
+        Args:
+            idp: The identity provider.
+
+        Returns:
+            The endpoints needed to verify the provider's claims.
+
+        Raises:
+            IdentityProviderError: If discovery fails, or succeeds but publishes
+                no JWKS.
+        """
+        userinfo_endpoint = idp.userinfo_endpoint
+        if not idp.issuer_url:
+            return _OidcCallbackEndpoints(userinfo_endpoint, None, None)
+
+        try:
+            config = await self.get_oidc_configuration(idp)
+        except Exception as err:
+            logger.error(f"OIDC discovery failed for IdP {idp.name}: {err}", exc_info=err)
+            jafaal_audit.record(
+                jafaal_audit.Event.IDP_DISCOVERY_FAILED,
+                outcome=jafaal_audit.Outcome.FAILURE,
+                level=logging.ERROR,
+                idp=idp.slug,
+                reason=type(err).__name__,
+            )
+            raise jafaal_exceptions.IdentityProviderError(
+                f"Could not reach the {idp.name} discovery endpoint, so the ID token cannot be "
+                "verified. Please try again later."
+            ) from err
+
+        jwks_uri = None
+        expected_issuer = None
+        if config:
+            if not userinfo_endpoint:
+                userinfo_endpoint = config.get("userinfo_endpoint")
+            jwks_uri = config.get("jwks_uri")
+            expected_issuer = config.get("issuer")
+            logger.debug(
+                f"OIDC discovery complete for {idp.name}: "
+                f"userinfo={bool(userinfo_endpoint)}, "
+                f"jwks_uri={bool(jwks_uri)}, "
+                f"issuer={bool(expected_issuer)}"
+            )
+
+        if not jwks_uri:
+            # Discovery succeeded but published no JWKS: there is no way to
+            # verify the ID token, so the same reasoning applies.
+            logger.error(f"OIDC discovery for IdP {idp.name} returned no jwks_uri")
+            jafaal_audit.record(
+                jafaal_audit.Event.IDP_DISCOVERY_FAILED,
+                outcome=jafaal_audit.Outcome.FAILURE,
+                level=logging.ERROR,
+                idp=idp.slug,
+                reason="no_jwks_uri",
+            )
+            raise jafaal_exceptions.IdentityProviderError(
+                f"Identity provider {idp.name} publishes no JWKS, so its ID token cannot be verified."
+            )
+
+        return _OidcCallbackEndpoints(userinfo_endpoint, jwks_uri, expected_issuer)
+
+    async def _exchange_authorization_code(
+        self,
+        idp: idp_models.IdentityProvider,
+        code: str,
+        oauth_state: oauth_state_models.OAuthState,
+        client: Any,
+        token_endpoint: str,
+    ) -> dict[str, Any]:
+        """Redeem the authorization code at the provider's token endpoint.
+
+        Args:
+            idp: The identity provider.
+            code: The authorization code from the callback.
+            oauth_state: The state carrying the upstream PKCE verifier.
+            client: The configured authlib OAuth2 client.
+            token_endpoint: The provider's token endpoint.
+
+        Returns:
+            The provider's token response.
+
+        Raises:
+            JafaalError: If the provider times out, rejects the exchange, or is
+                unreachable.
+        """
+        try:
+            token_kwargs: dict[str, Any] = {"grant_type": "authorization_code", "code": code}
+            # Upstream PKCE: replay the stored code_verifier so the IdP can bind
+            # this token exchange to the earlier authorization request (defends
+            # against authorization-code injection/interception).
+            if oauth_state.upstream_code_verifier:
+                token_kwargs["code_verifier"] = crypto.decrypt_token_fernet(oauth_state.upstream_code_verifier)
+
+            return cast("dict[str, Any]", await client.fetch_token(token_endpoint, **token_kwargs))
+        except httpx.TimeoutException as err:
+            logger.error(f"Timeout connecting to IdP {idp.name} token endpoint: {err}", exc_info=err)
+            raise jafaal_exceptions.IdentityProviderTimeoutError(
+                f"Identity provider {idp.name} is not responding. Please try again later."
+            ) from err
+        except httpx.HTTPStatusError as err:
+            logger.error(
+                f"HTTP error from IdP {idp.name} token endpoint: {err.response.status_code} - {err.response.text}",
+                exc_info=err,
+            )
+            # Check for common OAuth2 error responses
+            if err.response.status_code == 400:
+                detail = "Authorization code is invalid or expired. Please try logging in again."
+            elif err.response.status_code == 401:
+                detail = (
+                    f"Identity provider {idp.name} rejected the authentication request. Please contact administrator."
+                )
+            else:
+                detail = f"Identity provider {idp.name} returned an error. Please try again later."
+
+            raise jafaal_exceptions.IdentityProviderError(detail) from err
+        except httpx.RequestError as err:
+            logger.error(f"Network error connecting to IdP {idp.name}: {err}", exc_info=err)
+            raise jafaal_exceptions.IdentityProviderError(
+                f"Unable to connect to identity provider {idp.name}. Please check your network connection."
+            ) from err
+        except jafaal_exceptions.JafaalError:
+            raise
+        except Exception as err:
+            logger.error(f"Unexpected error during token exchange with IdP {idp.name}: {err}", exc_info=err)
+            raise jafaal_exceptions.InternalError("Failed to complete authentication. Please try again.") from err
+
+    def _complete_link_callback(
+        self,
+        idp: idp_models.IdentityProvider,
+        link_user_id: UserId,
+        identity: _CallbackIdentity,
+        db: Session,
+    ) -> dict[str, Any]:
+        """Associate a verified IdP identity with the already-authenticated user.
+
+        Args:
+            idp: The identity provider.
+            link_user_id: The user that initiated the link (from the OAuth state).
+            identity: The verified subject, claims and token response.
+            db: Active database session.
+
+        Returns:
+            A callback result dict with ``mode='link'``; no session is created.
+
+        Raises:
+            NotFoundError: If the user no longer exists.
+            ConflictError: If the IdP subject is already linked to this or any
+                other account.
+        """
+        user = jafaal_ports.get_user_repository().get_by_id(link_user_id, db)
+        if not user:
+            raise jafaal_exceptions.NotFoundError("User not found")
+
+        # A subject already linked anywhere cannot be linked again: to this
+        # account it is a no-op, to another it would hand one person's provider
+        # identity to a second account.
+        existing_link = jafaal_identity_links_crud.get_user_identity_provider_by_subject_and_idp_id(
+            idp.id, identity.subject, db
+        )
+        if existing_link:
+            if existing_link.user_id == link_user_id:
+                raise jafaal_exceptions.ConflictError(f"This {idp.name} account is already linked to your account")
+            raise jafaal_exceptions.ConflictError(f"This {idp.name} account is already linked to another user")
+
+        jafaal_identity_links_crud.create_user_identity_provider(
+            user_id=link_user_id, idp_id=idp.id, idp_subject=identity.subject, db=db
+        )
+
+        if idp.sync_user_info:
+            user = self._update_user_from_idp(user, idp, identity.userinfo, db)
+
+        self._store_idp_tokens(link_user_id, idp.id, identity.token_response, db)
+
+        logger.info(f"User {user.username} (id={link_user_id}) linked IdP {idp.name} (subject={identity.subject})")
+
+        return {
+            "user": user,
+            "token_data": identity.token_response,
+            "userinfo": identity.userinfo,
+            "mode": "link",
+        }
+
+    def _complete_login_callback(
+        self,
+        idp: idp_models.IdentityProvider,
+        identity: _CallbackIdentity,
+        db: Session,
+    ) -> dict[str, Any]:
+        """Resolve (or provision) the user behind a verified IdP identity.
+
+        Args:
+            idp: The identity provider.
+            identity: The verified subject, claims and token response.
+            db: Active database session.
+
+        Returns:
+            A callback result dict for the login flow.
+        """
+        user = self._find_or_create_user(idp, identity.subject, identity.userinfo, db)
+        self._store_idp_tokens(user.id, idp.id, identity.token_response, db)
+
+        logger.info(f"User {user.username} authenticated via IdP {idp.name}")
+
+        return {
+            "user": user,
+            "token_data": identity.token_response,
+            "userinfo": identity.userinfo,
+        }
+
+    def _handle_step_up_callback(
         self,
         idp: idp_models.IdentityProvider,
         user_id: UserId,
@@ -1018,7 +1163,7 @@ class IdentityProviderService:
             "Unable to retrieve user information from identity provider. Please contact administrator."
         )
 
-    async def _store_idp_tokens(
+    def _store_idp_tokens(
         self,
         user_id: UserId,
         idp_id: int,
@@ -1158,7 +1303,7 @@ class IdentityProviderService:
             return value.strip().lower() == "true"
         return False
 
-    async def _find_or_create_user(
+    def _find_or_create_user(
         self,
         idp: idp_models.IdentityProvider,
         subject: str,
@@ -1205,7 +1350,7 @@ class IdentityProviderService:
 
             # Update user info if sync is enabled
             if idp.sync_user_info:
-                user = await self._update_user_from_idp(user, idp, userinfo, db)
+                user = self._update_user_from_idp(user, idp, userinfo, db)
             return user
 
         # Try to find by email (for linking existing accounts).
@@ -1282,8 +1427,10 @@ class IdentityProviderService:
                 )
                 # Tell the account owner out of band: this is a new way to sign
                 # in to their account that they did not perform from a
-                # session they were already holding.
-                await jafaal_ports.adispatch_event(
+                # session they were already holding. ``dispatch_event`` hands
+                # delivery to the shared dispatch loop, so this stays a
+                # synchronous path and the sink's I/O never stalls the caller.
+                jafaal_ports.dispatch_event(
                     "on_idp_account_linked",
                     jafaal_ports.IdpAccountLinked(
                         user_id=user.id,
@@ -1296,14 +1443,14 @@ class IdentityProviderService:
 
                 # Update user info if sync is enabled
                 if idp.sync_user_info:
-                    user = await self._update_user_from_idp(user, idp, userinfo, db)
+                    user = self._update_user_from_idp(user, idp, userinfo, db)
                 return user
 
         # Create new user if auto-creation is enabled
         if not idp.auto_create_users:
             raise jafaal_exceptions.AuthorizationError("User account creation is disabled for this identity provider")
 
-        user = await self._create_user_from_idp(
+        user = self._create_user_from_idp(
             idp,
             subject,
             mapped_data,
@@ -1313,7 +1460,7 @@ class IdentityProviderService:
 
         return user
 
-    async def _create_user_from_idp(
+    def _create_user_from_idp(
         self,
         idp: idp_models.IdentityProvider,
         subject: str,
@@ -1379,7 +1526,7 @@ class IdentityProviderService:
 
         return created_user
 
-    async def _update_user_from_idp(
+    def _update_user_from_idp(
         self,
         user: jafaal_ports.UserProtocol,
         idp: idp_models.IdentityProvider,
@@ -1513,7 +1660,7 @@ class IdentityProviderService:
             logger.debug(f"Successfully refreshed IdP session for user {user_id}, idp {idp_id}")
 
             # Store the new tokens (they may include a new refresh token)
-            await self._store_idp_tokens(user_id, idp_id, token_response, db)
+            self._store_idp_tokens(user_id, idp_id, token_response, db)
 
             return token_response
 

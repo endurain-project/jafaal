@@ -194,6 +194,82 @@ def test_local_password_helpers(db, make_user):
 
 
 # --------------------------------------------------------------------------- #
+# Host-facing credential management (jafaal.set_password / jafaal.clear_password)
+# --------------------------------------------------------------------------- #
+
+
+def test_set_password_makes_the_new_password_authenticate(db, make_user):
+    # The seed-an-admin path: no HTTP request, no step-up, just a host that has
+    # already decided the caller may do this.
+    user = make_user(username="seeded", password=None)
+    with jafaal.unit_of_work(db):
+        jafaal.set_password(user.id, "Seed3d!Passphrase", db)
+
+    assert _svc(db).authenticate_password("seeded", "Seed3d!Passphrase").user_id == user.id
+
+
+def test_set_password_replaces_an_existing_credential(db, make_user):
+    user = make_user(username="rotating", password="Str0ng!Pass")
+    with jafaal.unit_of_work(db):
+        jafaal.set_password(user.id, "R0tated!Passphrase", db)
+
+    svc = _svc(db)
+    with pytest.raises(exc.InvalidCredentialsError):
+        svc.authenticate_password("rotating", "Str0ng!Pass")
+    assert svc.authenticate_password("rotating", "R0tated!Passphrase").user_id == user.id
+
+
+def test_set_password_enforces_the_host_password_policy(db, make_user):
+    user = make_user(username="short", password=None)
+    with pytest.raises(exc.PasswordPolicyError), jafaal.unit_of_work(db):
+        jafaal.set_password(user.id, "sh0rt", db)
+
+
+def test_set_password_can_skip_validation_for_a_generated_secret(db, make_user):
+    # A human-oriented composition policy is meaningless for a secret the host
+    # generated itself, so validate=False is the documented escape hatch.
+    user = make_user(username="generated", password=None)
+    with jafaal.unit_of_work(db):
+        jafaal.set_password(user.id, "sh0rt", db, validate=False)
+
+    assert _svc(db).authenticate_password("generated", "sh0rt").user_id == user.id
+
+
+def test_set_password_rejects_an_unknown_user(db):
+    with pytest.raises(exc.NotFoundError), jafaal.unit_of_work(db):
+        jafaal.set_password(999_999, "Unkn0wn!Passphrase", db)
+
+
+def test_set_password_does_not_commit_on_its_own(db, make_user):
+    # JAFAAL never commits below its own HTTP boundary: rolling the caller's
+    # transaction back must take the credential with it.
+    user = make_user(username="rollback", password=None)
+    jafaal.set_password(user.id, "R0llback!Passphrase", db)
+    db.rollback()
+
+    assert _svc(db).has_local_password(user.id) is False
+
+
+def test_clear_password_leaves_the_account_sso_only(db, make_user):
+    user = make_user(username="unlinked", password="Str0ng!Pass")
+    with jafaal.unit_of_work(db):
+        jafaal.clear_password(user.id, db)
+
+    svc = _svc(db)
+    assert svc.has_local_password(user.id) is False
+    with pytest.raises(exc.InvalidCredentialsError):
+        svc.authenticate_password("unlinked", "Str0ng!Pass")
+
+
+def test_clear_password_is_a_no_op_without_a_credential(db, make_user):
+    user = make_user(username="already-sso", password=None)
+    with jafaal.unit_of_work(db):
+        jafaal.clear_password(user.id, db)
+
+    assert _svc(db).has_local_password(user.id) is False
+
+
+# --------------------------------------------------------------------------- #
 # Unified JWT / API-key dependency
 # --------------------------------------------------------------------------- #
 

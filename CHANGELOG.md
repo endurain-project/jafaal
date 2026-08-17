@@ -78,6 +78,15 @@ consumer.
 - JWT access/refresh tokens conforming to RFC 9068 (*JWT Profile for OAuth 2.0
   Access Tokens*), so a resource server can verify them with a stock JWT
   library.
+- The JOSE `typ` header is **verified on decode**, not just written on issue.
+  RFC 9068 §4 has the resource server reject a token whose media type is not
+  `at+jwt` before it reads a single claim, so a token minted for another purpose
+  cannot be replayed as an access token. The comparison ignores case and the
+  optional `application/` prefix, per §2.1 and RFC 7519 §5.1, so a token from any
+  conforming issuer still verifies. JAFAAL validates the `token_use` payload
+  claim as well; the header check is the one the RFC mandates, and it is what
+  makes a JAFAAL token verifiable by a third-party resource server that only
+  looks at `typ`.
 - HS256 by default, or asymmetric signing (RS/PS/ES 256/384/512) with the public
   key published at a JWKS endpoint for stateless verification. Under HS256 there
   is no public key, so the JWKS endpoint answers `404` and `jwks_uri` is omitted
@@ -234,8 +243,15 @@ consumer.
   account is sent to the password + TOTP flow instead.
 - Every factor change — TOTP enable/disable, backup-code regeneration, passkey
   add/delete — emits an `AuthenticatorChanged` notification, so an attacker
-  enrolling their own factor cannot do it in silence.- Step-up re-authentication for sensitive operations, including delegation to a
-  linked identity provider for SSO-only accounts.
+  enrolling their own factor cannot do it in silence.
+- Step-up re-authentication for sensitive operations, including delegation to a
+  linked identity provider for SSO-only accounts. `prompt=login` and `max_age`
+  are sent so the provider re-prompts, and the callback verifies the resulting
+  `auth_time` — a missing or stale one fails closed. Because that verification
+  exists on the step-up path and nowhere else, requesting either parameter on
+  any *other* flow is **rejected** rather than silently forwarded: an identity
+  provider is free to ignore both, so an unverified request is a freshness
+  guarantee that does not actually hold.
 
 **Identity providers**
 

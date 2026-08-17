@@ -9,10 +9,12 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_providers.crud as idp_crud
 import jafaal.identity_providers.links.crud as jafaal_identity_links_crud
+import jafaal.identity_providers.models as idp_models
 import jafaal.identity_providers.schema as idp_schema
 import jafaal.identity_providers.service as idp_service
 import jafaal.oauth_state.crud as oauth_state_crud
@@ -63,28 +65,36 @@ async def begin_idp_authorization(
         JafaalError: 404 if the provider is unknown or disabled; 400 if the PKCE
             parameters are malformed.
     """
-    idp = idp_crud.get_identity_provider_by_slug(idp_slug, db)
-    if not idp or not idp.enabled:
-        raise jafaal_exceptions.NotFoundError("Identity provider not found or disabled")
 
-    # PKCE is REQUIRED for all clients (RFC 7636 / RFC 9700 §2.1.1).
-    validate_pkce_challenge(code_challenge, code_challenge_method)
+    def _park_authorization_request() -> idp_models.IdentityProvider:
+        """Resolve the provider, validate PKCE, and persist the OAuth state."""
+        idp = idp_crud.get_identity_provider_by_slug(idp_slug, db)
+        if not idp or not idp.enabled:
+            raise jafaal_exceptions.NotFoundError("Identity provider not found or disabled")
+
+        # PKCE is REQUIRED for all clients (RFC 7636 / RFC 9700 §2.1.1).
+        validate_pkce_challenge(code_challenge, code_challenge_method)
+
+        oauth_state_crud.create_oauth_state(
+            db=db,
+            state_id=state_id,
+            idp_id=idp.id,
+            nonce=nonce,
+            ip_address=network.get_ip_address(request),
+            code_challenge=code_challenge,
+            code_challenge_method=code_challenge_method,
+            client_id=client_id,
+            redirect_uri=redirect_uri,
+            client_state=client_state,
+            requested_scope=requested_scope,
+        )
+        return idp
 
     state_id, nonce = oauth_state_utils.create_state_id_and_nonce()
 
-    oauth_state_crud.create_oauth_state(
-        db=db,
-        state_id=state_id,
-        idp_id=idp.id,
-        nonce=nonce,
-        ip_address=network.get_ip_address(request),
-        code_challenge=code_challenge,
-        code_challenge_method=code_challenge_method,
-        client_id=client_id,
-        redirect_uri=redirect_uri,
-        client_state=client_state,
-        requested_scope=requested_scope,
-    )
+    # This function must stay async for the provider round trip below, so its
+    # database work is handed to a worker thread rather than run on the loop.
+    idp = await run_in_threadpool(_park_authorization_request)
 
     logger.debug(f"OAuth state created: {state_id[:8]}... for IdP {idp.slug} (client={client_id})")
 

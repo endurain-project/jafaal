@@ -214,12 +214,6 @@ def test_is_email_verified():
 # --------------------------------------------------------------------------- #
 
 
-def _run(coro):
-    import asyncio
-
-    return asyncio.run(coro)
-
-
 def test_email_linking_is_refused_by_default(db, make_user):
     """A provider must not adopt an existing account unless the operator says so.
 
@@ -231,13 +225,11 @@ def test_email_linking_is_refused_by_default(db, make_user):
     assert idp.allow_email_linking is False
 
     with pytest.raises(exc.AuthorizationError):
-        _run(
-            IdentityProviderService()._find_or_create_user(
-                idp,
-                "attacker-subject",
-                {"sub": "attacker-subject", "email": "victim@test.dev", "email_verified": True},
-                db,
-            )
+        IdentityProviderService()._find_or_create_user(
+            idp,
+            "attacker-subject",
+            {"sub": "attacker-subject", "email": "victim@test.dev", "email_verified": True},
+            db,
         )
 
     # No link was created behind the refusal.
@@ -250,13 +242,11 @@ def test_email_linking_still_requires_a_verified_email_when_enabled(db, make_use
     idp = _create_idp(db, slug="trusted", allow_email_linking=True)
 
     with pytest.raises(exc.AuthorizationError):
-        _run(
-            IdentityProviderService()._find_or_create_user(
-                idp,
-                "unverified-subject",
-                {"sub": "unverified-subject", "email": "victim2@test.dev", "email_verified": False},
-                db,
-            )
+        IdentityProviderService()._find_or_create_user(
+            idp,
+            "unverified-subject",
+            {"sub": "unverified-subject", "email": "victim2@test.dev", "email_verified": False},
+            db,
         )
     assert links_crud.get_user_identity_provider_by_subject_and_idp_id(idp.id, "unverified-subject", db) is None
 
@@ -265,13 +255,11 @@ def test_email_linking_adopts_the_account_when_enabled_and_verified(db, make_use
     user = make_user(username="owner", email="owner@test.dev")
     idp = _create_idp(db, slug="trusted2", allow_email_linking=True)
 
-    linked = _run(
-        IdentityProviderService()._find_or_create_user(
-            idp,
-            "owner-subject",
-            {"sub": "owner-subject", "email": "owner@test.dev", "email_verified": True},
-            db,
-        )
+    linked = IdentityProviderService()._find_or_create_user(
+        idp,
+        "owner-subject",
+        {"sub": "owner-subject", "email": "owner@test.dev", "email_verified": True},
+        db,
     )
     assert linked.id == user.id
     assert links_crud.get_user_identity_provider_by_subject_and_idp_id(idp.id, "owner-subject", db) is not None
@@ -290,20 +278,16 @@ def test_profile_sync_withholds_an_unverified_email(db, make_user, monkeypatch):
     repo = ports.get_user_repository()
     monkeypatch.setattr(repo, "sync_from_idp", lambda user_id, claims, db: captured.update(claims), raising=False)
 
-    _run(
-        IdentityProviderService()._update_user_from_idp(
-            user, idp, {"email": "attacker@evil.dev", "email_verified": False, "name": "Synced"}, db
-        )
+    IdentityProviderService()._update_user_from_idp(
+        user, idp, {"email": "attacker@evil.dev", "email_verified": False, "name": "Synced"}, db
     )
     assert "email" not in captured
     assert captured["email_verified"] is False
     assert captured["name"] == "Synced"
 
     captured.clear()
-    _run(
-        IdentityProviderService()._update_user_from_idp(
-            user, idp, {"email": "new@test.dev", "email_verified": True, "name": "Synced"}, db
-        )
+    IdentityProviderService()._update_user_from_idp(
+        user, idp, {"email": "new@test.dev", "email_verified": True, "name": "Synced"}, db
     )
     assert captured["email"] == "new@test.dev"
     assert captured["email_verified"] is True
