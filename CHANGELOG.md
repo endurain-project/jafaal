@@ -72,6 +72,27 @@ consumer.
   change now revokes other sessions by default — "change my password" is what a
   user does when they think they are compromised, and leaving the attacker's
   session live is the one outcome that makes it pointless.
+- `jafaal.set_password()` / `jafaal.clear_password()` write a credential outside
+  an HTTP request — the one thing no endpoint can do, since sign-up cannot grant
+  `is_superuser`. For seeding the first administrator, a CLI `reset-password`, or
+  a migration import; ordinary registration still goes through `/auth/sign-up`.
+  Both run the same credential sweep every other password path runs, and it is
+  **not optional**, so a reset driven from a script evicts an intruder exactly as
+  one driven from the endpoint does. Both perform **no step-up and no
+  authorization check** — they cannot, having no request to authenticate — so the
+  caller must establish that itself. `human_chosen=False` skips the composition
+  policy and breach screening for a secret the host generated, where neither
+  applies; it is named for the assertion the caller has to be able to make.
+- **Optional forced password change.** `set_password(..., must_change=True)`
+  marks the credential, and login then fails with `password_change_required`
+  until a new password is written — so a bootstrap or support-desk password,
+  which is known to whoever set it, cannot quietly become a permanent one. Off
+  by default. The error is deliberately distinct from a wrong password: reaching
+  it already required presenting the correct one, so it leaks nothing, and the
+  remedy is to replace the password rather than retry. A transparent Argon2
+  rehash on login does **not** clear the flag — only a real password write does.
+  JAFAAL ships no change-password endpoint, so a deployment using this must wire
+  one (calling `set_password`) or keep `/auth/password-reset` usable.
 
 **Tokens and sessions**
 

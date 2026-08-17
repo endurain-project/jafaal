@@ -9,7 +9,10 @@ from starlette.requests import Request
 import jafaal
 import jafaal.api_keys.crud as api_keys_crud
 import jafaal.api_keys.schema as api_keys_schema
+import jafaal.credentials.crud as credentials_crud
 import jafaal.exceptions as exc
+import jafaal.sessions.crud as sessions_crud
+import jafaal.sessions.utils as session_utils
 from jafaal._internal.internal_dependencies import validate_access_token_or_api_key
 from jafaal._internal.password_hasher import get_password_hasher
 from jafaal._internal.token_manager import TokenType, get_token_manager
@@ -225,12 +228,12 @@ def test_set_password_enforces_the_host_password_policy(db, make_user):
         jafaal.set_password(user.id, "sh0rt", db)
 
 
-def test_set_password_can_skip_validation_for_a_generated_secret(db, make_user):
-    # A human-oriented composition policy is meaningless for a secret the host
-    # generated itself, so validate=False is the documented escape hatch.
+def test_set_password_can_skip_policy_for_a_generated_secret(db, make_user):
+    # A composition policy is meaningless for a secret the host generated
+    # itself, so human_chosen=False is the documented escape hatch.
     user = make_user(username="generated", password=None)
     with jafaal.unit_of_work(db):
-        jafaal.set_password(user.id, "sh0rt", db, validate=False)
+        jafaal.set_password(user.id, "sh0rt", db, human_chosen=False)
 
     assert _svc(db).authenticate_password("generated", "sh0rt").user_id == user.id
 
@@ -267,6 +270,114 @@ def test_clear_password_is_a_no_op_without_a_credential(db, make_user):
         jafaal.clear_password(user.id, db)
 
     assert _svc(db).has_local_password(user.id) is False
+
+
+def test_set_password_revokes_what_the_old_password_could_reach(db, make_user):
+    """A reset must evict an intruder, not merely inconvenience them.
+
+    Every other path that writes a password hash sweeps the credentials derived
+    from the old one; this host-facing entry point has to as well, or an
+    admin-initiated reset leaves the attacker's session and API key live.
+    """
+    user = make_user(username="compromised", password="Str0ng!Pass")
+    session_utils.create_session("sess-compromised", user, _request(), "rt", db)
+    _make_api_key(db, user.id)
+
+    with jafaal.unit_of_work(db):
+        jafaal.set_password(user.id, "Ev1cted!Passphrase", db)
+
+    assert sessions_crud.get_user_sessions(user.id, db) == []
+    assert [k for k in api_keys_crud.get_api_keys_by_user_id(user.id, db) if k.is_active] == []
+
+
+def test_set_password_sweeps_even_for_a_generated_secret(db, make_user):
+    # The sweep is not optional: there is no call shape that writes a password
+    # and leaves the credentials the previous one produced alive.
+    user = make_user(username="fresh", password=None)
+    _make_api_key(db, user.id)
+
+    with jafaal.unit_of_work(db):
+        jafaal.set_password(user.id, "Fr3sh!Passphrase", db)
+
+    assert [k for k in api_keys_crud.get_api_keys_by_user_id(user.id, db) if k.is_active] == []
+
+
+def test_clear_password_revokes_what_the_removed_password_could_reach(db, make_user):
+    user = make_user(username="downgraded", password="Str0ng!Pass")
+    session_utils.create_session("sess-downgraded", user, _request(), "rt", db)
+    _make_api_key(db, user.id)
+
+    with jafaal.unit_of_work(db):
+        jafaal.clear_password(user.id, db)
+
+    assert sessions_crud.get_user_sessions(user.id, db) == []
+    assert [k for k in api_keys_crud.get_api_keys_by_user_id(user.id, db) if k.is_active] == []
+
+
+# --------------------------------------------------------------------------- #
+# Forced password change (must_change)
+# --------------------------------------------------------------------------- #
+
+
+def test_must_change_refuses_login_with_the_correct_password(db, make_user):
+    """A password the operator chose opens nothing until the owner replaces it.
+
+    The error is deliberately distinct from a wrong password: the caller has
+    already proved it knows the password, so the remedy is to replace it, not to
+    retry.
+    """
+    user = make_user(username="bootstrapped", password=None)
+    with jafaal.unit_of_work(db):
+        jafaal.set_password(user.id, "Temp0rary!Passphrase", db, must_change=True)
+
+    with pytest.raises(exc.PasswordChangeRequiredError):
+        _svc(db).authenticate_password("bootstrapped", "Temp0rary!Passphrase")
+
+
+def test_must_change_still_refuses_a_wrong_password_as_invalid(db, make_user):
+    # The flag must not turn a failed guess into a "your password is right"
+    # signal for an attacker who does not know it.
+    user = make_user(username="bootstrapped2", password=None)
+    with jafaal.unit_of_work(db):
+        jafaal.set_password(user.id, "Temp0rary!Passphrase", db, must_change=True)
+
+    with pytest.raises(exc.InvalidCredentialsError):
+        _svc(db).authenticate_password("bootstrapped2", "WrongGuess!1")
+
+
+def test_writing_a_new_password_clears_the_requirement(db, make_user):
+    user = make_user(username="rotated", password=None)
+    with jafaal.unit_of_work(db):
+        jafaal.set_password(user.id, "Temp0rary!Passphrase", db, must_change=True)
+    with jafaal.unit_of_work(db):
+        jafaal.set_password(user.id, "Ch0sen!Passphrase", db)
+
+    assert _svc(db).authenticate_password("rotated", "Ch0sen!Passphrase").user_id == user.id
+
+
+def test_must_change_defaults_off(db, make_user):
+    user = make_user(username="ordinary", password=None)
+    with jafaal.unit_of_work(db):
+        jafaal.set_password(user.id, "Ordin4ry!Passphrase", db)
+
+    assert _svc(db).authenticate_password("ordinary", "Ordin4ry!Passphrase").user_id == user.id
+
+
+def test_a_transparent_rehash_does_not_clear_the_requirement(db, make_user):
+    """Raising the Argon2 cost rewrites the hash without changing the password.
+
+    That write must not be mistaken for the user satisfying the requirement,
+    or the first login after a parameter change would silently clear it.
+    """
+    user = make_user(username="rehashed", password=None)
+    with jafaal.unit_of_work(db):
+        jafaal.set_password(user.id, "Temp0rary!Passphrase", db, must_change=True)
+
+    credentials_crud.upsert_password_hash(user.id, get_password_hasher().hash_password("Temp0rary!Passphrase"), db)
+    db.commit()
+
+    with pytest.raises(exc.PasswordChangeRequiredError):
+        _svc(db).authenticate_password("rehashed", "Temp0rary!Passphrase")
 
 
 # --------------------------------------------------------------------------- #

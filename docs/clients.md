@@ -170,6 +170,7 @@ them unmodified:
 |---|---|---|
 | `400` | `invalid_request`, `invalid_grant` | Do not retry unchanged |
 | `401` | `invalid_token` — expired or invalid access token | Refresh once, retry once |
+| `401` | `password_change_required` — the password is correct but was set by an operator | Send the user to a password-change flow; retrying is futile |
 | `403` | `insufficient_scope` | Do not retry; the grant is too narrow |
 | `404` | Unknown resource | — |
 | `429` | Rate limited or progressive lockout | Respect `Retry-After` |

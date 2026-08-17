@@ -327,6 +327,24 @@ class StepUpReauthRequiredError(AuthenticationError):
         super().__init__(detail, headers=headers)
 
 
+class PasswordChangeRequiredError(AuthenticationError):
+    """The password is correct but must be replaced before it can be used.
+
+    Raised when a credential was written with ``must_change=True`` — an operator
+    seeding the first administrator, or a CLI ``reset-password``. Such a password
+    is known to whoever set it, so allowing it to stay in use indefinitely would
+    make a bootstrap credential a permanent one.
+
+    Distinct from :class:`InvalidCredentialsError` on purpose: the caller needs
+    to know the password was right and that the remedy is to replace it, not to
+    retry. There is no enumeration concern in the distinction, because reaching
+    it already required presenting the correct password.
+    """
+
+    code = "password_change_required"
+    default_detail = "This password must be changed before you can sign in."
+
+
 class InvalidMFACodeError(InvalidRequestError):
     """A supplied TOTP/backup MFA code did not verify (400)."""
 

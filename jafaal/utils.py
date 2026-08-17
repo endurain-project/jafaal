@@ -76,24 +76,30 @@ def authenticate_user(
     # Load the user's local password hash from the auth-owned credential
     # table. A missing row means the account has no local password.
     credential = jafaal_credentials_crud.get_credential(user.id, db)
-    stored_hash = credential.password_hash if credential is not None else None
 
     # User has no local password (SSO-only account). Treat identically
     # to "wrong password" so neither the response body nor the timing
     # discloses the account's auth modality. The dummy verify keeps
     # the latency consistent with a normal Argon2 verify.
-    if stored_hash is None:
+    if credential is None:
         password_hasher.dummy_verify()
         raise jafaal_exceptions.InvalidCredentialsError("Unable to authenticate with provided credentials")
 
     # Verify password and get updated hash if applicable
-    is_password_valid, updated_hash = password_hasher.verify_and_update(password, stored_hash)
+    is_password_valid, updated_hash = password_hasher.verify_and_update(password, credential.password_hash)
     if not is_password_valid:
         raise jafaal_exceptions.InvalidCredentialsError("Unable to authenticate with provided credentials")
 
     # Update user hash if applicable
     if updated_hash:
         jafaal_credentials_crud.upsert_password_hash(user.id, updated_hash, db)
+
+    # An operator-set password is known to whoever set it, so it opens nothing
+    # until the account owner replaces it. Checked after verification on
+    # purpose: reaching here already required the correct password, so the
+    # distinct error reveals nothing a failed attempt would not have.
+    if credential.must_change_password:
+        raise jafaal_exceptions.PasswordChangeRequiredError
 
     # Return the user if the password is correct
     return user

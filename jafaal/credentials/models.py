@@ -9,7 +9,7 @@ Rows are written and read through ``jafaal.credentials.crud``.
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import DateTime, ForeignKey, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -33,6 +33,8 @@ class LocalCredential(Base):
     Attributes:
         user_id: FK to ``users.id`` and primary key (one row per user).
         password_hash: Argon2 password hash.
+        must_change_password: Whether the password must be replaced before the
+            account can log in.
         created_at: Row creation timestamp.
         updated_at: Last update timestamp.
         users: Back-reference to the owning ``Users`` row.
@@ -48,6 +50,13 @@ class LocalCredential(Base):
         String(250),
         nullable=False,
         comment="Local account password hash",
+    )
+    must_change_password: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default="0",
+        nullable=False,
+        comment="Password must be replaced before the account can log in",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

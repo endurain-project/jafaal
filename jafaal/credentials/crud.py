@@ -46,6 +46,8 @@ def upsert_password_hash(
     password_hash: str,
     db: Session,
     commit: bool = True,
+    *,
+    must_change: bool | None = None,
 ) -> None:
     """
     Insert or update a user's local password hash.
@@ -59,6 +61,11 @@ def upsert_password_hash(
         db: SQLAlchemy database session.
         commit: Whether to commit immediately. Pass ``False`` to bundle the
             write into a larger transaction owned by the caller.
+        must_change: Whether the new password must be replaced before the
+            account can log in. ``None`` (the default) leaves the existing flag
+            untouched, which is what the rehash-on-verify path needs: raising
+            the Argon2 cost parameters rewrites the hash without the password
+            having changed, and must not clear a pending change requirement.
 
     Returns:
         None.
@@ -74,10 +81,13 @@ def upsert_password_hash(
         credential = jafaal_credentials_models.LocalCredential(
             user_id=user_id,
             password_hash=password_hash,
+            must_change_password=bool(must_change),
         )
         db.add(credential)
     else:
         credential.password_hash = password_hash
+        if must_change is not None:
+            credential.must_change_password = must_change
 
     if commit:
         db.flush()

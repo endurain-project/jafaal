@@ -51,6 +51,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 import jafaal._internal.password_hasher as jafaal_password_hasher
+import jafaal._internal.services.credential_sweep as credential_sweep
 import jafaal._internal.token_denylist as jafaal_token_denylist
 import jafaal._internal.token_manager as jafaal_token_manager
 import jafaal._internal.user_guards as jafaal_user_guards
@@ -954,7 +955,9 @@ class DefaultIdentityService:
         Returns:
             None.
         """
-        jafaal_credentials_crud.upsert_password_hash(user_id, password_hash, self._db)
+        # A new password clears any pending change requirement: replacing the
+        # credential is exactly what the requirement was asking for.
+        jafaal_credentials_crud.upsert_password_hash(user_id, password_hash, self._db, must_change=False)
 
     def clear_local_password(self, user_id: UserId) -> None:
         """Remove a user's local password credential, if present.
@@ -1016,15 +1019,31 @@ def set_password(
     password: str,
     db: Session,
     *,
-    validate: bool = True,
+    human_chosen: bool = True,
+    must_change: bool = False,
 ) -> None:
     """Set or replace a user's local password, outside an HTTP request.
 
-    The supported way to seed an initial administrator, run a CLI
-    ``reset-password`` command, or migrate an account onto a local credential.
-    JAFAAL's own routes reach the same credential store through their
-    step-up-verified endpoints; this is the equivalent for code that has already
-    established the caller is allowed to do it.
+    The out-of-band half of credential management: seeding the first
+    administrator (which no HTTP flow can do — sign-up cannot grant
+    ``is_superuser``), a CLI ``reset-password``, or a migration importing
+    accounts. Ordinary self-service registration should go through
+    ``/auth/sign-up``, which additionally gets enumeration safety and the
+    verification/approval gates.
+
+    .. warning::
+       This performs **no step-up verification and no authorization check** —
+       it cannot, having no request to authenticate. JAFAAL's own routes reach
+       the same credential store through step-up-gated endpoints; this is the
+       equivalent for code that has *already* established the caller is allowed
+       to do it. Never wire it to an HTTP handler without that gate.
+
+    Revokes everything the previous password could still reach — sessions, API
+    keys, outstanding reset tokens, pending MFA tickets, step-up grants, live
+    passkey-registration challenges — exactly as every other password path does.
+    That is what makes an operator-driven reset evict an intruder rather than
+    merely inconvenience them, so it is not optional. On an account created
+    moments ago there is nothing to revoke and the sweep is a no-op.
 
     Participates in the caller's transaction and **does not commit** — wrap it in
     :func:`jafaal.unit_of_work` (or your own ``session.begin()``) so the
@@ -1040,14 +1059,26 @@ def set_password(
             selects the admin or regular minimum length.
         password: The plaintext password.
         db: Active database session.
-        validate: Enforce the host's password policy and breach screening
-            (the default). Pass ``False`` only for a high-entropy secret your
-            own code generated, where a human-oriented policy is meaningless —
-            never for a password a person chose or supplied.
+        human_chosen: Whether a person picked this password (the default). Human
+            passwords are held to the host's policy and screened against the
+            installed breach corpus. Pass ``False`` **only** for a high-entropy
+            secret your own code generated, where a composition policy is
+            meaningless and a breach corpus cannot contain it — never to make a
+            policy rejection go away for a password a person supplied.
+        must_change: Require the account owner to replace this password before
+            they can sign in. Recommended whenever *you* chose the password —
+            seeding an administrator, or a support-desk reset — because such a
+            password is known to whoever set it. Login then fails with
+            :class:`~jafaal.PasswordChangeRequiredError` until a new password is
+            written. **You must have a way for the user to set one**: JAFAAL
+            ships no change-password endpoint, so wire one that calls this
+            function, or leave the account's e-mail reachable so
+            ``/auth/password-reset`` can serve as the escape hatch. Setting this
+            with neither in place locks the account out.
 
     Raises:
         NotFoundError: If ``user_id`` does not resolve to a user.
-        PasswordPolicyError: If ``validate`` is set and the password fails the
+        PasswordPolicyError: If the password is human-chosen and fails the
             configured policy or appears in the installed breach corpus.
     """
     # Imported here rather than at module scope: password_policy imports this
@@ -1063,7 +1094,7 @@ def set_password(
         jafaal_token_manager.get_token_manager(),
         jafaal_password_hasher.get_password_hasher(),
     )
-    if validate:
+    if human_chosen:
         password_hash = jafaal_password_policy.validate_and_hash_for_user(
             service,
             jafaal_ports.is_superuser(user),
@@ -1072,14 +1103,31 @@ def set_password(
     else:
         password_hash = service.hash_password(password)
     service.set_local_password_hash(user_id, password_hash)
+    if must_change:
+        jafaal_credentials_crud.upsert_password_hash(user_id, password_hash, db, must_change=True)
+
+    credential_sweep.revoke_derived_credentials(user_id, db, reason="password_set")
+
+    jafaal_audit.record(
+        jafaal_audit.Event.PASSWORD_CHANGED,
+        level=logging.WARNING,
+        user_id=user_id,
+        actor="host",
+    )
 
 
 def clear_password(user_id: UserId, db: Session) -> None:
     """Remove a user's local password credential, leaving the account SSO-only.
 
-    A no-op when the account already has no local credential. Like
-    :func:`set_password`, this participates in the caller's transaction and does
-    not commit.
+    A no-op when the account already has no local credential. Carries the same
+    "no step-up, no authorization check" warning as :func:`set_password`, and
+    like it, participates in the caller's transaction without committing and
+    revokes everything the removed password could still reach — leaving those
+    alive would make the removal cosmetic.
+
+    Leaves the account able to authenticate only through a linked identity
+    provider or a registered passkey. Clearing the password of an account with
+    neither locks the user out.
 
     Args:
         user_id: The user whose credential should be removed.
@@ -1090,3 +1138,13 @@ def clear_password(user_id: UserId, db: Session) -> None:
         jafaal_token_manager.get_token_manager(),
         jafaal_password_hasher.get_password_hasher(),
     ).clear_local_password(user_id)
+
+    credential_sweep.revoke_derived_credentials(user_id, db, reason="password_cleared")
+
+    jafaal_audit.record(
+        jafaal_audit.Event.PASSWORD_CHANGED,
+        level=logging.WARNING,
+        user_id=user_id,
+        actor="host",
+        cleared=True,
+    )
