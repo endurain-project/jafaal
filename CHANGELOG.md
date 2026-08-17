@@ -83,6 +83,15 @@ consumer.
   caller must establish that itself. `human_chosen=False` skips the composition
   policy and breach screening for a secret the host generated, where neither
   applies; it is named for the assertion the caller has to be able to make.
+- **`POST /auth/password/user/{user_id}`**, the administrative reset, and
+  **`POST /auth/password/renew`**, the owner's way to complete it. The reset
+  needs `users:write` *and* step-up from the calling administrator, plus the
+  object-level check that stops a scope alone from reaching another account; it
+  defaults to requiring the owner to replace the password at first sign-in.
+  Renewal is unauthenticated by necessity — the account cannot obtain a token
+  until the password is replaced — and is not a step-up bypass: it verifies the
+  factors a login would and only proceeds for a credential already flagged,
+  answering exactly as bad credentials do otherwise.
 - **`POST /auth/password/change`**, the self-service password change. Step-up
   gated (`current_password`, plus `mfa_code` when MFA is enabled), because a
   valid access token alone must not be enough to seize an account. Revokes

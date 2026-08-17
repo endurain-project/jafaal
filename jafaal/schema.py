@@ -130,6 +130,59 @@ class PasswordChangeResponse(BaseModel):
     )
 
 
+class PasswordRenewalRequest(StepUpVerification):
+    """Replace a password that login refused as ``password_change_required``.
+
+    Unauthenticated by necessity: the account cannot obtain a token until the
+    password is replaced. It is not a step-up bypass — the same factors a login
+    needs (the current password, plus MFA when enabled) are verified here, and
+    the endpoint only ever proceeds for a credential already flagged as
+    requiring replacement.
+
+    Attributes:
+        username: The account whose password is being replaced.
+        new_password: The replacement password.
+    """
+
+    username: StrictStr = Field(..., min_length=1, max_length=250)
+    new_password: StrictStr = Field(
+        ...,
+        min_length=1,
+        max_length=PASSWORD_FIELD_MAX_LENGTH,
+        description="The new password.",
+    )
+
+
+class AdminPasswordResetRequest(StepUpVerification):
+    """An administrator setting another account's password.
+
+    ``current_password`` / ``mfa_code`` are the **administrator's own** step-up
+    factors, not the target user's: resetting somebody else's credential is at
+    least as powerful as minting an API key, so a valid access token alone is
+    not sufficient authority for it.
+
+    Attributes:
+        new_password: The replacement password, held to the *target* account's
+            tier policy.
+        must_change: Require the account owner to replace it at first use.
+    """
+
+    new_password: StrictStr = Field(
+        ...,
+        min_length=1,
+        max_length=PASSWORD_FIELD_MAX_LENGTH,
+        description="The password to set on the target account.",
+    )
+    must_change: bool = Field(
+        default=True,
+        description=(
+            "Require the owner to replace this password before they can sign in (default). A password an "
+            "administrator chose is known to that administrator, so leaving it usable indefinitely turns a "
+            "reset into standing access to the account."
+        ),
+    )
+
+
 class MFARequiredResponse(BaseModel):
     """
     Response indicating MFA verification is required.

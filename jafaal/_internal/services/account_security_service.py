@@ -12,6 +12,7 @@ import jafaal._internal.services.credential_sweep as credential_sweep
 import jafaal._internal.services.step_up_service as step_up_service
 import jafaal._internal.user_guards as jafaal_user_guards
 import jafaal.audit as jafaal_audit
+import jafaal.credentials.crud as jafaal_credentials_crud
 import jafaal.password_policy as jafaal_password_policy
 import jafaal.ports as jafaal_ports
 import jafaal.sessions.crud as jafaal_sessions_crud
@@ -179,6 +180,8 @@ def change_managed_user_password(
     new_password: str,
     identity_service: LocalCredentialStore,
     db: Session,
+    *,
+    must_change: bool = False,
 ) -> None:
     """
     Change a managed user's password and revoke auth state.
@@ -188,6 +191,9 @@ def change_managed_user_password(
         new_password: New plaintext password to store.
         identity_service: Identity service dependency.
         db: SQLAlchemy session.
+        must_change: Require the owner to replace this password before they can
+            sign in. Recommended whenever an administrator chose it, since such
+            a password is known to that administrator.
 
     Returns:
         None.
@@ -202,6 +208,8 @@ def change_managed_user_password(
         new_password,
     )
     identity_service.set_local_password_hash(user_id, hashed_password)
+    if must_change:
+        jafaal_credentials_crud.upsert_password_hash(user_id, hashed_password, db, must_change=True)
     credential_sweep.revoke_derived_credentials(user_id, db, reason="admin_password_change")
     jafaal_audit.record(
         jafaal_audit.Event.PASSWORD_CHANGED,

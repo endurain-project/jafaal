@@ -24,10 +24,12 @@ import jafaal._internal.password_hasher as jafaal_password_hasher
 import jafaal._internal.security_stores as jafaal_security_stores
 import jafaal._internal.services.account_security_service as account_security_service
 import jafaal._internal.services.authorization_code_service as authorization_code_service
+import jafaal._internal.services.step_up_service as step_up_service
 import jafaal._internal.services.token_admin_service as token_admin_service
 import jafaal._internal.token_manager as jafaal_token_manager
 import jafaal._internal.user_guards as jafaal_user_guards
 import jafaal.audit as jafaal_audit
+import jafaal.credentials.crud as jafaal_credentials_crud
 import jafaal.dependencies as jafaal_dependencies
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_providers.utils as idp_utils
@@ -35,6 +37,7 @@ import jafaal.identity_service as jafaal_identity_service
 import jafaal.mfa.service as mfa_service
 import jafaal.orm as jafaal_orm
 import jafaal.ports as jafaal_ports
+import jafaal.principal as jafaal_principal
 import jafaal.rate_limit as jafaal_rate_limit
 import jafaal.schema as jafaal_schema
 import jafaal.scopes as jafaal_scopes
@@ -1370,6 +1373,162 @@ def change_password(
         current_session_id=session_id,
     )
     return {"message": "Password changed", "revoked_sessions": revoked}
+
+
+@router.post(
+    "/password/renew",
+    response_model=jafaal_schema.PasswordChangeResponse,
+    summary="Replace a password that login refused as password_change_required",
+    description=(
+        "Completes a required password change for an account that cannot log in yet.\n\n"
+        "Unauthenticated by necessity — the whole point is that the account has no token and cannot get "
+        "one. It is **not** a step-up bypass: the same factors a login needs are verified here "
+        "(`current_password`, plus `mfa_code` when MFA is enabled), and it only ever proceeds for a "
+        "credential already flagged as requiring replacement. Anything else answers exactly as bad "
+        "credentials do, so it discloses neither which accounts exist nor which are flagged."
+    ),
+)
+@jafaal_rate_limit.limit(jafaal_rate_limit.SENSITIVE)
+def renew_password(
+    data: jafaal_schema.PasswordRenewalRequest,
+    password_hasher: Annotated[
+        jafaal_password_hasher.PasswordHasher,
+        Depends(jafaal_password_hasher.get_password_hasher),
+    ],
+    identity_service: Annotated[
+        jafaal_identity_service.LocalCredentialStore,
+        Depends(jafaal_identity_service.get_identity_service),
+    ],
+    step_up_store: Annotated[
+        jafaal_dependencies.StepUpStore,
+        Depends(jafaal_dependencies.get_step_up_attempts),
+    ],
+    db: Annotated[Session, Depends(jafaal_orm.get_db)],
+) -> dict:
+    """Replace a password the account is required to change before signing in.
+
+    Args:
+        data: The account, its current (required-to-change) password, any MFA
+            code, and the replacement.
+        password_hasher: Used to equalise the timing of the rejection paths.
+        identity_service: Credential store used for verification and the write.
+        step_up_store: Step-up lockout store, so guesses here are bounded
+            exactly as they are everywhere else.
+        db: Database session.
+
+    Returns:
+        A confirmation; every session the old password could reach is revoked.
+
+    Raises:
+        JafaalError: 401 if the account does not exist, is not flagged, or the
+            supplied factors are wrong — all indistinguishable; 422 if the new
+            password fails policy; 429 if step-up is locked out.
+    """
+    user = jafaal_ports.get_user_repository().get_by_username(data.username, db)
+    credential = jafaal_credentials_crud.get_credential(user.id, db) if user else None
+
+    # An unknown account, one with no local password, or one that was never
+    # flagged all answer identically — and pay the same Argon2 cost — so this
+    # endpoint reveals nothing about which accounts exist or are flagged.
+    if user is None or credential is None or not credential.must_change_password:
+        password_hasher.dummy_verify()
+        raise jafaal_exceptions.InvalidCredentialsError("Unable to authenticate with provided credentials")
+
+    revoked = account_security_service.change_own_password(
+        user.id,
+        data.current_password or "",
+        data.new_password,
+        data.mfa_code,
+        identity_service,
+        step_up_store,
+        db,
+    )
+    return {"message": "Password changed", "revoked_sessions": revoked}
+
+
+@router.post(
+    "/password/user/{user_id}",
+    response_model=jafaal_schema.PasswordChangeResponse,
+    summary="Set another user's password (administrative reset)",
+    description=(
+        "Sets the password on `user_id`'s account. Requires the `users:write` scope **and** step-up from "
+        "the calling administrator — resetting somebody else's credential is at least as powerful as "
+        "minting an API key, so a valid access token alone is not sufficient authority.\n\n"
+        "Object-level access is enforced on top of the scope: a non-superuser can only ever target its own "
+        "account. Hosts whose notion of 'may administer' is richer than JAFAAL's two tiers — tenancy, "
+        "support roles, delegated admins — should gate this endpoint themselves or implement a "
+        "`ScopeResolver` that reflects their model.\n\n"
+        "Every credential the old password could reach is revoked, and by default the owner must replace "
+        "the new one at first sign-in (`must_change`), because a password an administrator chose is known "
+        "to that administrator. The owner completes it at `/auth/password/renew`."
+    ),
+)
+@jafaal_rate_limit.limit(jafaal_rate_limit.SENSITIVE)
+def admin_reset_password(
+    user_id: jafaal_orm.UserId,
+    data: jafaal_schema.AdminPasswordResetRequest,
+    _check_scope: Annotated[
+        None,
+        Security(jafaal_dependencies.check_scopes, scopes=[jafaal_scopes.USERS_WRITE]),
+    ],
+    principal: Annotated[
+        jafaal_principal.Principal,
+        Depends(jafaal_dependencies.get_current_principal),
+    ],
+    identity_service: Annotated[
+        jafaal_identity_service.LocalCredentialStore,
+        Depends(jafaal_identity_service.get_identity_service),
+    ],
+    step_up_store: Annotated[
+        jafaal_dependencies.StepUpStore,
+        Depends(jafaal_dependencies.get_step_up_attempts),
+    ],
+    db: Annotated[Session, Depends(jafaal_orm.get_db)],
+) -> dict:
+    """Set another user's password on an administrator's authority.
+
+    Args:
+        user_id: The account to reset.
+        data: The administrator's own step-up factors, the new password, and
+            whether the owner must replace it at first use.
+        _check_scope: Scope gate (``users:write``).
+        principal: The calling administrator (object-level access check).
+        identity_service: Credential store used for the write.
+        step_up_store: Step-up lockout store.
+        db: Database session.
+
+    Returns:
+        A confirmation; every session on the target account is revoked.
+
+    Raises:
+        JafaalError: 401 if the caller's step-up fails; 403 if the caller may
+            not act on ``user_id``; 404 if the target does not exist; 422 if the
+            new password fails the target account's policy.
+    """
+    # Object-level (BOLA) check on top of the scope: holding users:write must
+    # not let a regular account reach anyone else's credential.
+    jafaal_user_guards.assert_can_access_user(principal, user_id)
+
+    # The administrator re-proves possession of their own factors. Deliberately
+    # separate from the target account's credential.
+    step_up_service.verify_step_up_credentials(
+        principal.user_id,
+        data.current_password,
+        data.mfa_code,
+        identity_service,
+        step_up_store,
+        db,
+    )
+
+    account_security_service.change_managed_user_password(
+        user_id,
+        data.new_password,
+        identity_service,
+        db,
+        must_change=data.must_change,
+    )
+    logger.info(f"Administrator {principal.user_id} reset the password for user {user_id}")
+    return {"message": "Password changed", "revoked_sessions": 0}
 
 
 @router.post("/introspect", response_model=jafaal_schema.TokenIntrospectionResponse)

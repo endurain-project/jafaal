@@ -43,6 +43,8 @@ Do not hard-code endpoint URLs; read them from the metadata document.
 | `POST` | `/auth/mfa/verify` | JSON: `mfa_token`, `mfa_code`, `client_id` | Token bundle |
 | `POST` | `/auth/refresh` | form: `client_id` | Rotated token bundle |
 | `POST` | `/auth/password/change` | JSON: `new_password`, `current_password`/`mfa_code` as applicable, optional `revoke_other_sessions` | `{"message", "revoked_sessions"}` |
+| `POST` | `/auth/password/renew` | JSON: `username`, `current_password`, `new_password`, `mfa_code` as applicable | `{"message", "revoked_sessions"}` |
+| `POST` | `/auth/password/user/{user_id}` | JSON: admin's `current_password`/`mfa_code`, `new_password`, optional `must_change` | `{"message", "revoked_sessions"}` |
 | `POST` | `/auth/logout` | form: `client_id` | `{"message": "Logout successful"}` |
 
 `/auth/login` is a **first-party** endpoint, not an OAuth grant. It is
@@ -64,6 +66,26 @@ and the user is not logged out of the device they changed it from. Pass
 `revoke_other_sessions: false` for a routine rotation.
 
 This is also how a `password_change_required` condition is cleared.
+
+### Administrative reset
+
+`/auth/password/user/{user_id}` sets another account's password. It needs the
+`users:write` scope **and** step-up from the calling administrator, and a
+non-superuser can only ever target itself.
+
+By default the owner must replace the new password at first sign-in
+(`must_change`), because a password an administrator chose is known to that
+administrator — without it, a reset is standing access to the account. The owner
+completes the loop at `/auth/password/renew`, which is unauthenticated by
+necessity (the account cannot obtain a token until the password is replaced) and
+verifies exactly the factors a login would.
+
+> [!IMPORTANT]
+> JAFAAL's built-in notion of "may administer" is two tiers: superuser or not.
+> If yours is richer — tenancy, support roles, delegated admins — gate this
+> endpoint yourself or implement a `ScopeResolver` that reflects your model.
+> Shipping it unguarded on a multi-tenant deployment would let any superuser
+> reach every tenant.
 
 ### Token bundle
 
