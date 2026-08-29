@@ -12,10 +12,8 @@ exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for 
 exclude-newer-span = "P30D"
 
 [options.exclude-newer-package]
-pillow = { timestamp = "0001-01-01T00:00:00Z", span = "PT0S" }
 cryptography = { timestamp = "0001-01-01T00:00:00Z", span = "PT0S" }
 pyopenssl = { timestamp = "0001-01-01T00:00:00Z", span = "PT0S" }
-pyasn1 = { timestamp = "0001-01-01T00:00:00Z", span = "PT0S" }
 
 [[package]]
 name = "alembic"

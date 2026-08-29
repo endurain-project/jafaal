@@ -151,11 +151,6 @@ exclude-newer = "30 days"
 cryptography = "0 days"
 # pyOpenSSL -- 26.4.0 lifts the <50 cap on cryptography required by WebAuthn.
 pyopenssl = "0 days"
-# pillow (via the ``mfa`` extra's qrcode[pil]) — PYSEC-2026-2253..2257,
-# 3451..3454, 3493..3496, fixed in 12.3.0.
-pillow = "0 days"
-# pyasn1 (transitive) — PYSEC-2026-3455..3457, fixed in 0.6.4.
-pyasn1 = "0 days"
 
 [[tool.uv.index]]
 name = "pypi"
