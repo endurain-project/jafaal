@@ -28,6 +28,7 @@ def _api_key(db, user_id, scopes):
     jafaal.configure_api_key_scopes(list(scopes))
     data = api_keys_schema.UsersApiKeyCreate(name="k", scopes=list(scopes))
     _row, raw = api_keys_crud.create_api_key(user_id, data, db)
+    db.commit()
     return raw
 
 

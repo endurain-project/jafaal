@@ -88,17 +88,23 @@ def claim_password_reset_token(token_hash: str, db: Session) -> UserId | None:
     Raises:
         JafaalError: 500 error if database operation fails.
     """
-    stmt = (
-        sa_update(password_reset_tokens_models.PasswordResetToken)
-        .where(
-            password_reset_tokens_models.PasswordResetToken.token_hash == token_hash,
-            password_reset_tokens_models.PasswordResetToken.used.is_(False),
-            password_reset_tokens_models.PasswordResetToken.expires_at > datetime.now(UTC),
-        )
-        .values(used=True)
-        .returning(password_reset_tokens_models.PasswordResetToken.user_id)
+    model = password_reset_tokens_models.PasswordResetToken
+    conditions = (
+        model.token_hash == token_hash,
+        model.used.is_(False),
+        model.expires_at > datetime.now(UTC),
     )
-    return db.execute(stmt).scalar_one_or_none()
+    user_id = db.execute(select(model.user_id).where(*conditions)).scalar_one_or_none()
+    if user_id is None:
+        return None
+
+    # The conditional UPDATE is the atomic claim. Multiple callers may read the
+    # same owner, but only one can change used=False to True; every loser sees a
+    # zero rowcount. This two-statement form avoids UPDATE ... RETURNING, which
+    # MySQL does not support.
+    result = cast(CursorResult[Any], db.execute(sa_update(model).where(*conditions).values(used=True)))
+    db.flush()
+    return user_id if result.rowcount == 1 else None
 
 
 @db_errors.handle_db_errors

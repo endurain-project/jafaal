@@ -175,11 +175,13 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
 
-      - name: Install base dependencies only (no optional extras, no dev groups)
-        # --no-dev installs the base runtime dependencies + the project only;
-        # the mfa / sso / redis / webauthn extras and all other dependency
-        # groups stay out.
-        run: uv sync --frozen --no-dev
+      - name: Build the wheel
+        run: uv build --wheel --no-sources --out-dir "$RUNNER_TEMP/dist"
+
+      - name: Install the wheel with base dependencies only
+        run: |
+          uv venv "$RUNNER_TEMP/base-venv"
+          VIRTUAL_ENV="$RUNNER_TEMP/base-venv" uv pip install "$RUNNER_TEMP"/dist/*.whl
 
       # Run from outside the repository root so the local ``jafaal/`` package
       # directory cannot shadow the installed distribution: otherwise this would
@@ -187,6 +189,5 @@ jobs:
       - name: Import jafaal and assemble the router without optional extras
         run: |
           set -euo pipefail
-          cp -r .venv "$RUNNER_TEMP/base-venv"
           cd "$RUNNER_TEMP"
           VIRTUAL_ENV="$RUNNER_TEMP/base-venv" uv run --no-project python "$GITHUB_WORKSPACE/.github/scripts/smoke_import.py"

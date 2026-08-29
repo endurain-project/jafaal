@@ -107,6 +107,7 @@ def test_api_key_authenticates_over_http(make_user, db):
     _, raw = api_keys_crud.create_api_key(
         user.id, api_keys_schema.UsersApiKeyCreate(name="k", scopes=["reports:read"]), db
     )
+    db.commit()
 
     http = TestClient(_protected_app())
 

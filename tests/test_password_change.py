@@ -258,6 +258,7 @@ def test_admin_reset_revokes_the_targets_sessions(client, make_user, db):
     target = make_user(username="target4", password=CURRENT)
     _tokens(client, "target4")
     assert sessions_crud.get_user_sessions(target.id, db) != []
+    db.rollback()
 
     admin = _tokens(client, "root4", ADMIN_PASSWORD)
     assert (

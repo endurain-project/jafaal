@@ -215,9 +215,10 @@ def test_reuse_grace_window_boundary(db, make_user, age_seconds, expected_in_gra
     The distinction decides whether a duplicate refresh gets its tokens replayed
     or the user's entire session family is destroyed, so the boundary matters.
     """
-    make_user(username="clock-user")
+    user = make_user(username="clock-user")
     now = datetime.now(UTC)
     with jafaal.unit_of_work(db):
+        session_utils.create_session("fam-clock", user, _request(), "refresh-token", db)
         _store_rotated(db, "graced-token", rotated_at=now - timedelta(seconds=age_seconds))
 
     is_reused, in_grace = rotated_utils.check_token_reuse("graced-token", db)

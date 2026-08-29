@@ -48,7 +48,8 @@ AUTH_COMPLETE = "/api/v1/public/webauthn/authenticate/complete"
 
 def _enable_totp(user_id, db):
     """Enrol TOTP for ``user_id`` so the passkey/MFA policy has something to see."""
-    mfa_crud.update_user_mfa(user_id, db, encrypted_secret=crypto.encrypt_token_fernet("JBSWY3DPEHPK3PXP"))
+    with jafaal_orm.unit_of_work(db):
+        mfa_crud.update_user_mfa(user_id, db, encrypted_secret=crypto.encrypt_token_fernet("JBSWY3DPEHPK3PXP"))
 
 
 # --------------------------------------------------------------------------- #

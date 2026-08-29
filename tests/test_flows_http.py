@@ -5,6 +5,7 @@ import time
 from contextlib import contextmanager
 
 import pyotp
+import pytest
 from conftest import NATIVE_CLIENT_ID, NATIVE_REDIRECT_URI, WEB_CLIENT_ID
 
 import jafaal
@@ -315,13 +316,16 @@ def test_mfa_tickets_are_not_interchangeable_between_users(client, make_user):
     assert crossed.status_code == 400
 
 
-def test_mfa_verify_login_flow_with_zero_user_id(client, make_user):
+def test_mfa_verify_login_flow_with_zero_user_id(client, make_user, engine):
     """A user whose integer id is the falsy value ``0`` can still complete MFA login.
 
     Regression for the ``if not user_id`` check (now ``if pending is None``):
     the resolved pending login carries ``0``, which a truthiness test would
     wrongly treat as "no pending login".
     """
+    if engine.dialect.name == "mysql":
+        pytest.skip("MySQL AUTO_INCREMENT reserves 0 unless NO_AUTO_VALUE_ON_ZERO is enabled")
+
     user = make_user(username="zerouser", user_id=0, password="Str0ng!Pass")
     assert user.id == 0
 

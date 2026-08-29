@@ -244,8 +244,10 @@ def test_rotated_token_store_and_lookup(db, make_user):
 def test_invalidate_token_family_deletes_sessions(db, make_user):
     user = make_user()
     session_utils.create_session("fam-x", user, _request(), "rt", db)
+    db.commit()
     deleted = rotated_utils.invalidate_token_family("fam-x")
     assert deleted >= 1
+    db.expire_all()
     assert sessions_crud.get_session_by_id("fam-x", db) is None
 
 

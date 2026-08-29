@@ -110,6 +110,7 @@ def test_rotation_does_not_extend_a_session_past_its_absolute_deadline(client, m
     row = db.query(UsersSessions).one()
     created_at = row.created_at
     session_id = row.id
+    db.rollback()
 
     # A 1-hour ceiling with a 7-day refresh token: the ceiling has to win.
     with _override_settings(absolute_timeout_hours=1):

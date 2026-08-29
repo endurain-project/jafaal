@@ -23,7 +23,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import jafaal
+import jafaal.identity_providers.crud as idp_crud
 import jafaal.identity_providers.links.crud as links_crud
+import jafaal.identity_providers.schema as idp_schema
 import jafaal.oauth_state.crud as oauth_state_crud
 import jafaal.oauth_state.utils as oauth_state_utils
 import jafaal.orm as jafaal_orm
@@ -138,7 +140,17 @@ def test_duplicate_idp_link_is_a_conflict_without_losing_the_hosts_work(make_use
     session = _session()
     try:
         with jafaal_orm.unit_of_work(session):
-            links_crud.create_user_identity_provider(user.id, 1, "subject-1", session)
+            idp = idp_crud.create_identity_provider(
+                idp_schema.IdentityProviderCreate(
+                    name="Savepoint IdP",
+                    slug="savepoint-idp",
+                    client_id="client-id",
+                    client_secret="client-secret",
+                ),
+                session,
+            )
+            links_crud.create_user_identity_provider(user.id, idp.id, "subject-1", session)
+        idp_id = idp.id
 
         with jafaal_orm.unit_of_work(session):
             # A host write that must survive the caught conflict below.
@@ -146,7 +158,7 @@ def test_duplicate_idp_link_is_a_conflict_without_losing_the_hosts_work(make_use
             session.flush()
 
             with pytest.raises(jafaal.ConflictError):
-                links_crud.create_user_identity_provider(user.id, 1, "subject-1", session)
+                links_crud.create_user_identity_provider(user.id, idp_id, "subject-1", session)
     finally:
         session.close()
 

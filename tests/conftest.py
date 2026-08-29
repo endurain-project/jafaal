@@ -20,7 +20,7 @@ import os
 
 import pytest
 from cryptography.fernet import Fernet
-from sqlalchemy import String, create_engine
+from sqlalchemy import String, create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -279,6 +279,16 @@ def login(
 # --------------------------------------------------------------------------- #
 
 
+def _enable_sqlite_foreign_keys(engine) -> None:
+    """Make local SQLite enforce the same referential integrity as CI databases."""
+
+    @event.listens_for(engine, "connect")
+    def _set_foreign_keys(dbapi_connection, _connection_record) -> None:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+
 @pytest.fixture(scope="session")
 def engine():
     """A single shared engine for the whole suite.
@@ -291,11 +301,13 @@ def engine():
     url = os.environ.get("JAFAAL_TEST_DATABASE_URL")
     if url:
         return create_engine(url)
-    return create_engine(
+    sqlite_engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
+    _enable_sqlite_foreign_keys(sqlite_engine)
+    return sqlite_engine
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -450,6 +462,7 @@ def concurrent_db(tmp_path):
         # than failing the moment another thread holds it.
         connect_args={"check_same_thread": False, "timeout": 30},
     )
+    _enable_sqlite_foreign_keys(engine)
     Base.metadata.create_all(engine)
     session_factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     try:

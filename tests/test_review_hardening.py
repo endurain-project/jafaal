@@ -449,6 +449,7 @@ def test_rotation_keeps_the_session_device_recorded_at_login(client, make_user, 
     original_browser = original.browser
     original_ip = original.ip_address
     original_rotations = original.rotation_count
+    db.rollback()
 
     # Refresh from a very different client.
     assert (
