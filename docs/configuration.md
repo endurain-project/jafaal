@@ -18,11 +18,11 @@ jafaal.configure(
     jafaal.AuthSettings(
         secrets=jafaal.Secrets(
             secret_key="<32+ byte JWT signing secret>",  # HS256 signing key
-            fernet_key=Fernet.generate_key().decode(),   # at-rest token encryption
+            fernet_key=Fernet.generate_key().decode(),  # at-rest token encryption
         ),
         base_url="https://app.example.com",
-        app_name="Example",           # MFA issuer shown in authenticators
-        environment="production",     # drives the cookie Secure flag
+        app_name="Example",  # MFA issuer shown in authenticators
+        environment="production",  # drives the cookie Secure flag
     )
 )
 ```
@@ -307,10 +307,10 @@ always produced with the primary key; the fallbacks are verify-/decrypt-only.
 jafaal.configure(
     jafaal.AuthSettings(
         secrets=jafaal.Secrets(
-            secret_key=NEW_SIGNING_KEY,                # signs all new JWTs
-            secret_key_fallbacks=(OLD_SIGNING_KEY,),   # still verifies tokens signed before rotation
-            fernet_key=NEW_FERNET_KEY,                 # encrypts all new at-rest secrets
-            fernet_key_fallbacks=(OLD_FERNET_KEY,),    # still decrypts data written with the old key
+            secret_key=NEW_SIGNING_KEY,  # signs all new JWTs
+            secret_key_fallbacks=(OLD_SIGNING_KEY,),  # still verifies tokens signed before rotation
+            fernet_key=NEW_FERNET_KEY,  # encrypts all new at-rest secrets
+            fernet_key_fallbacks=(OLD_FERNET_KEY,),  # still decrypts data written with the old key
         ),
         base_url="https://app.example.com",
         app_name="Example",
@@ -332,17 +332,19 @@ set an asymmetric `algorithm` and a PEM `private_key`:
 import jafaal
 from cryptography.fernet import Fernet
 
-jafaal.configure(jafaal.AuthSettings(
-    secrets=jafaal.Secrets(
-        # STILL required: keys the HMAC hashing of refresh/CSRF tokens.
-        secret_key="<32+ byte secret>",
-        fernet_key=Fernet.generate_key().decode(),
-        private_key=open("jwt-signing-key.pem").read(),
-    ),
-    base_url="https://app.example.com",
-    # or ES256, PS256, RS384/512, ES384/512, PS384/512
-    tokens=jafaal.TokenSettings(algorithm="RS256"),
-))
+jafaal.configure(
+    jafaal.AuthSettings(
+        secrets=jafaal.Secrets(
+            # STILL required: keys the HMAC hashing of refresh/CSRF tokens.
+            secret_key="<32+ byte secret>",
+            fernet_key=Fernet.generate_key().decode(),
+            private_key=open("jwt-signing-key.pem").read(),
+        ),
+        base_url="https://app.example.com",
+        # or ES256, PS256, RS384/512, ES384/512, PS384/512
+        tokens=jafaal.TokenSettings(algorithm="RS256"),
+    )
+)
 ```
 
 JAFAAL signs with the private key (tagging each token with the key's RFC 7638
@@ -357,7 +359,7 @@ provider's — fetch the JWKS and check the signature and claims (no call back t
 JAFAAL):
 
 ```python
-import jwt                      # PyJWT, in the *resource server*
+import jwt  # PyJWT, in the *resource server*
 from jwt import PyJWKClient
 
 jwks = PyJWKClient("https://app.example.com/api/v1/.well-known/jwks.json")
@@ -366,8 +368,8 @@ claims = jwt.decode(
     access_token,
     signing_key.key,
     algorithms=["RS256"],
-    issuer="https://app.example.com",      # == base_url
-    audience="https://app.example.com",    # == base_url
+    issuer="https://app.example.com",  # == base_url
+    audience="https://app.example.com",  # == base_url
 )
 assert claims["typ"] == "access"
 ```
@@ -510,6 +512,7 @@ access/refresh tokens, mounted on the auth router:
 
     ```python
     import jafaal
+
     jafaal.configure_api_key_scopes([..., jafaal.AUTH_INTROSPECT])  # "auth:introspect"
     ```
 
@@ -558,14 +561,14 @@ import jafaal
 jafaal.configure(
     jafaal.AuthSettings(
         secrets=jafaal.Secrets(secret_key=..., fernet_key=...),
-        base_url="https://app.example",           # rp_id/origins default from this
+        base_url="https://app.example",  # rp_id/origins default from this
         webauthn=jafaal.WebAuthnSettings(
             # Set explicitly if base_url is not the passkey origin:
             # rp_id="app.example",                # registrable domain, no scheme/port
             # origins=("https://app.example",),
-            user_verification="preferred",        # "required" makes UV (PIN/biometric) a true 2nd factor
-            attestation="none",                   # "direct" only if you process attestation
-            second_factor_enabled=False,          # True → password login also requires a passkey
+            user_verification="preferred",  # "required" makes UV (PIN/biometric) a true 2nd factor
+            attestation="none",  # "direct" only if you process attestation
+            second_factor_enabled=False,  # True → password login also requires a passkey
         ),
     )
 )
@@ -626,8 +629,7 @@ import jafaal
 from jafaal import IntPKUserMixin
 
 
-class Base(DeclarativeBase):
-    ...  # your own base — naming conventions, schema, your other models
+class Base(DeclarativeBase): ...  # your own base — naming conventions, schema, your other models
 
 
 class Account(IntPKUserMixin, Base):
@@ -687,7 +689,7 @@ tables — your `users` table and your Alembic history are left alone.
 ```python
 from jafaal import migrations
 
-migrations.upgrade(engine)                  # create/upgrade JAFAAL's tables
+migrations.upgrade(engine)  # create/upgrade JAFAAL's tables
 # migrations.stamp(engine)                  # existing DB whose tables already exist
 # migrations.verify_schema_current(engine)  # fail fast at startup if not migrated
 ```

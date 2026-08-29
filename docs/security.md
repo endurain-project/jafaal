@@ -144,9 +144,9 @@ the fields off each record — no message-string parsing:
 import logging
 
 audit = logging.getLogger("jafaal.audit")
-audit.addHandler(my_json_handler)   # e.g. python-json-logger
+audit.addHandler(my_json_handler)  # e.g. python-json-logger
 audit.setLevel(logging.INFO)
-audit.propagate = False             # keep audit off the app log if you prefer
+audit.propagate = False  # keep audit off the app log if you prefer
 ```
 
 Each record carries `event` (a stable slug such as `login.failure`), `outcome`

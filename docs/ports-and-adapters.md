@@ -19,14 +19,16 @@ transaction and take the active SQLAlchemy `Session`.
 ```python
 from jafaal import UserProtocol, configure_user_repository
 
+
 class SqlUserRepository:
     def get_by_id(self, user_id, db) -> UserProtocol | None: ...
     def get_by_email(self, email, db) -> UserProtocol | None: ...
     def get_by_username(self, username, db) -> UserProtocol | None: ...
     def create_local_user(self, username, email, db, *, is_active, is_verified) -> UserProtocol: ...
-    def provision_from_idp(self, identity, db) -> UserProtocol: ...      # SSO auto-provisioning
-    def sync_from_idp(self, user_id, claims, db) -> None: ...            # optional profile sync
+    def provision_from_idp(self, identity, db) -> UserProtocol: ...  # SSO auto-provisioning
+    def sync_from_idp(self, user_id, claims, db) -> None: ...  # optional profile sync
     def set_email_verified(self, user_id, db, *, activate) -> None: ...
+
 
 configure_user_repository(SqlUserRepository())
 ```
@@ -42,12 +44,14 @@ Host-owned dynamic settings: the password policy and the sign-up toggles.
 ```python
 from jafaal import PasswordPolicy, SignupConfig, configure_settings_provider
 
+
 class MySettings:
     def get_password_policy(self) -> PasswordPolicy:
         return PasswordPolicy(min_length_regular=15, min_length_admin=20, password_type="length_only")
 
     def get_signup_config(self) -> SignupConfig:
         return SignupConfig(enabled=True, require_email_verification=False, require_admin_approval=False)
+
 
 configure_settings_provider(MySettings())
 ```
@@ -68,12 +72,15 @@ the plaintext `token` for you to build and send the link.
 ```python
 from jafaal import configure_event_sink
 
+
 class EmailEventSink:
     async def on_password_reset_requested(self, event) -> None:
         send_email(event.email, reset_link(event.token))  # your delivery
+
     async def on_email_verification_requested(self, event) -> None: ...
     async def on_signup_pending_admin_approval(self, event) -> None: ...
     async def on_signup_approved(self, event) -> None: ...
+
 
 configure_event_sink(EmailEventSink())
 ```
@@ -93,9 +100,11 @@ should be rejected:
 ```python
 from jafaal import configure_password_breach_checker
 
+
 class MyChecker:
     def is_breached(self, password: str) -> bool:
         return password in my_local_blocklist
+
 
 configure_password_breach_checker(MyChecker())
 ```
@@ -157,9 +166,7 @@ email), isolating failures.
 import jafaal
 from jafaal.adapters import CompositeAuthEventSink, LoggingAuthEventSink
 
-jafaal.configure_event_sink(
-    CompositeAuthEventSink([LoggingAuthEventSink(), EmailEventSink()])
-)
+jafaal.configure_event_sink(CompositeAuthEventSink([LoggingAuthEventSink(), EmailEventSink()]))
 ```
 
 ### `RedisStateStore`

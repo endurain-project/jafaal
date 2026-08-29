@@ -118,8 +118,8 @@ jafaal.configure(
             fernet_key=Fernet.generate_key().decode(),  # at-rest token encryption
         ),
         base_url="https://app.example.com",
-        app_name="Example",              # shown in authenticator apps
-        environment="production",        # drives the cookie Secure flag
+        app_name="Example",  # shown in authenticator apps
+        environment="production",  # drives the cookie Secure flag
         # Every other group has working defaults; override only what you need:
         # tokens=jafaal.TokenSettings(access_token_expire_minutes=10),
         # sessions=jafaal.SessionSettings(idle_timeout_enabled=True),
@@ -141,7 +141,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from jafaal import IntPKUserMixin
 
 
-class Base(DeclarativeBase):      # you own the base
+class Base(DeclarativeBase):  # you own the base
     pass
 
 
@@ -151,7 +151,7 @@ class Users(IntPKUserMixin, Base):
     display_name: Mapped[str | None] = mapped_column(String(250))
 
 
-jafaal.map_models(Base)            # map JAFAAL's companion tables into your registry
+jafaal.map_models(Base)  # map JAFAAL's companion tables into your registry
 
 engine = create_engine("postgresql+psycopg://...")
 jafaal.configure_sessionmaker(sessionmaker(bind=engine, autoflush=False))
@@ -165,8 +165,11 @@ and the `mfa_enabled` property are supplied by the mixin — you declare none of
 
 ```python
 from jafaal import (
-    PasswordPolicy, SignupConfig, UserProtocol,
-    configure_settings_provider, configure_user_repository,
+    PasswordPolicy,
+    SignupConfig,
+    UserProtocol,
+    configure_settings_provider,
+    configure_user_repository,
 )
 
 
@@ -181,13 +184,14 @@ class SqlUserRepository:
         return db.query(Users).filter(Users.username == username).one_or_none()
 
     def create_local_user(self, username, email, db, *, is_active, is_verified):
-        user = Users(username=username, email=email,
-                     is_active=is_active, is_verified=is_verified)
-        db.add(user); db.commit(); db.refresh(user)
+        user = Users(username=username, email=email, is_active=is_active, is_verified=is_verified)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
         return user
 
-    def provision_from_idp(self, identity, db): ...      # SSO auto-provisioning
-    def sync_from_idp(self, user_id, claims, db): ...     # optional profile sync
+    def provision_from_idp(self, identity, db): ...  # SSO auto-provisioning
+    def sync_from_idp(self, user_id, claims, db): ...  # optional profile sync
     def set_email_verified(self, user_id, db, *, activate):
         user = db.get(Users, user_id)
         user.is_verified = True
@@ -201,8 +205,7 @@ class StaticSettingsProvider:
         return PasswordPolicy(min_length_regular=15, min_length_admin=20, password_type="length_only")
 
     def get_signup_config(self) -> SignupConfig:
-        return SignupConfig(enabled=True, require_email_verification=False,
-                            require_admin_approval=False)
+        return SignupConfig(enabled=True, require_email_verification=False, require_admin_approval=False)
 
 
 configure_user_repository(SqlUserRepository())
@@ -250,8 +253,7 @@ you decide the boundary:
 
 ```python
 with jafaal.unit_of_work(db):
-    user = repo.create_local_user("ada", "ada@example.com", db,
-                                  is_active=True, is_verified=False)
+    user = repo.create_local_user("ada", "ada@example.com", db, is_active=True, is_verified=False)
     identity_service.set_local_password_hash(user.id, hashed)
     db.add(MyProfile(user_id=user.id))
 # one commit — any failure rolls back all three
@@ -263,11 +265,13 @@ with jafaal.unit_of_work(db):
 from jafaal import DEFAULT_SCOPE_CATALOG, configure_scopes, configure_api_key_scopes
 
 # Layer your application scopes on top of JAFAAL's auth/identity scopes:
-configure_scopes(DEFAULT_SCOPE_CATALOG.extend(
-    regular=("reports:read",),
-    admin=("reports:read", "reports:write"),
-    descriptions={"reports:read": "Read reports", "reports:write": "Manage reports"},
-))
+configure_scopes(
+    DEFAULT_SCOPE_CATALOG.extend(
+        regular=("reports:read",),
+        admin=("reports:read", "reports:write"),
+        descriptions={"reports:read": "Read reports", "reports:write": "Manage reports"},
+    )
+)
 
 # Opt each scope an API key may carry in explicitly (empty by default):
 configure_api_key_scopes(["reports:read"])

@@ -27,6 +27,7 @@ days).
 
     ```python
     import secrets
+
     print(secrets.token_urlsafe(32))
     ```
 
@@ -34,14 +35,16 @@ days).
    key into `secret_key_fallbacks`:
 
     ```python
-    jafaal.configure(jafaal.AuthSettings(
-        secrets=jafaal.Secrets(
-            secret_key=NEW_KEY,
-            secret_key_fallbacks=(OLD_KEY,),
-            fernet_key=FERNET_KEY,
-        ),
-        # ...rest unchanged...
-    ))
+    jafaal.configure(
+        jafaal.AuthSettings(
+            secrets=jafaal.Secrets(
+                secret_key=NEW_KEY,
+                secret_key_fallbacks=(OLD_KEY,),
+                fernet_key=FERNET_KEY,
+            ),
+            # ...rest unchanged...
+        )
+    )
     ```
 
     New tokens are now signed with `NEW_KEY`; tokens still bearing `OLD_KEY`
@@ -71,16 +74,18 @@ so old and new tokens both validate during the overlap.
    key (private, or just its public half) as a verify-only fallback:
 
     ```python
-    jafaal.configure(jafaal.AuthSettings(
-        secrets=jafaal.Secrets(
-            secret_key=SECRET_KEY,
-            fernet_key=FERNET_KEY,
-            private_key=NEW_PRIVATE_KEY_PEM,
-            private_key_fallbacks=(OLD_PUBLIC_KEY_PEM,),   # verify-only; stays in the JWKS
-        ),
-        tokens=jafaal.TokenSettings(algorithm="RS256"),
-        # ...rest unchanged...
-    ))
+    jafaal.configure(
+        jafaal.AuthSettings(
+            secrets=jafaal.Secrets(
+                secret_key=SECRET_KEY,
+                fernet_key=FERNET_KEY,
+                private_key=NEW_PRIVATE_KEY_PEM,
+                private_key_fallbacks=(OLD_PUBLIC_KEY_PEM,),  # verify-only; stays in the JWKS
+            ),
+            tokens=jafaal.TokenSettings(algorithm="RS256"),
+            # ...rest unchanged...
+        )
+    )
     ```
 
     New tokens are signed with the new key (new `kid`); both keys appear in the
@@ -107,6 +112,7 @@ eagerly or let values roll forward naturally as they are rewritten.
 
     ```python
     from cryptography.fernet import Fernet
+
     print(Fernet.generate_key().decode())
     ```
 
@@ -114,14 +120,16 @@ eagerly or let values roll forward naturally as they are rewritten.
    key into `fernet_key_fallbacks`:
 
     ```python
-    jafaal.configure(jafaal.AuthSettings(
-        secrets=jafaal.Secrets(
-            secret_key=SECRET_KEY,
-            fernet_key=NEW_FERNET_KEY,
-            fernet_key_fallbacks=(OLD_FERNET_KEY,),
-        ),
-        # ...rest unchanged...
-    ))
+    jafaal.configure(
+        jafaal.AuthSettings(
+            secrets=jafaal.Secrets(
+                secret_key=SECRET_KEY,
+                fernet_key=NEW_FERNET_KEY,
+                fernet_key_fallbacks=(OLD_FERNET_KEY,),
+            ),
+            # ...rest unchanged...
+        )
+    )
     ```
 
     New writes use `NEW_FERNET_KEY`; existing ciphertext decrypts via the

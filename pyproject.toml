@@ -25,7 +25,7 @@ dependencies = [
     "sqlalchemy>=2.0.49",
     "pydantic[email]>=2.12.5",
     "joserfc>=1.6.4",
-    "cryptography>=45.0.1",
+    "cryptography>=50.0.0",
     "pwdlib[argon2]>=0.3.0",
     "httpx>=0.28.1",
     "python-multipart>=0.0.9",
@@ -147,6 +147,10 @@ exclude-newer = "30 days"
 # keeps protecting everything else. Remove an entry once its fix is older than
 # the window.
 [tool.uv.exclude-newer-package]
+# cryptography -- PYSEC-2026-3552, fixed in 50.0.0.
+cryptography = "0 days"
+# pyOpenSSL -- 26.4.0 lifts the <50 cap on cryptography required by WebAuthn.
+pyopenssl = "0 days"
 # pillow (via the ``mfa`` extra's qrcode[pil]) — PYSEC-2026-2253..2257,
 # 3451..3454, 3493..3496, fixed in 12.3.0.
 pillow = "0 days"
