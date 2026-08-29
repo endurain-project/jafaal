@@ -91,13 +91,30 @@ authentication and single sign-on pull in additional packages, so they ship as
 optional extras. Install only what you use:
 
 ```bash
-pip install 'jafaal[mfa]'   # TOTP MFA (pyotp) + QR provisioning (qrcode)
-pip install 'jafaal[sso]'   # OpenID Connect identity providers (authlib)
-pip install 'jafaal[all]'   # everything
+pip install 'jafaal[mfa]'        # TOTP MFA (pyotp) + QR provisioning (qrcode)
+pip install 'jafaal[webauthn]'   # passkeys / WebAuthn (py_webauthn)
+pip install 'jafaal[sso]'        # OpenID Connect identity providers (authlib)
+pip install 'jafaal[redis]'      # distributed StateStore adapter (redis)
+pip install 'jafaal[migrations]' # packaged Alembic revisions
+pip install 'jafaal[all]'        # everything
 ```
 
 If a feature is used without its extra installed, JAFAAL fails fast with a clear
 install hint (a `MissingDependencyError`) rather than an obscure error.
+
+### Verifying a release
+
+Releases are built and published by [this repository's release workflow](.github/workflows/publish-jafaal.yml) through PyPI Trusted Publishing, with [PEP 740](https://peps.python.org/pep-0740/) attestations. You can confirm a downloaded artifact came from that workflow and was not substituted:
+
+```bash
+uvx pypi-attestations verify pypi \
+    --repository https://github.com/endurain-project/jafaal \
+    pypi:jafaal-<version>-py3-none-any.whl
+```
+
+A successful run prints `OK: <filename>`. `Provenance for file ... was not found` means the artifact predates attested publishing rather than that verification failed.
+
+Each release run also produces a CycloneDX SBOM and `SHA256SUMS`, generated from a clean install of the built wheel. These are retained as workflow artifacts on the release run rather than published to PyPI.
 
 ## Quickstart
 
