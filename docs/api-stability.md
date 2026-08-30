@@ -1,11 +1,42 @@
 # API stability
 
-JAFAAL follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). From
-1.0.0 onwards, a breaking change to anything listed as **public** below requires
-a major-version bump.
+JAFAAL follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html), but
+`0.1.0` is pre-1.0 software. The public surface below is the compatibility
+target for the v0.x series and the intended contract for 1.0; it is not yet a
+frozen 1.0 API. Before 1.0, a breaking change may ship in a minor release. Such
+changes are documented in the changelog and, where practical, deprecated for
+at least one prior minor release. Patch releases remain compatible except when
+a security fix or stricter rejection of previously accepted invalid input makes
+that impossible.
+
+From 1.0.0 onwards, a breaking change to anything listed as **public** below
+requires a major-version bump.
 
 This page is the contract. If something is not listed as public, it is not
-covered — even if it happens to be importable.
+covered, even if it happens to be importable.
+
+The runtime descriptions below apply to v0.1. Compatibility statements such as
+"never renamed within a major version" describe the policy that takes effect at
+1.0. Until then, the pre-1.0 policy above governs every listed surface.
+
+## Product boundary
+
+JAFAAL is an embedded FastAPI authentication library and a standards-shaped
+authorization server for applications controlled by one host. It may issue
+JWTs to that host's resource servers and run authorization-code plus PKCE flows
+for that host's browser and native clients.
+
+Every registered client is a trusted, statically configured, first-party public
+client. JAFAAL does not provide third-party client management, confidential
+client authentication, consent or grant records, or dynamic client
+registration. The host owns the configuration, operator policy, users,
+database, clients, and resource servers. Mounting JAFAAL in a dedicated FastAPI
+service does not broaden that trust boundary.
+
+`POST /auth/login` is a JAFAAL credential endpoint for the host's first-party
+applications, not the OAuth resource-owner password grant. When JAFAAL
+federates to an upstream identity provider, JAFAAL acts separately as an OAuth
+client and OpenID Connect Relying Party.
 
 ## What is public
 
@@ -34,9 +65,10 @@ drive a flow itself, rather than because a normal integration needs it. Wiring
 an auth library up should not require any of it, and freezing internals nobody
 integrates against is how a library ends up carrying design mistakes for years.
 
-These names are still supported, and still documented, but they carry a weaker
-promise: they may change in a **minor** release, after at least one release
-during which the old form keeps working and emits a `DeprecationWarning`.
+These names are supported and documented. From 1.0 onwards they carry a weaker
+promise than the rest of the public surface: they may change in a **minor**
+release, after at least one release during which the old form keeps working and
+emits a `DeprecationWarning`.
 
 | Group | Names |
 |---|---|
@@ -50,7 +82,7 @@ during which the old form keeps working and emits a `DeprecationWarning`.
 Everything else in `__all__` — the settings objects, the ports, the exceptions,
 the router factories, the transaction helpers, the user mixins, the request and
 response schemas, the FastAPI dependencies, and `configure_*` — is covered by
-the full SemVer promise above.
+the full SemVer promise above from 1.0 onwards.
 
 ### 2. Exception `code` slugs
 
@@ -116,11 +148,15 @@ itself is not a direct API: query it through JAFAAL, not with your own SQL.
 
 ## Deprecation policy
 
+Before 1.0, breaking public API changes are listed in the changelog with a
+migration note and, where practical, deprecated for at least one prior minor
+release. From 1.0 onwards:
+
 1. A public API being removed or changed is first **deprecated**: it keeps
-   working and emits a `DeprecationWarning` naming the replacement.
+  working and emits a `DeprecationWarning` naming the replacement.
 2. It stays for **at least two minor releases** after the deprecation lands.
 3. Removal happens only in a major release, and is listed in the changelog under
-   *Removed* with the migration step.
+  *Removed* with the migration step.
 
 Anything that cannot be deprecated safely — a change forced by a security
 finding — is documented in `SECURITY.md` and the changelog, and may land in a

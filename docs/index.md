@@ -16,8 +16,10 @@
 </div>
 
 **Just Another FastAPI Authentication Library.** JAFAAL is a batteries-included,
-framework-agnostic authentication library for FastAPI + SQLAlchemy applications.
-It owns the security-critical parts of auth so your app doesn't have to.
+embedded FastAPI authentication library and a standards-shaped authorization
+server for applications controlled by one host. It integrates with synchronous
+SQLAlchemy and owns the security-critical parts of auth so your app doesn't have
+to.
 
 ## Features
 
@@ -88,6 +90,23 @@ refresh-token delivery: browsers get an `HttpOnly`, `SameSite=Strict` cookie (so
 page script never touches it, per RFC 9700 §7.2), native clients get it in the
 response body.
 
+## Current limitations
+
+- **Synchronous SQLAlchemy only.** JAFAAL's endpoints and CRUD layer take a
+  `Session`, not an `AsyncSession`, and the registered factory must be a sync
+  `sessionmaker`. FastAPI runs synchronous handlers in its worker thread pool;
+  JAFAAL's writes cannot share a transaction with host `AsyncSession` work.
+- **One process-wide configuration.** `jafaal.configure()` and the
+  `configure_*` adapter functions install module-level settings, ports, stores,
+  and registries shared by every JAFAAL router in the process. Two differently
+  configured JAFAAL instances cannot be isolated in one process. Each worker
+  must configure itself, and replicas need distributed state where documented.
+- **First-party public clients only.** OAuth clients are trusted applications
+  owned by the same host, registered statically in `AuthSettings.oauth_clients`,
+  and authenticated with PKCE rather than a client secret. JAFAAL v0.1 has no
+  third-party client lifecycle, consent records, confidential-client
+  authentication, or dynamic registration.
+
 ## Installation
 
 ```bash
@@ -97,15 +116,6 @@ uv add jafaal
 ```
 
 Requires Python 3.12+.
-
-> [!IMPORTANT]
-> **JAFAAL uses synchronous SQLAlchemy.** Its endpoints and CRUD layer take a
-> `Session`, not an `AsyncSession`, and the session factory you register must be
-> a sync `sessionmaker`. A host whose own code is async can still mount JAFAAL —
-> its routes are declared `def`, so FastAPI runs them in the worker threadpool
-> and they never block the event loop — but JAFAAL's writes will not share a
-> transaction with your `AsyncSession` work. Async support is tracked for a
-> post-1.0 release.
 
 ### Optional features
 

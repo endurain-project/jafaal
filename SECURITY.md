@@ -7,15 +7,16 @@ privately.
 
 ## Supported versions
 
-JAFAAL is pre-1.0 and evolves quickly. Security fixes are released against the
-**latest published version** on the `main` branch; there is no long-term support
-for older releases yet. Always upgrade to the newest release before reporting an
-issue to confirm it still reproduces.
+JAFAAL `0.1.x` is pre-1.0 and evolves quickly. Security fixes are released only
+for the latest `0.1.x` release and the `main` branch; there is no long-term
+support for older pre-1.0 releases. Until `0.1.0` is published, `main` is the
+only supported source. Always upgrade to the newest supported revision before
+reporting an issue to confirm it still reproduces.
 
 | Version | Supported |
 | ------- | --------- |
-| latest release / `main` | :white_check_mark: |
-| older releases | :x: |
+| latest `0.1.x` / `main` | :white_check_mark: |
+| older pre-1.0 releases | :x: |
 
 ## Reporting a vulnerability
 

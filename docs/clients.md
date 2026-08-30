@@ -12,6 +12,12 @@ and
 Paths below are relative to wherever you mounted the router (the example mounts
 it at `/api/v1`).
 
+This reference is only for trusted, statically configured, first-party public
+clients owned by the JAFAAL host. They are registered in
+[`AuthSettings.oauth_clients`][jafaal.AuthSettings], use PKCE instead of a client
+secret, and do not represent third-party integrations. v0.1 has no consent,
+grant, confidential-client, or dynamic-registration surface.
+
 ## Registered clients decide the response shape
 
 Every token-issuing request names a `client_id` registered in

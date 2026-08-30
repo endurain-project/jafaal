@@ -6,17 +6,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 What counts as a breaking change — and what does not — is defined in
-[API stability](docs/api-stability.md). In short: the `jafaal` namespace, the
-exception `code` slugs, the HTTP surface, the token/cookie wire formats, and the
-`jafaal.audit` event slugs are covered by SemVer; anything under `_core` /
-`_internal`, log message text, and default security parameters are not.
+[API stability](docs/api-stability.md). During the pre-1.0 series, its public
+surface is a compatibility target rather than a frozen guarantee: breaking
+changes may ship in a minor release and are documented here. The full
+major-version guarantee begins with 1.0.0.
 
-## [1.0.0rc1]
+## [0.1.0] - Unreleased
 
-First release candidate. The API surface is frozen for review but not yet
-covered by the SemVer guarantees in [API stability](docs/api-stability.md);
-`1.0.0` follows once the surface has been validated against a production
-consumer.
+Initial pre-1.0 release. The documented public surface is available for
+integration feedback and may still change between v0.x minor releases. The
+1.0.0 compatibility guarantees in [API stability](docs/api-stability.md) remain
+future-facing until the surface has been validated with production consumers.
 
 ### Added
 
@@ -108,8 +108,9 @@ consumer.
   it already required presenting the correct one, so it leaks nothing, and the
   remedy is to replace the password rather than retry. A transparent Argon2
   rehash on login does **not** clear the flag — only a real password write does.
-  JAFAAL ships no change-password endpoint, so a deployment using this must wire
-  one (calling `set_password`) or keep `/auth/password-reset` usable.
+  The owner completes the required replacement at `/auth/password/renew`;
+  `/auth/password/change` serves users who already have an authenticated
+  session.
 
 **Tokens and sessions**
 

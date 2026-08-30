@@ -4,6 +4,14 @@ JAFAAL never reads environment variables or secret files itself. The host
 application builds configuration and injects it once at startup. Every setting is
 data **you** own.
 
+!!! warning "One configuration per process"
+    `jafaal.configure()` and the `configure_*` adapter functions install
+    process-wide module registries. Every JAFAAL router in the process shares
+    those settings, ports, stores, scope catalog, session factory, and model
+    mapping. v0.1 cannot isolate two differently configured JAFAAL deployments
+    in one process. Configure each worker at startup and use the documented
+    distributed stores when state must span workers or replicas.
+
 ## `AuthSettings`
 
 Build a frozen, validated [`AuthSettings`][jafaal.AuthSettings] and install it
@@ -59,10 +67,13 @@ jafaal.configure(
 
 ## Registered clients
 
-Every request that issues a token names the client it is for. The registration —
-not the request — decides how the tokens are delivered and how wide they may be,
-because a value a caller can choose per-request is a value an attacker can
-choose.
+v0.1 supports only trusted, statically configured, first-party public clients
+owned by the same host as the users and authorization server. There is no
+dynamic registration, confidential-client authentication, or consent/grant
+store. Every request that issues a token names the client it is for. The
+registration, not the request, decides how the tokens are delivered and how wide
+they may be, because a value a caller can choose per request is a value an
+attacker can choose.
 
 ```python
 jafaal.configure(
@@ -82,12 +93,12 @@ jafaal.configure(
                 redirect_uris=("com.example.app://oauth/callback",),
                 name="Example for iOS",
             ),
-            # A third-party integration, capped at what it actually needs.
+            # A first-party desktop app, capped at what it actually needs.
             jafaal.OAuthClient(
-                client_id="com.partner.tool",
-                redirect_uris=("https://partner.example/callback",),
+                client_id="com.example.desktop",
+                redirect_uris=("com.example.desktop://oauth/callback",),
                 scopes=("profile",),
-                name="Partner tool",
+                name="Example desktop app",
             ),
         ),
     )
@@ -101,10 +112,11 @@ jafaal.configure(
 | `token_delivery` | `"body"` (RFC 6749 §5.1, the default) or `"cookie"` (RFC 9700 §7.2 — `HttpOnly` refresh cookie plus a CSRF token). |
 | `scopes` | Ceiling on the token's scopes, intersected with what your [`ScopeResolver`][jafaal.ScopeResolver] grants the user. Empty means "whatever the user holds". |
 
-!!! warning "Set a ceiling for anything you do not control"
-    JAFAAL has no consent screen, so without `scopes` a registered client
-    receives the user's entire account. That is correct for a first-party app
-    that *is* the application, and wrong for everything else.
+!!! warning "Set a ceiling for each first-party client"
+    JAFAAL has no consent screen, so without `scopes` a registered client can
+    receive every scope the user holds. Give each host-owned client only the
+    scopes it needs. Do not register a client you do not control; that trust
+    model is outside the v0.1 product boundary.
 
 A plain-`http` `redirect_uri` is accepted only for loopback (`127.0.0.1`,
 `[::1]`, `localhost`) per RFC 8252 §7.3; anything else must use `https` or a
