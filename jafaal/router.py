@@ -1687,8 +1687,9 @@ def revoke_token_endpoint(
 
     A refresh token deletes its session (and, with ``tokens.denylist_enabled``,
     denylists the session id so its access tokens die with it). An access token
-    is denylisted by ``jti`` under the same setting. Always returns 200, even for
-    an unknown token.
+    is denylisted by ``jti`` under the same setting; without it, a valid access
+    token returns ``unsupported_token_type`` because it cannot be revoked.
+    Unknown and client-mismatched tokens return a silent 200.
 
     Args:
         response: The HTTP response object, marked ``no-store``.
@@ -1703,6 +1704,8 @@ def revoke_token_endpoint(
         InvalidClientError: If ``client_id`` is absent or unregistered. That is a
             malformed *request*, not an unrecognised token, so §2.2's "answer 200
             for an invalid token" does not apply.
+        UnsupportedTokenTypeError: If a valid access token is presented while
+            the denylist backend is disabled.
     """
     # The request body carried a live credential; a cached response keyed on it
     # is a cached credential. RFC 7009 §2.1 inherits RFC 6749 §5.1's no-store.

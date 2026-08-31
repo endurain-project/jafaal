@@ -39,7 +39,11 @@ roles, and implements the standards that govern each:
 | **Bearer-token resource server** | RFC 6750 (header extraction, `WWW-Authenticate` challenges incl. `insufficient_scope`) |
 | **Authorization server for your own native apps** | RFC 6749 §4.1 (authorization code), RFC 7636 (PKCE S256), RFC 8252 (native apps / public clients), RFC 9700 (exact redirect-URI matching) |
 | **OAuth client / OIDC Relying Party** for SSO | RFC 6749 *client* role, RFC 7636, OIDC Core 1.0 (`nonce`, `azp`, `at_hash`, userinfo `sub` check), RFC 9700 |
-| **Credential authority** | NIST SP 800-63B (password policy + breach screening), RFC 6238 (TOTP), W3C WebAuthn L2 (passkeys), RFC 7662 (introspection), RFC 7009 (revocation) |
+| **Credential authority** | NIST SP 800-63B-4 (NFC + length policy + configured blocklist), RFC 6238 (TOTP), W3C WebAuthn L2 (passkeys), RFC 7662 (introspection), RFC 7009 (revocation) |
+
+NIST password alignment is conditional on a configured checker being available.
+The HIBP adapter fails open during an outage; use a local fail-closed blocklist
+when uninterrupted enforcement is required.
 
 > [!IMPORTANT]
 > **JAFAAL is an authorization server for clients you own.**

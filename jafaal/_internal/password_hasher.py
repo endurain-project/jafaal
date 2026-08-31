@@ -19,27 +19,37 @@ from jafaal.exceptions import PasswordPolicyError
 
 
 def normalize_password(password: str) -> str:
-    """Return ``password`` in Unicode NFKC form.
+    """Return ``password`` in Unicode NFC form.
 
-    NIST SP 800-63B (r3 §5.1.1.2, r4 §3.1.1.2) requires the verifier to apply
-    NFKC or NFKD before hashing, so the same passphrase typed on two platforms
-    produces the same hash. Without it a password containing a composed
-    character (``é`` as U+00E9, which macOS and iOS emit) fails to verify
-    against a hash stored from the decomposed form (U+0065 U+0301, which Linux
-    input methods emit) — an unrecoverable authentication failure that looks
-    exactly like a forgotten password.
+    NIST SP 800-63B-4 §3.1.1.2 recommends NFC before hashing. Canonically
+    equivalent composed and decomposed spellings then verify as the same
+    password, while compatibility characters such as fullwidth letters remain
+    distinct. Changing compatibility characters would silently change the
+    subscriber's chosen secret.
 
-    NFKC is chosen over NFKD because it is the composing form, so it does not
-    inflate the byte length of the input. Pure-ASCII passwords — the
-    overwhelming majority — are unchanged.
+    Pure-ASCII passwords are unchanged.
 
     Args:
         password: The plaintext password as received from the client.
 
     Returns:
-        The NFKC-normalized password.
+        The NFC-normalized password.
     """
-    return unicodedata.normalize("NFKC", password)
+    return unicodedata.normalize("NFC", password)
+
+
+def password_screening_values(password: str) -> tuple[str, ...]:
+    """Return NFC password text and any distinct compatibility projection.
+
+    NFC defines the password that is hashed and verified. The optional NFKC
+    projection is only a blocklist alias, preventing a fullwidth or ligature
+    spelling from evading a known weak compatibility-equivalent password.
+    """
+    normalized = normalize_password(password)
+    compatibility = unicodedata.normalize("NFKC", normalized)
+    if compatibility == normalized:
+        return (normalized,)
+    return (normalized, compatibility)
 
 
 class SupportsHashPassword(Protocol):
@@ -152,7 +162,7 @@ class PasswordHasher:
         """
         Hashes the provided password using the configured password hashing algorithm.
 
-        The password is NFKC-normalized first (NIST SP 800-63B §5.1.1.2), so a
+        The password is NFC-normalized first (NIST SP 800-63B-4 §3.1.1.2), so a
         passphrase enrolled on one platform verifies on another.
 
         Args:
@@ -282,6 +292,7 @@ class PasswordHasher:
               ``max_length`` is the only upper bound and exists purely to cap
               hashing work.
         """
+        password = normalize_password(password)
         if len(password) < min_length:
             raise PasswordPolicyError(f"Password is too short (got {len(password)}, need ≥ {min_length}).")
 

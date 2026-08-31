@@ -254,6 +254,7 @@ the settings and invalidates settings-derived caches (e.g. the token manager).
 | `allow_query_param` | `False` | Whether API keys may be sent via `?api_key=` (header only by default). |
 | `allow_in_memory_state_store_when_deployed` | `False` | Permit the in-memory state store in a deployed environment (single-worker only; otherwise `create_auth_router()` raises at startup). |
 | `allow_no_rate_limit_when_deployed` | `False` | Permit a deployed environment with no enforcing rate limiter (otherwise `create_auth_router()`/`verify_configuration()` raise at startup). |
+| `allow_no_password_breach_check_when_deployed` | `False` | Permit deployed `length_only` policy without a breach checker; explicitly accepts deviation from NIST's blocklist requirement. |
 | `denylist_enabled` | `False` | Record & check revoked access-token `jti`s so `/revoke` kills an access token immediately (one state-store lookup per request). |
 | `reauthorize_scopes_per_request` | `False` | Intersect an access token's scopes with the tier its account currently holds, so a demotion applies immediately instead of at token expiry. Strictly narrowing; adds no query. |
 | `argon2_time_cost` | `3` | Argon2 time cost (iterations) for password hashing. |
@@ -573,8 +574,8 @@ access/refresh tokens, mounted on the auth router:
     its `jti` is revoked, or its session has been ended (logout / `/revoke`).
 
 - **`POST <api-root>/auth/revoke`** (RFC 7009) — present a token **and the
-  `client_id` it was issued to**; always returns `200`, even for an unknown
-  token.
+    `client_id` it was issued to**. Unknown and mismatched tokens return a silent
+    `200` so the endpoint is not an oracle.
     - `client_id` is required (RFC 7009 §2.1) and the token must have been
       issued to it (§5). Without that binding, possession of a leaked token is a
       force-logout primitive: anyone who observes a refresh token can end its
@@ -585,11 +586,11 @@ access/refresh tokens, mounted on the auth router:
       `denylist_enabled=True` the session id is denylisted too, so the access
       tokens minted from the same grant stop working immediately rather than
       lapsing minutes later (§2.1).
-    - An **access token** is denylisted by `jti` **only when**
-      `denylist_enabled=True`; otherwise the short-lived token
-      lapses at expiry. Enable that setting (or `strict_binding`) for
-      immediate access-token revocation — each adds one state-store lookup per
-      authenticated request.
+        - An **access token** is denylisted by `jti` only when
+            `denylist_enabled=True`. Otherwise it remains live until expiry and the
+            endpoint returns HTTP `400` RFC 7009 `unsupported_token_type`, rather than
+            falsely reporting success. Enable the denylist for immediate revocation;
+            it adds one state-store lookup per authenticated request.
 
 !!! note "Distributed deployments"
     The access-token denylist lives in the state store, so a multi-worker

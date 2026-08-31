@@ -11,6 +11,7 @@ from fastapi import FastAPI
 
 import jafaal
 import jafaal.rate_limit as jafaal_rate_limit
+from jafaal.adapters import StaticSettingsProvider
 from jafaal.exceptions import JafaalError
 from jafaal.state_store import TieredFailureOutcome
 
@@ -221,6 +222,79 @@ def test_verify_configuration_raises_without_rate_limiter_when_deployed():
             jafaal.verify_configuration()
     finally:
         jafaal.configure(original)
+        jafaal_rate_limit.reset_rate_limiter()
+        jafaal.reset_state_store()
+
+
+# --------------------------------------------------------------------------- #
+# Password breach-screening guard (deployed length-only policy)
+# --------------------------------------------------------------------------- #
+
+
+def test_deployed_length_only_policy_requires_a_breach_checker():
+    original = jafaal.get_settings()
+    checker = jafaal.get_password_breach_checker()
+    provider = jafaal.get_settings_provider()
+    jafaal.configure(_production_settings())
+    jafaal.configure_settings_provider(StaticSettingsProvider())
+    jafaal.configure_state_store(_FakeDistributedStore())
+    jafaal.configure_rate_limiter(_DummyLimiter())
+    jafaal.configure_password_breach_checker(jafaal.NullPasswordBreachChecker())
+    try:
+        assert jafaal.get_settings_provider().get_password_policy().password_type == "length_only"
+        with pytest.raises(RuntimeError, match="breached-password checker"):
+            jafaal.create_auth_router()
+    finally:
+        jafaal.configure(original)
+        jafaal.configure_password_breach_checker(checker)
+        jafaal.configure_settings_provider(provider)
+        jafaal_rate_limit.reset_rate_limiter()
+        jafaal.reset_state_store()
+
+
+def test_deployed_length_only_policy_can_explicitly_accept_missing_screening():
+    original = jafaal.get_settings()
+    checker = jafaal.get_password_breach_checker()
+    provider = jafaal.get_settings_provider()
+    jafaal.configure(
+        replace_settings(
+            _production_settings(),
+            allow_no_password_breach_check_when_deployed=True,
+        )
+    )
+    jafaal.configure_settings_provider(StaticSettingsProvider())
+    jafaal.configure_state_store(_FakeDistributedStore())
+    jafaal.configure_rate_limiter(_DummyLimiter())
+    jafaal.configure_password_breach_checker(jafaal.NullPasswordBreachChecker())
+    try:
+        jafaal.create_auth_router()
+    finally:
+        jafaal.configure(original)
+        jafaal.configure_password_breach_checker(checker)
+        jafaal.configure_settings_provider(provider)
+        jafaal_rate_limit.reset_rate_limiter()
+        jafaal.reset_state_store()
+
+
+def test_deployed_length_only_policy_accepts_an_installed_checker():
+    class _Checker:
+        def is_breached(self, password):
+            return False
+
+    original = jafaal.get_settings()
+    checker = jafaal.get_password_breach_checker()
+    provider = jafaal.get_settings_provider()
+    jafaal.configure(_production_settings())
+    jafaal.configure_settings_provider(StaticSettingsProvider())
+    jafaal.configure_state_store(_FakeDistributedStore())
+    jafaal.configure_rate_limiter(_DummyLimiter())
+    jafaal.configure_password_breach_checker(_Checker())
+    try:
+        jafaal.create_auth_router()
+    finally:
+        jafaal.configure(original)
+        jafaal.configure_password_breach_checker(checker)
+        jafaal.configure_settings_provider(provider)
         jafaal_rate_limit.reset_rate_limiter()
         jafaal.reset_state_store()
 

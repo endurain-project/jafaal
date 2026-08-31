@@ -304,6 +304,7 @@ def test_secure_defaults():
     # permitted in a deployed environment unless the host explicitly opts in.
     assert s.allow_in_memory_state_store_when_deployed is False
     assert s.allow_no_rate_limit_when_deployed is False
+    assert s.allow_no_password_breach_check_when_deployed is False
     # API keys are header-only by default (query strings land in access logs).
     assert s.api_keys.allow_query_param is False
     # Argon2 cost defaults match pwdlib / argon2-cffi.

@@ -128,9 +128,9 @@ def revoke_token(
       matches that session's current hash. When the denylist is enabled the
       session id is denylisted too, so the access tokens minted from the same
       grant stop working immediately rather than lapsing minutes later (§2.1).
-    * Access token → add its ``jti`` to the revocation denylist **when**
-      :attr:`~jafaal.settings.TokenSettings.denylist_enabled` is set; otherwise
-      the short-lived token simply lapses.
+        * Access token → add its ``jti`` to the revocation denylist when
+            :attr:`~jafaal.settings.TokenSettings.denylist_enabled` is set; otherwise
+            raise RFC 7009 ``unsupported_token_type`` because the token remains live.
 
     **Client binding.** §2.1 has the client identify itself, and §5 has the
     server check the token was issued to it. Without that, possession of a leaked
@@ -216,13 +216,9 @@ def _revoke_access_token(claims: dict[str, Any]) -> None:
     """Denylist an access token's ``jti`` when the denylist is enabled.
 
     With the denylist off there is nothing to revoke against — validation is
-    stateless, so the token stays usable until it expires. RFC 7009 §2.2 reserves
-    its 200 for "revocation successful *or* the client submitted an invalid
-    token", and a valid-but-still-live token is neither; the caller is being told
-    the credential is dead when it is not. The endpoint still answers 200 (the
-    RFC gives it no other code, and the refresh-token path is unaffected), but
-    the no-op is logged and audited so an operator can see that revocation is
-    not actually doing anything.
+    stateless, so the token stays usable until it expires. RFC 7009 §4.1.1
+    defines ``unsupported_token_type`` for this case. The attempt is logged and
+    audited before that error is returned.
     """
     jti = claims.get("jti")
     if not jafaal_settings.get_settings().tokens.denylist_enabled:
@@ -238,7 +234,9 @@ def _revoke_access_token(claims: dict[str, Any]) -> None:
             jti=jti if isinstance(jti, str) else None,
             reason="denylist_disabled",
         )
-        return
+        raise jafaal_exceptions.UnsupportedTokenTypeError(
+            "Access-token revocation requires tokens.denylist_enabled=True."
+        )
     exp = claims.get("exp")
     if not isinstance(jti, str) or exp is None:
         return

@@ -873,8 +873,9 @@ class DefaultIdentityService:
         Raises:
             PasswordPolicyError: 422 if the password fails the configured policy.
         """
+        normalized_password = jafaal_password_hasher.normalize_password(password)
         self._password_hasher.validate_password(
-            password,
+            normalized_password,
             min_length,
             password_type,
             max_length,
@@ -882,11 +883,13 @@ class DefaultIdentityService:
         # NIST SP 800-63B: screen against a breach corpus / blocklist after the
         # cheap local policy passes and before hashing. No-op unless the host
         # installs a checker via jafaal.configure_password_breach_checker(...).
-        if jafaal_ports.get_password_breach_checker().is_breached(password):
-            raise jafaal_exceptions.PasswordPolicyError(
-                "This password has appeared in a known data breach; choose a different one."
-            )
-        return self._password_hasher.hash_password(password)
+        checker = jafaal_ports.get_password_breach_checker()
+        for screening_value in jafaal_password_hasher.password_screening_values(normalized_password):
+            if checker.is_breached(screening_value):
+                raise jafaal_exceptions.PasswordPolicyError(
+                    "This password has appeared in a known data breach; choose a different one."
+                )
+        return self._password_hasher.hash_password(normalized_password)
 
     def hash_password(self, password: str) -> str:
         """Return a secure hash for a trusted generated secret.

@@ -112,6 +112,13 @@ def test_custom_detail_overrides_default():
     assert exc.NotFoundError().detail == exc.NotFoundError.default_detail
 
 
+def test_unsupported_token_type_is_an_oauth_error():
+    error = exc.UnsupportedTokenTypeError("unsupported")
+    assert error.status_code == 400
+    assert error.code == "unsupported_token_type"
+    assert error.oauth_error == "unsupported_token_type"
+
+
 def test_rate_limited_retry_after():
     e = exc.RateLimitedError(retry_after=30)
     assert e.retry_after == 30

@@ -92,10 +92,10 @@ whether an account exists. If you skip these flows, the default
 
 ### `PasswordBreachChecker`
 
-Optionally screen a proposed password against a breach corpus / blocklist during
-sign-up and password change (NIST SP 800-63B, the recommended companion to a
-`length_only` policy). The port is one method that returns whether the password
-should be rejected:
+Screen a proposed password against a breach corpus / blocklist during sign-up
+and password change. Deployed `length_only` policy requires this port unless the
+host explicitly accepts the risk. The method returns whether the password should
+be rejected:
 
 ```python
 from jafaal import configure_password_breach_checker
@@ -109,10 +109,11 @@ class MyChecker:
 configure_password_breach_checker(MyChecker())
 ```
 
-It is consulted **after** the length/complexity policy passes and **before**
-hashing, runs synchronously in the request path (keep it fast), and should fail
-open (return `False` on an upstream error). It checks the *password alone* — not
-a username/email pair. The default
+It is consulted **after** NFC normalization and the length/complexity policy,
+and **before** hashing. It receives the NFC password and, when different, an
+NFKC compatibility projection as a second lookup. It runs synchronously in the
+request path, so keep it fast. It checks the *password alone*, not a
+username/email pair. The default
 [`NullPasswordBreachChecker`][jafaal.NullPasswordBreachChecker] disables
 screening; ready-made adapters are [below](#hibpbreachchecker-blocklistbreachchecker).
 
@@ -229,8 +230,11 @@ jafaal.configure_password_breach_checker(HibpBreachChecker())
 ```
 
 It **fails open** (allows the password) on any network/HTTP error so a
-breach-service outage never blocks password changes. Raise `min_count` to only
-reject widely-seen passwords, and pass `client=` to reuse one `httpx.Client`.
+breach-service outage never blocks password changes. This preserves availability
+but means NIST's blocklist requirement is not enforced during the outage. Use a
+local `BlocklistBreachChecker` for fail-closed screening. Raise `min_count` to
+only reject widely-seen passwords, and pass `client=` to reuse one
+`httpx.Client`.
 
 `BlocklistBreachChecker` is a dependency-free, in-memory alternative for a
 bundled "top-N breached passwords" list or a custom deny-list:

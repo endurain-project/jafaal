@@ -1120,8 +1120,8 @@ requires-dist = [
     { name = "redis", marker = "extra == 'redis'", specifier = ">=5.0.0" },
     { name = "sqlalchemy", specifier = ">=2.0.49" },
     { name = "user-agents", specifier = ">=2.2.0" },
-    { name = "webauthn", marker = "extra == 'all'", specifier = ">=2.0.0" },
-    { name = "webauthn", marker = "extra == 'webauthn'", specifier = ">=2.0.0" },
+    { name = "webauthn", marker = "extra == 'all'", specifier = ">=2.2.0" },
+    { name = "webauthn", marker = "extra == 'webauthn'", specifier = ">=2.2.0" },
 ]
 provides-extras = ["mfa", "sso", "webauthn", "redis", "migrations", "all"]
 
@@ -1146,7 +1146,7 @@ dev = [
     { name = "ruff", specifier = ">=0.15.12" },
     { name = "types-authlib" },
     { name = "types-qrcode" },
-    { name = "webauthn", specifier = ">=2.0.0" },
+    { name = "webauthn", specifier = ">=2.2.0" },
 ]
 docs = [
     { name = "mkdocs-material", specifier = ">=9.6.0" },
@@ -1170,7 +1170,7 @@ test = [
     { name = "pytest-cov", specifier = ">=7.1.0" },
     { name = "qrcode", extras = ["pil"], specifier = ">=8.2" },
     { name = "redis", specifier = ">=5.0.0" },
-    { name = "webauthn", specifier = ">=2.0.0" },
+    { name = "webauthn", specifier = ">=2.2.0" },
 ]
 test-db = [
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },

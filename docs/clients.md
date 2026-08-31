@@ -138,7 +138,7 @@ TOTP code or a single-use backup code (`XXXX-XXXX`).
 | `GET` | `/auth/authorize` | RFC 6749 §4.1 authorization endpoint |
 | `POST` | `/auth/token` | `authorization_code` and `refresh_token` grants |
 | `POST` | `/auth/introspect` | RFC 7662; requires an `auth:introspect` token |
-| `POST` | `/auth/revoke` | RFC 7009; returns `200` even for unknown tokens |
+| `POST` | `/auth/revoke` | RFC 7009; unknown/mismatched tokens return `200`, unsupported access-token revocation returns `unsupported_token_type` |
 
 `/auth/authorize` query parameters: `response_type=code` (the only supported
 value), `client_id`, `redirect_uri`, `code_challenge`,
@@ -240,6 +240,7 @@ The authorization endpoint has two reporting channels:
 | `400` | `invalid_request` | Missing, empty, malformed, or repeated protocol parameter |
 | `400` | `invalid_grant` | Invalid, expired, revoked, mismatched, or already-used authorization code or refresh token |
 | `400` | `unsupported_grant_type` | `/auth/token` does not implement the requested grant |
+| `400` | `unsupported_token_type` | `/auth/revoke` received a valid access token but access-token denylisting is disabled |
 | `400` | `invalid_scope` | Requested scope is unknown or exceeds the registered client ceiling |
 | `400` | `unsupported_response_type` | `/auth/authorize` supports only `code` |
 | `401` | `invalid_client` | Client is missing where required, unknown, or not authorised |

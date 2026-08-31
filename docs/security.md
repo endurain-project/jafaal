@@ -263,10 +263,12 @@ validation applied at sign-up and password change:
   breach check: install a
   [`PasswordBreachChecker`][jafaal.PasswordBreachChecker] via
   `jafaal.configure_password_breach_checker(...)` (e.g. an HIBP k-anonymity
-  lookup or a local blocklist) — it is consulted after the length policy and
-  before hashing, and should fail open on an upstream error. JAFAAL logs a
-  startup warning while no checker is installed, because dropping composition
-  rules without a blocklist is the wrong half of the guidance.
+  lookup or a local blocklist). In a deployed environment startup fails without
+  one unless `allow_no_password_breach_check_when_deployed=True` explicitly
+  accepts the risk. A network checker may fail open for availability, but the
+  deployment is not fully aligned with the blocklist requirement during that
+  outage; use a local fail-closed blocklist when uninterrupted enforcement is
+  required.
 - **`"strict"`** — additionally requires upper/lower/digit/special. Available for
   hosts bound by legacy composition requirements, but it is a deliberate
   deviation from the standard.
@@ -275,13 +277,14 @@ validation applied at sign-up and password change:
 minimum (20 for admins) — the length SP 800-63B-4 §3.1.1.1 recommends, not the 8
 it merely permits.
 
-Passwords are NFKC-normalized before hashing (§3.1.1.2), so a passphrase enrolled
-on one platform verifies on another. Argon2id is the only hashing algorithm and
-it never truncates, so `max_length` (default 128, minimum 64) is the sole upper
-bound and exists only to cap hashing work on an unauthenticated endpoint. Every
-password request field shares one transport bound, and `max_length` is validated
-against it, so the policy can never be set to a value the schemas would reject
-first.
+Passwords are NFC-normalized before policy, screening, hashing, and verification
+(§3.1.1.2), so canonically composed/decomposed spellings interoperate while
+compatibility characters remain distinct. Screening also checks a distinct NFKC
+projection as a blocklist alias; it does not change the password that Argon2id
+hashes. Argon2id is the only hashing algorithm and it never truncates, so
+`max_length` (default 128, minimum 64) is the sole upper bound and exists only to
+cap hashing work on an unauthenticated endpoint. Every password request field
+shares one transport bound, and `max_length` is validated against it.
 
 ## Response headers for SSO redirect pages
 

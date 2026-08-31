@@ -53,30 +53,34 @@ flowchart LR
   fails closed on the in-memory store when deployed).
 - **Authorize business actions.** JAFAAL authenticates and enforces scopes; your
   application owns per-resource authorization.
-- **Breach-screen passwords.** Pair `password_type="length_only"` with a
-  host-side breached-password check for full NIST SP 800-63B alignment.
+- **Breach-screen passwords.** Deployed `password_type="length_only"` requires a
+  checker or explicit risk opt-out. HIBP fails open during outages, so continuous
+  NIST blocklist alignment requires a local fail-closed checker.
 
 ## Security invariants
 
 These hold by construction and are covered by the test suite and the
 `import-linter` contracts:
 
-1. **Algorithm pinning.** JWT signing/verification is HS256 only; ID-token
-   verification accepts asymmetric algorithms only. The decode allow-list is
-   always passed explicitly.
+1. **Algorithm pinning.** JWT signing/verification is pinned to the configured
+  allow-listed HS256, RSA, RSA-PSS, or ECDSA algorithm; upstream ID-token
+  verification accepts asymmetric algorithms only. Decode allow-lists are
+  always passed explicitly.
 2. **Signing keys never leave the process.** `secret_key`/`fernet_key` are used
    to sign/verify/encrypt only; fallbacks are verify-/decrypt-only, and both are
    redacted from `AuthSettings.__repr__` so they cannot reach a log line or a
    traceback frame dump. Every keyed digest uses a purpose-specific HKDF subkey
    rather than the raw `secret_key`.
-3. **Refresh tokens are one-time.** Every successful refresh rotates the token;
-   a token is valid for exactly one non-replay use.
+3. **Refresh tokens rotate.** Every successful refresh replaces the token. One
+  bounded idempotent retry may receive the same replacement; subsequent reuse
+  revokes the family.
 4. **Two factors stay two factors.** A pending MFA login is addressed only by
    the opaque ticket handed to the caller that satisfied the password step, and
    that ticket is consumed atomically on success.
 5. **Fail closed when deployed.** Missing rate limiter, in-memory state store,
-   and (by default) a TOTP-replay state-store outage all fail closed in a
-   deployed environment.
+   deployed `length_only` policy without a breach checker, and (by default) a
+   TOTP-replay state-store outage all fail closed unless their named risk
+   opt-out is set.
 5. **No plaintext long-lived secrets at rest.** Passwords are Argon2-hashed;
    opaque tokens are stored as keyed HMAC digests; reversible secrets are
    Fernet-encrypted.

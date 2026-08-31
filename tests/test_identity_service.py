@@ -93,6 +93,39 @@ def test_validate_and_hash_password_rejects_breached(db):
         jafaal.configure_password_breach_checker(jafaal.NullPasswordBreachChecker())
 
 
+def test_compatibility_form_cannot_bypass_breach_screening(db):
+    ascii_password = "Password123!"
+    fullwidth_password = "\uff30assword123!"
+
+    class _AsciiBlocklist:
+        def __init__(self):
+            self.seen = []
+
+        def is_breached(self, password: str) -> bool:
+            self.seen.append(password)
+            return password == ascii_password
+
+    checker = _AsciiBlocklist()
+    jafaal.configure_password_breach_checker(checker)
+    try:
+        with pytest.raises(exc.PasswordPolicyError, match="breach"):
+            _svc(db).validate_and_hash_password(fullwidth_password, 8, "length_only")
+        assert checker.seen == [fullwidth_password, ascii_password]
+    finally:
+        jafaal.configure_password_breach_checker(jafaal.NullPasswordBreachChecker())
+
+
+def test_password_is_nfc_normalized_before_policy_and_verification(db):
+    svc = _svc(db)
+    with pytest.raises(exc.PasswordPolicyError, match="too short"):
+        svc.validate_and_hash_password("a\u0308", 2, "length_only")
+
+    fullwidth_password = "\uff30assword123!"
+    password_hash = svc.validate_and_hash_password(fullwidth_password, 8, "length_only")
+    assert svc.verify_password(fullwidth_password, password_hash) is True
+    assert svc.verify_password("Password123!", password_hash) is False
+
+
 # --------------------------------------------------------------------------- #
 # Access token resolution
 # --------------------------------------------------------------------------- #

@@ -857,6 +857,10 @@ class AuthSettings:
             single-worker deployment.
         allow_no_rate_limit_when_deployed: Permit a deployed environment to run
             with the no-op rate limiter. Off by default; mirror of the above.
+        allow_no_password_breach_check_when_deployed: Permit a deployed
+            ``length_only`` password policy to run without a blocklist checker.
+            Off by default because NIST SP 800-63B-4 requires prospective
+            subscriber-chosen passwords to be compared against a blocklist.
         tokens: JWT issuance and revocation policy.
         sessions: Session lifetime and refresh-cookie delivery.
         passwords: Argon2 cost and length bounds.
@@ -890,6 +894,7 @@ class AuthSettings:
     login_ip_lockout_enabled: bool = True
     allow_in_memory_state_store_when_deployed: bool = False
     allow_no_rate_limit_when_deployed: bool = False
+    allow_no_password_breach_check_when_deployed: bool = False
 
     # --- grouped configuration ---
     tokens: TokenSettings = field(default_factory=TokenSettings)

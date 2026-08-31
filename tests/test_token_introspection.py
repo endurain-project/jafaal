@@ -227,13 +227,18 @@ def test_another_clients_token_cannot_be_revoked(client, make_user):
     assert still_valid.status_code == 200
 
 
-def test_revoke_access_token_without_denylist_is_noop(client, make_user, db):
+def test_revoke_access_token_without_denylist_is_unsupported(client, make_user, db):
     user = make_user(username="alice")
     access = _login_web(client).json()["access_token"]
     key = _introspect_key(db, user.id)
 
-    assert _revoke(client, access).status_code == 200
-    # Without the opt-in denylist, the access token stays valid until it lapses.
+    response = _revoke(client, access)
+    assert response.status_code == 400
+    assert response.json() == {
+        "error": "unsupported_token_type",
+        "error_description": "Access-token revocation requires tokens.denylist_enabled=True.",
+    }
+    # The error is honest: without the denylist the token is still live.
     assert client.post(INTROSPECT, data={"token": access}, headers={"X-API-Key": key}).json()["active"] is True
 
 

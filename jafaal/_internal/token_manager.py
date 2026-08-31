@@ -218,7 +218,7 @@ class TokenManager:
                 a small value avoids spurious 401s when the issuing and
                 validating clocks differ slightly.
             client_id (str): Value of the ``client_id`` claim RFC 9068 requires
-                on an access token.
+                on an access token. Defaults to ``audience`` when empty.
         """
         if algorithm not in jafaal_settings.ALLOWED_ALGORITHMS:
             raise ValueError(
@@ -231,7 +231,7 @@ class TokenManager:
         self.issuer = issuer
         self.audience = audience
         self.leeway_seconds = leeway_seconds
-        self.client_id = client_id
+        self.client_id = client_id or audience
 
         self._is_symmetric: bool = algorithm not in jwk_keys.ASYMMETRIC_ALGORITHMS
         self._sign_key: Any
@@ -436,6 +436,7 @@ class TokenManager:
                 },
                 sub={"essential": True},
                 scope={"essential": True},
+                client_id={"essential": True},
                 iat={"essential": True},
                 nbf={"essential": True},
                 exp={"essential": True},
@@ -449,6 +450,9 @@ class TokenManager:
 
             # Validate token claims (incl. expiration and typ)
             claims_requests.validate(payload.claims)
+            client_id = payload.claims.get("client_id")
+            if not isinstance(client_id, str) or not client_id:
+                raise InvalidClaimError("client_id")
         except MissingClaimError as missing_err:
             logger.error(f"JWT missing claim error: {missing_err}", exc_info=missing_err, extra={"token": "[REDACTED]"})
             raise jafaal_exceptions.InvalidTokenError("Token is missing required claims.") from missing_err

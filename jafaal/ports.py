@@ -492,15 +492,14 @@ class TieredScopeResolver:
 class PasswordBreachChecker(Protocol):
     """Host-owned check for whether a password appears in a breach corpus/blocklist.
 
-    Consulted during sign-up and password change, *after* the length/complexity
-    policy passes and *before* the password is hashed. Return ``True`` to reject
-    the password. This is the NIST SP 800-63B-recommended companion to the
-    ``length_only`` policy — a common implementation is an HIBP k-anonymity range
-    query or a local blocklist.
+    Consulted during sign-up and password change after NFC normalization and the
+    length/complexity policy, before hashing. Return ``True`` to reject the
+    password. JAFAAL calls it with the NFC password and, when distinct, an NFKC
+    compatibility projection to prevent blocklist alias bypasses.
 
-    It runs in the request path (synchronously), so keep it fast and fail open
-    (return ``False``) on an upstream error, so a breach-service outage cannot
-    block all password changes.
+    It runs synchronously in the request path, so keep it fast. A network-backed
+    checker may return ``False`` on an upstream error for availability, but that
+    makes NIST blocklist alignment conditional during the outage.
     """
 
     def is_breached(self, password: str) -> bool: ...

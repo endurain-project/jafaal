@@ -425,6 +425,15 @@ class UnsupportedGrantTypeError(OAuthError):
         super().__init__("unsupported_grant_type", detail, headers=headers)
 
 
+class UnsupportedTokenTypeError(OAuthError):
+    """RFC 7009 §4.1.1 ``unsupported_token_type``."""
+
+    code = "unsupported_token_type"
+
+    def __init__(self, detail: str | None = None, *, headers: dict[str, str] | None = None) -> None:
+        super().__init__("unsupported_token_type", detail, headers=headers)
+
+
 class InvalidScopeError(OAuthError):
     """RFC 6749 §5.2 ``invalid_scope`` — the requested scope is unknown or excessive."""
 
@@ -497,6 +506,7 @@ __all__ = [
     "TokenExpiredError",
     "UnprocessableError",
     "UnsupportedGrantTypeError",
+    "UnsupportedTokenTypeError",
     "UpstreamError",
     "UpstreamTimeoutError",
 ]

@@ -211,6 +211,40 @@ def test_a_token_with_no_token_use_claim_is_rejected():
     assert isinstance(excinfo.value.__cause__, MissingClaimError)
 
 
+def test_an_access_token_with_no_client_id_claim_is_rejected():
+    tm = get_token_manager()
+    _, token = tm.create_token("sid-1", _user(), TokenType.ACCESS)
+    claims = tm.decode_token(token).claims
+    claims.pop("client_id")
+
+    stripped = joserfc_jwt.encode(
+        {"alg": "HS256", "typ": "at+jwt"},
+        claims,
+        OctKey.import_key(settings_mod.get_settings().secrets.secret_key),
+    )
+    with pytest.raises(InvalidTokenError) as excinfo:
+        tm.validate_token_expiration(stripped, TokenType.ACCESS)
+    assert isinstance(excinfo.value.__cause__, MissingClaimError)
+
+
+@pytest.mark.parametrize("client_id", ["", 7, None])
+def test_an_access_token_requires_a_non_empty_string_client_id(client_id):
+    tm = get_token_manager()
+    _, token = tm.create_token("sid-1", _user(), TokenType.ACCESS)
+    claims = tm.decode_token(token).claims
+    claims["client_id"] = client_id
+
+    malformed = joserfc_jwt.encode(
+        {"alg": "HS256", "typ": "at+jwt"},
+        claims,
+        OctKey.import_key(settings_mod.get_settings().secrets.secret_key),
+    )
+    with pytest.raises(InvalidTokenError) as excinfo:
+        tm.validate_token_expiration(malformed, TokenType.ACCESS)
+    expected_error = MissingClaimError if client_id is None else InvalidClaimError
+    assert isinstance(excinfo.value.__cause__, expected_error)
+
+
 def _reencode_with_header(tm, token: str, header: dict) -> str:
     """Re-sign a token's claims under a caller-supplied JOSE header."""
     return joserfc_jwt.encode(

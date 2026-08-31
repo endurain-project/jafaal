@@ -25,8 +25,13 @@ future-facing until the surface has been validated with production consumers.
 - Username/password login with Argon2id hashing — the only supported algorithm,
   with transparent rehashing on verify when the cost parameters change.
   Passwords are never truncated.
-- Passwords are NFKC-normalized before hashing (NIST SP 800-63B §5.1.1.2), so a
-  passphrase enrolled on a composing platform verifies on a decomposing one.
+- Passwords are NFC-normalized before policy, blocklist screening, hashing, and
+  verification, as recommended by NIST SP 800-63B-4 §3.1.1.2. Canonically
+  composed/decomposed spellings interoperate, while compatibility characters
+  remain part of the chosen secret. A distinct NFKC projection is checked only
+  as a blocklist alias, so fullwidth/ligature variants cannot evade a known weak
+  password. No legacy NFKC verification path is included because `1.0.0rc1`
+  reached no package index or external consumer.
 - A `length_only` password policy by default, with a 15-character regular
   minimum (20 for admins). SP 800-63B-4 §3.1.1.2 states verifiers **SHALL NOT**
   impose composition rules; `password_type="strict"` remains available for hosts
@@ -51,6 +56,11 @@ future-facing until the surface has been validated with production consumers.
   hash prefix ever leaves the process — or an offline host-supplied blocklist. A
   startup warning fires while none is installed: dropping composition rules
   without a blocklist is the wrong half of the guidance.
+- Deployed `length_only` policy now fails startup when no breach checker is
+  installed, unless `allow_no_password_breach_check_when_deployed=True`
+  explicitly accepts the risk. The network-backed HIBP adapter remains
+  fail-open, so strict NIST blocklist alignment during an outage requires a
+  local fail-closed checker.
 - Local sign-up with optional email verification and admin approval, and
   enumeration-safe password reset. Sign-up is enumeration-safe too: an already
   registered username or email produces the same status and body as a fresh
@@ -137,9 +147,8 @@ future-facing until the surface has been validated with production consumers.
   `client_id` / `redirect_uri` values are never selected as authorization error
   targets. Errors after one registered client/redirect pair validates return to
   that URI with `iss` and an unambiguous `state`.
-- JWT access/refresh tokens conforming to RFC 9068 (*JWT Profile for OAuth 2.0
-  Access Tokens*), so a resource server can verify them with a stock JWT
-  library.
+- JWT access tokens conforming to RFC 9068 (*JWT Profile for OAuth 2.0 Access
+  Tokens*), so a resource server can verify them with a stock JWT library.
 - The JOSE `typ` header is **verified on decode**, not just written on issue.
   RFC 9068 §4 has the resource server reject a token whose media type is not
   `at+jwt` before it reads a single claim, so a token minted for another purpose

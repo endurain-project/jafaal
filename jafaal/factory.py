@@ -75,11 +75,9 @@ def _warn_on_insecure_defaults() -> None:
     * symmetric (HS256) signing while registered clients exist, where every
       verifier also holds the power to mint.
 
-    The in-memory state store in a deployed environment is a *hard error*, not a
-    warning — see :func:`_ensure_state_store_safe_for_deployment`. A missing rate
-    limiter is likewise a *hard error* when deployed
-    (:func:`_ensure_rate_limiter_safe_for_deployment`); the warning below covers
-    only non-deployed environments, where enforcement is optional.
+    The in-memory state store and missing rate limiter are hard errors in a
+    deployed environment. A null breach checker is also a hard error with
+    deployed ``length_only`` policy unless its explicit risk opt-out is set.
     """
     deployed = jafaal_settings.is_configured() and jafaal_settings.get_settings().is_deployed
 
@@ -247,6 +245,26 @@ def _ensure_state_store_safe_for_deployment() -> None:
         )
 
 
+def _ensure_password_breach_checker_safe_for_deployment() -> None:
+    """Require blocklist screening for deployed length-only password policy."""
+    if not jafaal_settings.is_configured() or not jafaal_ports.is_settings_provider_configured():
+        return
+    settings = jafaal_settings.get_settings()
+    if not settings.is_deployed or settings.allow_no_password_breach_check_when_deployed:
+        return
+    policy = jafaal_ports.get_settings_provider().get_password_policy()
+    if policy.password_type != "length_only":
+        return
+    if isinstance(jafaal_ports.get_password_breach_checker(), jafaal_ports.NullPasswordBreachChecker):
+        raise RuntimeError(
+            "JAFAAL is using a length_only password policy without a breached-password checker in a deployed "
+            f"environment (environment={settings.environment!r}). NIST SP 800-63B-4 requires prospective "
+            "subscriber-chosen passwords to be compared against a blocklist. Install one via "
+            "jafaal.configure_password_breach_checker(...) or set "
+            "AuthSettings.allow_no_password_breach_check_when_deployed=True to explicitly accept the risk."
+        )
+
+
 def verify_configuration() -> None:
     """Assert that every required host-supplied component is installed.
 
@@ -259,8 +277,8 @@ def verify_configuration() -> None:
     (:func:`jafaal.map_models`), the settings object, the session factory, the
     user repository, and the settings provider. The event sink, state store,
     rate limiter, and scope catalog all have working defaults and so are not
-    required here. Also enforces
-    :func:`_ensure_state_store_safe_for_deployment`.
+    required here. It also enforces deployed state-store, rate-limiter, and
+    password blocklist guards.
 
     Raises:
         RuntimeError: If any required component is missing (the message
@@ -285,6 +303,7 @@ def verify_configuration() -> None:
         )
     _ensure_state_store_safe_for_deployment()
     _ensure_rate_limiter_safe_for_deployment()
+    _ensure_password_breach_checker_safe_for_deployment()
 
 
 def create_auth_router(
@@ -320,8 +339,8 @@ def create_auth_router(
 
     Raises:
         RuntimeError: If ``verify`` is set and a required component is missing,
-            or a deployed environment is running on the in-memory state store or
-            without an enforcing rate limiter.
+            or a deployed environment violates a state-store, rate-limiter, or
+            password blocklist guard.
     """
     if rate_limiter is not None:
         configure_rate_limiter(rate_limiter)
@@ -339,6 +358,7 @@ def create_auth_router(
         # running unprotected.
         _ensure_state_store_safe_for_deployment()
         _ensure_rate_limiter_safe_for_deployment()
+        _ensure_password_breach_checker_safe_for_deployment()
 
     # Import the sub-routers here, after installing the limiter. The rate-limit
     # decorators bind the configured limiter lazily (on first request, re-binding

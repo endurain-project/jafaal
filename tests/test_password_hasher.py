@@ -12,10 +12,15 @@ from jafaal._internal.password_hasher import (
 )
 from jafaal.exceptions import PasswordPolicyError
 
-# A composed/decomposed pair that NFKC folds together: "pässw0rd!" written with
+# A composed/decomposed pair that NFC folds together: "pässw0rd!" written with
 # U+00E4, and with "a" + U+0308 COMBINING DIAERESIS.
 COMPOSED_PASSWORD = "p\u00e4ssw0rd!"
 DECOMPOSED_PASSWORD = "pa\u0308ssw0rd!"
+
+# Fullwidth P is compatibility-equivalent to ASCII P under NFKC, but NFC keeps
+# the two passwords distinct.
+ASCII_COMPATIBILITY_PASSWORD = "Password123!"
+FULLWIDTH_COMPATIBILITY_PASSWORD = "\uff30assword123!"
 
 
 def test_a_very_long_password_verifies_without_raising():
@@ -34,8 +39,8 @@ def test_a_very_long_password_verifies_without_raising():
     assert hasher.verify_and_update("b" * 200, hashed) == (False, None)
 
 
-def test_password_is_nfkc_normalized_before_hashing():
-    """NIST SP 800-63B §5.1.1.2: normalize so one passphrase works everywhere."""
+def test_password_is_nfc_normalized_before_hashing():
+    """Canonical spellings interoperate while compatibility forms stay distinct."""
     assert normalize_password(DECOMPOSED_PASSWORD) == COMPOSED_PASSWORD
     # ASCII is untouched.
     assert normalize_password("Str0ng!Pass") == "Str0ng!Pass"
@@ -47,6 +52,15 @@ def test_password_is_nfkc_normalized_before_hashing():
     assert hasher.verify_password(DECOMPOSED_PASSWORD, hashed) is True
     # Both spellings also survive the verify_and_update path.
     assert hasher.verify_and_update(COMPOSED_PASSWORD, hashed)[0] is True
+
+
+def test_nfc_does_not_fold_compatibility_characters():
+    assert normalize_password(FULLWIDTH_COMPATIBILITY_PASSWORD) == FULLWIDTH_COMPATIBILITY_PASSWORD
+
+    hasher = get_password_hasher()
+    hashed = hasher.hash_password(FULLWIDTH_COMPATIBILITY_PASSWORD)
+    assert hasher.verify_password(FULLWIDTH_COMPATIBILITY_PASSWORD, hashed) is True
+    assert hasher.verify_password(ASCII_COMPATIBILITY_PASSWORD, hashed) is False
 
 
 def test_get_password_hasher_uses_settings_argon2_cost():
