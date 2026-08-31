@@ -114,6 +114,13 @@ future-facing until the surface has been validated with production consumers.
 
 **Tokens and sessions**
 
+- OAuth authorization, token, introspection, and revocation requests are parsed
+  from raw query/form multi-items before schema conversion. Missing, empty,
+  malformed, non-text, and repeated parameters now return RFC-shaped
+  `invalid_request` responses instead of FastAPI `422` bodies, and duplicate
+  `client_id` / `redirect_uri` values are never selected as authorization error
+  targets. Errors after one registered client/redirect pair validates return to
+  that URI with `iss` and an unambiguous `state`.
 - JWT access/refresh tokens conforming to RFC 9068 (*JWT Profile for OAuth 2.0
   Access Tokens*), so a resource server can verify them with a stock JWT
   library.

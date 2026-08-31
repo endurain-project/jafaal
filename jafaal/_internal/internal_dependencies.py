@@ -373,13 +373,12 @@ def _validate_refresh_token_impl(
 class ValidatedRefreshToken:
     """A refresh token that has passed full validation, with its claims.
 
-    Existing only via :func:`get_validated_refresh_token`, so possessing an
-    instance *is* the proof that the signature, ``iss``/``aud``, expiry, and
-    ``token_use`` were all checked. The claim readers take this type rather than
-    a raw ``str`` so an endpoint cannot read ``sub`` / ``sid`` off a token nobody
-    validated — previously that safety depended on the endpoint also remembering
-    to declare the separate validation dependency, and an endpoint that forgot
-    would silently accept an expired (or access-type) token.
+    Constructed by :func:`validate_and_read_refresh_token`, directly at the
+    multi-grant token endpoint or through :func:`get_validated_refresh_token`.
+    Possessing an instance is the proof that the signature, ``iss``/``aud``,
+    expiry, and ``token_use`` were checked. The claim readers take this type
+    rather than a raw ``str`` so an endpoint cannot read ``sub`` / ``sid`` off a
+    token nobody validated.
 
     Attributes:
         token: The raw refresh-token JWT as presented.
@@ -404,14 +403,15 @@ class ValidatedRefreshToken:
     scope: tuple[str, ...] = ()
 
 
-def _validate_and_read_refresh_token(
+def validate_and_read_refresh_token(
     refresh_token: str,
     token_manager: jafaal_token_manager.TokenManager,
 ) -> ValidatedRefreshToken:
     """Fully validate a refresh token and read its ``sub`` / ``sid`` claims.
 
-    The single implementation behind both the mandatory and the optional
-    dependency, so neither can end up validating less than the other.
+    This is the single implementation behind the mandatory refresh dependency
+    and the multi-grant token endpoint, so neither can validate less than the
+    other.
 
     Args:
         refresh_token: The raw refresh-token JWT.
@@ -477,9 +477,9 @@ def get_validated_refresh_token(
 ) -> ValidatedRefreshToken:
     """Validate the refresh token once and return it with its claims.
 
-    The single entry point for refresh-token-authenticated endpoints. Validating
-    and decoding in one place also means the JWT signature is verified once per
-    request instead of once per claim the endpoint reads.
+    The dependency entry point for refresh-token-authenticated extension
+    endpoints. Validating and decoding in one place also means the JWT signature
+    is verified once per request instead of once per claim the endpoint reads.
 
     Args:
         refresh_token: The raw refresh token from the cookie or Authorization header.
@@ -492,54 +492,7 @@ def get_validated_refresh_token(
         JafaalError: 401 if the token is invalid, expired, not a refresh token,
             or carries a malformed ``sub`` / ``sid``.
     """
-    return _validate_and_read_refresh_token(refresh_token, token_manager)
-
-
-def get_validated_refresh_token_optional(
-    request: Request,
-    non_cookie_refresh_token: Annotated[str | None, Depends(oauth2_scheme)],
-    token_manager: Annotated[
-        jafaal_token_manager.TokenManager,
-        Depends(jafaal_token_manager.get_token_manager),
-    ],
-    grant_type: Annotated[str | None, Form()] = None,
-    form_refresh_token: Annotated[str | None, Form(alias="refresh_token")] = None,
-) -> ValidatedRefreshToken | None:
-    """Validate a refresh token when one is actually part of this request.
-
-    The multi-grant token endpoint cannot use the mandatory
-    :func:`get_validated_refresh_token`: FastAPI resolves dependencies before the
-    endpoint body runs, so requiring a refresh token there would reject every
-    ``grant_type=authorization_code`` request before it could be dispatched.
-
-    Returns ``None`` — rather than raising — only when no refresh token is
-    present *at all*. A token that **is** present is always fully validated, so
-    this is not a weaker check: it cannot be used to skip validation, only to
-    signal "this request is not a refresh".
-
-    Args:
-        request: The incoming request, used to read the refresh cookie.
-        non_cookie_refresh_token: Bearer token from the Authorization header.
-        token_manager: The configured token manager.
-        grant_type: The ``grant_type`` form field, if supplied.
-        form_refresh_token: The RFC 6749 ``refresh_token`` form field.
-
-    Returns:
-        The validated token and its claims, or ``None`` when absent.
-
-    Raises:
-        JafaalError: 401 if a token is present but invalid, expired, or not a
-            refresh token.
-    """
-    raw = form_refresh_token
-    if raw is None and grant_type != REFRESH_TOKEN_GRANT:
-        # No body token: fall back to the carriers JAFAAL's native shape uses.
-        raw = non_cookie_refresh_token or request.cookies.get(
-            jafaal_settings.get_settings().effective_refresh_cookie_name
-        )
-    if not raw:
-        return None
-    return _validate_and_read_refresh_token(raw, token_manager)
+    return validate_and_read_refresh_token(refresh_token, token_manager)
 
 
 def get_sub_from_refresh_token(

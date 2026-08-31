@@ -164,6 +164,10 @@ and §4.1.2.1 on `/auth/authorize` — an unregistered `client_id` or `redirect_
 is *rendered* (there is no verified target to redirect to), and every later
 failure is delivered **to** the redirect URI with `error` and `state`, so an app
 waiting on its callback listener learns what happened instead of timing out.
+Missing, empty, malformed, or repeated OAuth parameters are `invalid_request`;
+these endpoints never return FastAPI's `422` validation body. A repeated
+`client_id` or `redirect_uri` is never selected as a redirect target, and a
+repeated `state` is not echoed.
 
 `/auth/token` serves both grants — `authorization_code` and `refresh_token` — so
 a standard client needs exactly one token URL. `/auth/refresh` remains as an

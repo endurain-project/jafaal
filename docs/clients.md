@@ -202,18 +202,61 @@ via `DEFAULT_SCOPE_CATALOG.extend(...)`.
 A credential's authority is bounded three times: the host's `ScopeResolver`, then
 the registered client's ceiling, then the client's `scope` request.
 
-## Errors
+## OAuth protocol errors
 
-OAuth endpoints use the RFC 6749 §5.2 shape, so a standard client library parses
-them unmodified:
+`/auth/authorize`, `/auth/token`, `/auth/introspect`, and `/auth/revoke`
+parse protocol parameters before FastAPI request-model validation. A missing,
+empty, non-text, malformed, or repeated parameter receives HTTP `400`
+`invalid_request`; an OAuth endpoint never emits FastAPI's `422` detail array.
+Repeated extension parameters are rejected too, rather than silently choosing
+one value.
+
+Token, introspection, and revocation request errors use the OAuth JSON shape, so
+a standard client library parses them unmodified:
 
 ```json
 { "error": "invalid_grant", "error_description": "…" }
 ```
 
-| Status | Condition | Client action |
+Every such error response carries `Cache-Control: no-store` and `Pragma:
+no-cache`. An invalid token submitted to introspection is not a request error;
+RFC 7662 returns `{"active": false}`. Revoking an unrecognised token remains a
+successful no-op under RFC 7009.
+
+The authorization endpoint has two reporting channels:
+
+- If `client_id` or `redirect_uri` is missing, repeated, unknown, or not a
+  registered pair, JAFAAL renders the OAuth JSON error locally and sends no
+  `Location` header. It never redirects to an unvalidated or ambiguous target.
+- After one client and redirect URI validate, later errors return by `302` to
+  that URI with `error`, `error_description`, and `iss`. JAFAAL echoes `state`
+  only when the request supplied it exactly once; a repeated state is ambiguous
+  and is not selected.
+
+| Status | OAuth error | Meaning |
 |---|---|---|
-| `400` | `invalid_request`, `invalid_grant` | Do not retry unchanged |
+| `400` | `invalid_request` | Missing, empty, malformed, or repeated protocol parameter |
+| `400` | `invalid_grant` | Invalid, expired, revoked, mismatched, or already-used authorization code or refresh token |
+| `400` | `unsupported_grant_type` | `/auth/token` does not implement the requested grant |
+| `400` | `invalid_scope` | Requested scope is unknown or exceeds the registered client ceiling |
+| `400` | `unsupported_response_type` | `/auth/authorize` supports only `code` |
+| `401` | `invalid_client` | Client is missing where required, unknown, or not authorised |
+
+## JAFAAL extension and bearer errors
+
+JAFAAL extension routes such as login, MFA, password, passkey, signup, session,
+and API-key management use domain errors with a stable `code`:
+
+```json
+{ "detail": "The token is invalid.", "code": "invalid_token" }
+```
+
+FastAPI request-schema failures on these non-OAuth routes may use its native
+HTTP `422` detail array. They are distinct from `JafaalError` domain failures
+and from the OAuth contract above.
+
+| Status | JAFAAL code or condition | Client action |
+|---|---|---|
 | `401` | `invalid_token` — expired or invalid access token | Refresh once, retry once |
 | `401` | `password_change_required` — the password is correct but was set by an operator | Send the user to a password-change flow; retrying is futile |
 | `403` | `insufficient_scope` | Do not retry; the grant is too narrow |

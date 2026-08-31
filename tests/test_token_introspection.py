@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from urllib.parse import urlencode
+
 from conftest import NATIVE_CLIENT_ID, WEB_CLIENT_ID, replace_settings
 
 import jafaal
@@ -74,6 +76,7 @@ def test_introspect_unauthenticated_is_rejected(client, make_user):
     make_user(username="alice")
     access = _login_web(client).json()["access_token"]
     assert client.post(INTROSPECT, data={"token": access}).status_code == 401
+    assert client.post(INTROSPECT, data={}).status_code == 401
 
 
 def test_introspect_invalid_token_is_inactive(client, make_user, db):
@@ -82,6 +85,35 @@ def test_introspect_invalid_token_is_inactive(client, make_user, db):
     resp = client.post(INTROSPECT, data={"token": "not.a.jwt"}, headers={"X-API-Key": key})
     assert resp.status_code == 200
     assert resp.json()["active"] is False
+
+
+def test_introspect_rejects_missing_or_duplicate_token_with_oauth_errors(client, make_user, db):
+    user = make_user(username="alice")
+    key = _introspect_key(db, user.id)
+    headers = {"X-API-Key": key}
+
+    missing = client.post(INTROSPECT, data={}, headers=headers)
+    duplicate = client.post(
+        INTROSPECT,
+        content=urlencode([("token", "first"), ("token", "second")]),
+        headers={**headers, "Content-Type": "application/x-www-form-urlencoded"},
+    )
+    duplicate_hint = client.post(
+        INTROSPECT,
+        content=urlencode(
+            [
+                ("token", "not-a-token"),
+                ("token_type_hint", "access_token"),
+                ("token_type_hint", "refresh_token"),
+            ]
+        ),
+        headers={**headers, "Content-Type": "application/x-www-form-urlencoded"},
+    )
+
+    for response in (missing, duplicate, duplicate_hint):
+        assert response.status_code == 400
+        assert set(response.json()) == {"error", "error_description"}
+        assert response.json()["error"] == "invalid_request"
 
 
 def test_introspect_reflects_logout(client, make_user, db):
@@ -131,6 +163,51 @@ def test_revoke_rejects_an_unregistered_client(client):
     resp = client.post(REVOKE, data={"token": "garbage", "client_id": "ghost"})
     assert resp.status_code == 401
     assert resp.json()["error"] == "invalid_client"
+
+
+def test_revoke_rejects_missing_or_duplicate_form_fields_with_oauth_errors(client):
+    requests = [
+        client.post(REVOKE, data={"client_id": WEB_CLIENT_ID}),
+        client.post(
+            REVOKE,
+            content=urlencode(
+                [
+                    ("token", "first"),
+                    ("token", "second"),
+                    ("client_id", WEB_CLIENT_ID),
+                ]
+            ),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        ),
+        client.post(
+            REVOKE,
+            content=urlencode(
+                [
+                    ("token", "garbage"),
+                    ("client_id", WEB_CLIENT_ID),
+                    ("token_type_hint", "access_token"),
+                    ("token_type_hint", "refresh_token"),
+                ]
+            ),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        ),
+        client.post(
+            REVOKE,
+            content=urlencode(
+                [
+                    ("token", "garbage"),
+                    ("client_id", WEB_CLIENT_ID),
+                    ("client_id", WEB_CLIENT_ID),
+                ]
+            ),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        ),
+    ]
+
+    for response in requests:
+        assert response.status_code == 400
+        assert set(response.json()) == {"error", "error_description"}
+        assert response.json()["error"] == "invalid_request"
 
 
 def test_another_clients_token_cannot_be_revoked(client, make_user):
@@ -222,3 +299,21 @@ def test_revocation_responses_are_not_cacheable(client, make_user):
     resp = _revoke(client, access)
     assert resp.headers["cache-control"] == "no-store"
     assert resp.headers["pragma"] == "no-cache"
+
+
+def test_no_oauth_endpoint_emits_a_fastapi_validation_body(client, make_user, db):
+    user = make_user(username="alice")
+    key = _introspect_key(db, user.id)
+    responses = [
+        client.get("/api/v1/auth/authorize", follow_redirects=False),
+        client.post("/api/v1/auth/token", data={}),
+        client.post(INTROSPECT, data={}, headers={"X-API-Key": key}),
+        client.post(REVOKE, data={}),
+    ]
+
+    for response in responses:
+        assert response.status_code != 422
+        assert not isinstance(response.json().get("detail"), list)
+        assert set(response.json()) == {"error", "error_description"}
+        assert response.headers["cache-control"] == "no-store"
+        assert response.headers["pragma"] == "no-cache"

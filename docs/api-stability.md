@@ -106,8 +106,10 @@ assembled by `create_auth_router`, including:
 - the token response body (`access_token`, `token_type`, `expires_in`, `scope`,
   `refresh_token_expires_in`, `session_id`, and `csrf_token` / `refresh_token`
   according to the client's registered `token_delivery`);
-- the RFC 6749 §5.2 error body (`error`, `error_description`) on the OAuth
-  endpoints, and `{"detail", "code"}` everywhere else;
+- the RFC 6749 §5.2 error body (`error`, `error_description`) for OAuth
+  parameter and grant failures, the JAFAAL domain-error body (`detail`, `code`)
+  for extension and bearer failures, and FastAPI's native `422` detail array for
+  request-schema failures on extension routes;
 - the `X-CSRF-Token` and `X-API-Key` header contracts;
 - the RFC 7662 introspection and RFC 7009 revocation responses; and
 - the RFC 8414 metadata document and the JWKS document.

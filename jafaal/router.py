@@ -8,7 +8,6 @@ from fastapi import (
     BackgroundTasks,
     Depends,
     Form,
-    Query,
     Request,
     Response,
     Security,
@@ -20,6 +19,7 @@ from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 import jafaal._internal.internal_dependencies as jafaal_internal_dependencies
+import jafaal._internal.oauth_requests as oauth_requests
 import jafaal._internal.password_hasher as jafaal_password_hasher
 import jafaal._internal.security_stores as jafaal_security_stores
 import jafaal._internal.services.account_security_service as account_security_service
@@ -54,6 +54,95 @@ logger = logging.getLogger(__name__)
 
 # Define the API router
 router = jafaal_orm.auth_router()
+
+
+def _oauth_query_parameter(name: str, description: str, *, required: bool) -> dict:
+    return {
+        "name": name,
+        "in": "query",
+        "required": required,
+        "description": description,
+        "schema": {"type": "string"},
+    }
+
+
+def _oauth_form_openapi(properties: dict[str, str], *, required: tuple[str, ...]) -> dict:
+    return {
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/x-www-form-urlencoded": {
+                    "schema": {
+                        "type": "object",
+                        "required": list(required),
+                        "properties": {
+                            name: {"type": "string", "description": description}
+                            for name, description in properties.items()
+                        },
+                    }
+                }
+            },
+        }
+    }
+
+
+_AUTHORIZATION_OPENAPI = {
+    "parameters": [
+        _oauth_query_parameter("response_type", "Must be 'code'.", required=True),
+        _oauth_query_parameter(
+            "client_id",
+            "A client registered via AuthSettings.oauth_clients.",
+            required=True,
+        ),
+        _oauth_query_parameter(
+            "redirect_uri",
+            "Must match one of the client's registered URIs.",
+            required=True,
+        ),
+        _oauth_query_parameter(
+            "code_challenge",
+            "PKCE challenge, base64url SHA-256 (43-128 characters).",
+            required=True,
+        ),
+        _oauth_query_parameter("code_challenge_method", "Must be 'S256'.", required=True),
+        _oauth_query_parameter(
+            "idp",
+            "Configured upstream identity-provider slug; omit for local login.",
+            required=False,
+        ),
+        _oauth_query_parameter("state", "Opaque client value echoed in the response.", required=False),
+        _oauth_query_parameter("scope", "Space-delimited scopes to request.", required=False),
+    ]
+}
+
+_TOKEN_OPENAPI = _oauth_form_openapi(
+    {
+        "grant_type": "'authorization_code' or 'refresh_token'.",
+        "code": "Authorization code from /auth/authorize.",
+        "code_verifier": "PKCE verifier for the authorization code.",
+        "redirect_uri": "The redirect URI used in the authorization request.",
+        "client_id": "The registered public client redeeming the code.",
+        "refresh_token": "Refresh token to rotate for the refresh_token grant.",
+    },
+    required=("grant_type",),
+)
+
+_INTROSPECTION_OPENAPI = _oauth_form_openapi(
+    {
+        "token": "The token to introspect.",
+        "token_type_hint": "Optional RFC 7662 token type hint.",
+    },
+    required=("token",),
+)
+
+_REVOCATION_OPENAPI = _oauth_form_openapi(
+    {
+        "token": "The token to revoke.",
+        "client_id": "The registered public client the token was issued to.",
+        "token_type_hint": "Optional RFC 7009 token type hint.",
+    },
+    required=("token", "client_id"),
+)
 
 
 def _raise_auth_security_store_unavailable(
@@ -887,6 +976,7 @@ def _authorize_error_redirect(
 @router.get(
     "/authorize",
     status_code=status.HTTP_302_FOUND,
+    openapi_extra=_AUTHORIZATION_OPENAPI,
     summary="OAuth 2.0 authorization endpoint (RFC 6749 §4.1, PKCE required)",
     description=(
         "Starts the authorization-code flow for a **registered public client** (RFC 8252 native app).\n\n"
@@ -906,17 +996,6 @@ def _authorize_error_redirect(
 async def authorize(
     request: Request,
     db: Annotated[Session, Depends(jafaal_orm.get_db)],
-    response_type: Annotated[str, Query(description="Must be 'code'.")],
-    client_id: Annotated[str, Query(description="A client registered via AuthSettings.oauth_clients.")],
-    redirect_uri: Annotated[str, Query(description="Must exactly match one of the client's registered URIs.")],
-    code_challenge: Annotated[str, Query(description="PKCE challenge, base64url SHA-256 (43-128 chars).")],
-    code_challenge_method: Annotated[str, Query(description="Must be 'S256'.")],
-    idp: Annotated[
-        str | None,
-        Query(description="Slug of the identity provider to authenticate with. Omit for local login."),
-    ] = None,
-    state: Annotated[str | None, Query(description="Opaque value echoed back with the code.")] = None,
-    scope: Annotated[str | None, Query(description="Space-delimited scopes to request.")] = None,
 ):
     """Start an RFC 6749 authorization-code flow for a registered public client.
 
@@ -934,19 +1013,9 @@ async def authorize(
     No token is ever placed in a redirect.
 
     Args:
-        request: The incoming HTTP request.
+        request: The incoming HTTP request, including the raw duplicate-safe
+            authorization query parameters.
         db: Database session.
-        response_type: Must be ``code``.
-        client_id: The registered client making the request.
-        redirect_uri: Where to deliver the authorization code.
-        code_challenge: PKCE challenge (RFC 7636).
-        code_challenge_method: PKCE method; only ``S256``.
-        idp: Slug of the identity provider to authenticate against. Omit to
-            authenticate locally.
-        state: Opaque client value, returned unmodified with the code.
-        scope: Space-delimited scopes to request. Omitted means "everything this
-            client and user are entitled to"; the granted set is always reported
-            in the token response.
 
     Returns:
         A redirect to the identity provider's authorization endpoint or to the
@@ -960,13 +1029,28 @@ async def authorize(
             unvalidated redirect target must never be used — that is exactly the
             open redirect that leaks the code.
     """
-    # Validated before anything is persisted or redirected, and deliberately the
-    # only failure mode that renders instead of redirecting.
+    parameters = oauth_requests.parse_oauth_query(request)
+
+    # Ambiguous client or redirect fields cannot supply a trustworthy reporting
+    # target. Reject them before selecting either repeated value.
+    parameters.reject_duplicates(("client_id", "redirect_uri"))
+    client_id = parameters.required("client_id")
+    redirect_uri = parameters.required("redirect_uri")
+
+    # Validated before anything is persisted or redirected, and deliberately
+    # outside the redirecting block: an unknown client or redirect is rendered.
     client = authorization_code_service.validate_client_and_redirect_uri(client_id, redirect_uri)
 
     # From here the redirect target is trusted, so §4.1.2.1 applies: report by
     # redirect so the waiting client actually learns what went wrong.
+    state = parameters.unambiguous("state")
     try:
+        parameters.reject_duplicates()
+        response_type = parameters.required("response_type")
+        code_challenge = parameters.required("code_challenge")
+        code_challenge_method = parameters.required("code_challenge_method")
+        idp = parameters.optional("idp")
+        scope = parameters.optional("scope")
         authorization_code_service.validate_authorization_request(response_type, code_challenge, code_challenge_method)
         authorization_code_service.validate_requested_scope(scope, client)
 
@@ -1015,6 +1099,7 @@ async def authorize(
 @router.post(
     "/token",
     response_model=(jafaal_schema.TokenResponseWeb | jafaal_schema.TokenResponseMobile),
+    openapi_extra=_TOKEN_OPENAPI,
     summary="OAuth 2.0 token endpoint (RFC 6749 §4.1.3 and §6)",
     description=(
         "Implements two grants:\n\n"
@@ -1030,20 +1115,15 @@ def token_endpoint(
     response: Response,
     request: Request,
     background_tasks: BackgroundTasks,
+    token_request: Annotated[
+        oauth_requests.OAuthTokenRequest,
+        Depends(oauth_requests.parse_token_request),
+    ],
     token_manager: Annotated[
         jafaal_token_manager.TokenManager,
         Depends(jafaal_token_manager.get_token_manager),
     ],
     db: Annotated[Session, Depends(jafaal_orm.get_db)],
-    grant_type: Annotated[str, Form(description="'authorization_code' or 'refresh_token'.")],
-    refresh: Annotated[
-        jafaal_internal_dependencies.ValidatedRefreshToken | None,
-        Depends(jafaal_internal_dependencies.get_validated_refresh_token_optional),
-    ] = None,
-    code: Annotated[str | None, Form(description="Authorization code from /auth/authorize.")] = None,
-    code_verifier: Annotated[str | None, Form(description="PKCE verifier for the code.")] = None,
-    redirect_uri: Annotated[str | None, Form(description="Must equal the authorization request's.")] = None,
-    client_id: Annotated[str | None, Form(description="The client redeeming the code.")] = None,
     x_csrf_token: Annotated[str | None, Depends(jafaal_internal_dependencies.header_csrf_token_scheme)] = None,
 ):
     """Serve the OAuth token endpoint for both supported grants.
@@ -1054,12 +1134,7 @@ def token_endpoint(
         background_tasks: Used by the refresh grant for deferred IdP work.
         token_manager: Utility for minting tokens.
         db: Database session.
-        grant_type: The requested grant.
-        refresh: Validated refresh token, present only for the refresh grant.
-        code: The authorization code (code grant).
-        code_verifier: The PKCE verifier (code grant).
-        redirect_uri: The redirect URI from the authorization request (code grant).
-        client_id: The redeeming client (code grant).
+        token_request: The duplicate-safe parsed OAuth form request.
         x_csrf_token: CSRF header, honoured by the refresh grant for cookie clients.
 
     Returns:
@@ -1070,37 +1145,44 @@ def token_endpoint(
             ``invalid_request`` for a missing parameter, ``invalid_grant`` for a
             code or refresh token that does not verify.
     """
-    if grant_type == authorization_code_service.GRANT_AUTHORIZATION_CODE:
+    if token_request.grant_type == authorization_code_service.GRANT_AUTHORIZATION_CODE:
         return _grant_authorization_code(
             response=response,
             request=request,
-            code=code,
-            code_verifier=code_verifier,
-            redirect_uri=redirect_uri,
-            client_id=client_id,
+            code=token_request.code,
+            code_verifier=token_request.code_verifier,
+            redirect_uri=token_request.redirect_uri,
+            client_id=token_request.client_id,
             token_manager=token_manager,
             db=db,
         )
 
-    if grant_type == jafaal_internal_dependencies.REFRESH_TOKEN_GRANT:
-        if refresh is None:
+    if token_request.grant_type == jafaal_internal_dependencies.REFRESH_TOKEN_GRANT:
+        if not token_request.refresh_token:
             raise jafaal_exceptions.OAuthError(
                 "invalid_request",
                 f"'refresh_token' is required when grant_type={jafaal_internal_dependencies.REFRESH_TOKEN_GRANT!r}.",
             )
-        return _grant_refresh_token(
-            response,
-            request,
-            background_tasks,
-            refresh,
-            token_manager,
-            db,
-            x_csrf_token,
-        )
+        try:
+            refresh = jafaal_internal_dependencies.validate_and_read_refresh_token(
+                token_request.refresh_token,
+                token_manager,
+            )
+            return _grant_refresh_token(
+                response,
+                request,
+                background_tasks,
+                refresh,
+                token_manager,
+                db,
+                x_csrf_token,
+            )
+        except jafaal_exceptions.AuthenticationError as err:
+            raise jafaal_exceptions.InvalidGrantError("The refresh token is invalid, expired, or was revoked.") from err
 
     raise jafaal_exceptions.UnsupportedGrantTypeError(
         f"This token endpoint implements {authorization_code_service.GRANT_AUTHORIZATION_CODE!r} and "
-        f"{jafaal_internal_dependencies.REFRESH_TOKEN_GRANT!r} (got {grant_type!r})."
+        f"{jafaal_internal_dependencies.REFRESH_TOKEN_GRANT!r} (got {token_request.grant_type!r})."
     )
 
 
@@ -1531,7 +1613,11 @@ def admin_reset_password(
     return {"message": "Password changed", "revoked_sessions": 0}
 
 
-@router.post("/introspect", response_model=jafaal_schema.TokenIntrospectionResponse)
+@router.post(
+    "/introspect",
+    response_model=jafaal_schema.TokenIntrospectionResponse,
+    openapi_extra=_INTROSPECTION_OPENAPI,
+)
 @jafaal_rate_limit.limit(jafaal_rate_limit.WRITE)
 def introspect_token_endpoint(
     response: Response,
@@ -1539,13 +1625,15 @@ def introspect_token_endpoint(
         None,
         Security(jafaal_dependencies.check_auth_scopes, scopes=[jafaal_scopes.AUTH_INTROSPECT]),
     ],
-    token: Annotated[str, Form()],
+    introspection_request: Annotated[
+        oauth_requests.OAuthIntrospectionRequest,
+        Depends(oauth_requests.parse_introspection_request),
+    ],
     token_manager: Annotated[
         jafaal_token_manager.TokenManager,
         Depends(jafaal_token_manager.get_token_manager),
     ],
     db: Annotated[Session, Depends(jafaal_orm.get_db)],
-    token_type_hint: Annotated[str | None, Form()] = None,
 ):
     """Introspect a JAFAAL token (RFC 7662).
 
@@ -1555,9 +1643,8 @@ def introspect_token_endpoint(
 
     Args:
         response: The HTTP response object, marked ``no-store``.
-        token: The token to introspect (form field).
-        token_type_hint: Optional RFC 7662 hint; ignored (the token's
-            ``token_use`` claim is authoritative).
+        introspection_request: Parsed token and optional RFC 7662 hint. The hint
+            is ignored because the token's ``token_use`` claim is authoritative.
 
     Returns:
         The RFC 7662 introspection response.
@@ -1566,21 +1653,27 @@ def introspect_token_endpoint(
     # and remaining validity), so it must not be cached by an intermediary any
     # more than the token itself would be.
     jafaal_utils.apply_no_store(response)
-    return token_admin_service.introspect_token(token, token_manager, db)
+    return token_admin_service.introspect_token(introspection_request.token, token_manager, db)
 
 
-@router.post("/revoke", response_model=None, status_code=status.HTTP_200_OK)
+@router.post(
+    "/revoke",
+    response_model=None,
+    status_code=status.HTTP_200_OK,
+    openapi_extra=_REVOCATION_OPENAPI,
+)
 @jafaal_rate_limit.limit(jafaal_rate_limit.WRITE)
 def revoke_token_endpoint(
     response: Response,
-    token: Annotated[str, Form()],
+    revocation_request: Annotated[
+        oauth_requests.OAuthRevocationRequest,
+        Depends(oauth_requests.parse_revocation_request),
+    ],
     token_manager: Annotated[
         jafaal_token_manager.TokenManager,
         Depends(jafaal_token_manager.get_token_manager),
     ],
     db: Annotated[Session, Depends(jafaal_orm.get_db)],
-    client_id: Annotated[str | None, Form(description="The registered client the token was issued to.")] = None,
-    token_type_hint: Annotated[str | None, Form()] = None,
 ) -> dict:
     """Revoke a JAFAAL token (RFC 7009).
 
@@ -1598,10 +1691,9 @@ def revoke_token_endpoint(
 
     Args:
         response: The HTTP response object, marked ``no-store``.
-        token: The token to revoke (form field).
-        client_id: The registered client presenting the request (form field).
-        token_type_hint: Optional RFC 7009 hint; ignored (the token's
-            ``token_use`` claim is authoritative).
+        revocation_request: Parsed token, client id, and optional RFC 7009 hint.
+            The hint is ignored because the token's ``token_use`` claim is
+            authoritative.
 
     Returns:
         An empty object (RFC 7009 mandates a 200 with no error).
@@ -1614,10 +1706,11 @@ def revoke_token_endpoint(
     # The request body carried a live credential; a cached response keyed on it
     # is a cached credential. RFC 7009 §2.1 inherits RFC 6749 §5.1's no-store.
     jafaal_utils.apply_no_store(response)
+    client_id = revocation_request.client_id
     if not client_id:
         raise jafaal_exceptions.InvalidClientError(
             "client_id is required. Send the id of the registered client the token was issued to."
         )
     client = authorization_code_service.resolve_client(client_id)
-    token_admin_service.revoke_token(token, client.client_id, token_manager, db)
+    token_admin_service.revoke_token(revocation_request.token, client.client_id, token_manager, db)
     return {}

@@ -21,7 +21,7 @@ single use.
 import base64
 import hashlib
 import secrets
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 import pytest
 from conftest import replace_settings
@@ -233,6 +233,113 @@ def test_unregistered_redirect_uri_is_refused(client, make_user):
     assert "location" not in response.headers
 
 
+def test_missing_client_or_redirect_is_never_redirected(client):
+    _, challenge = _pkce()
+    complete = {
+        "response_type": "code",
+        "client_id": CLIENT_ID,
+        "redirect_uri": REDIRECT_URI,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+        "state": "opaque-state",
+    }
+
+    for invalid in ("client_id", "redirect_uri"):
+        for params in (
+            {name: value for name, value in complete.items() if name != invalid},
+            {**complete, invalid: ""},
+        ):
+            response = client.get(AUTHORIZE, params=params, follow_redirects=False)
+
+            assert response.status_code == 400, invalid
+            assert set(response.json()) == {"error", "error_description"}, invalid
+            assert response.json()["error"] == "invalid_request", invalid
+            assert invalid in response.json()["error_description"], invalid
+            assert "location" not in response.headers, invalid
+
+
+def test_missing_authorization_fields_use_the_validated_redirect(client):
+    _, challenge = _pkce()
+    complete = {
+        "response_type": "code",
+        "client_id": CLIENT_ID,
+        "redirect_uri": REDIRECT_URI,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+        "state": "opaque-state",
+    }
+
+    for invalid in ("response_type", "code_challenge", "code_challenge_method"):
+        for params in (
+            {name: value for name, value in complete.items() if name != invalid},
+            {**complete, invalid: ""},
+        ):
+            response = client.get(AUTHORIZE, params=params, follow_redirects=False)
+
+            assert response.status_code == 302, invalid
+            query = parse_qs(urlsplit(response.headers["location"]).query)
+            assert query["error"] == ["invalid_request"], invalid
+            assert query["error_description"], invalid
+            assert query["state"] == ["opaque-state"], invalid
+            assert query["iss"] == [jafaal.get_settings().resolved_issuer], invalid
+
+
+def test_duplicate_client_or_redirect_is_never_redirected(client):
+    _, challenge = _pkce()
+    complete = [
+        ("response_type", "code"),
+        ("client_id", CLIENT_ID),
+        ("redirect_uri", REDIRECT_URI),
+        ("code_challenge", challenge),
+        ("code_challenge_method", "S256"),
+        ("state", "opaque-state"),
+    ]
+
+    for name, second_value in (
+        ("client_id", SECOND_CLIENT_ID),
+        ("redirect_uri", "com.attacker.app://steal"),
+    ):
+        response = client.get(
+            f"{AUTHORIZE}?{urlencode([*complete, (name, second_value)])}",
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 400, name
+        assert response.json()["error"] == "invalid_request", name
+        assert name in response.json()["error_description"], name
+        assert "location" not in response.headers, name
+
+
+def test_duplicate_authorization_parameters_use_the_validated_redirect(client):
+    _, challenge = _pkce()
+    complete = [
+        ("response_type", "code"),
+        ("client_id", CLIENT_ID),
+        ("redirect_uri", REDIRECT_URI),
+        ("code_challenge", challenge),
+        ("code_challenge_method", "S256"),
+        ("state", "opaque-state"),
+        ("scope", "profile"),
+        ("idp", "oidc"),
+    ]
+
+    for name in ("response_type", "code_challenge", "code_challenge_method", "state", "scope", "idp"):
+        original = next(value for parameter, value in complete if parameter == name)
+        response = client.get(
+            f"{AUTHORIZE}?{urlencode([*complete, (name, original)])}",
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 302, name
+        query = parse_qs(urlsplit(response.headers["location"]).query)
+        assert query["error"] == ["invalid_request"], name
+        assert query["iss"] == [jafaal.get_settings().resolved_issuer], name
+        if name == "state":
+            assert "state" not in query
+        else:
+            assert query["state"] == ["opaque-state"], name
+
+
 def test_redirect_uri_matching_is_exact_not_prefix(client):
     """A registered URI must not authorise its own sub-paths or query variants.
 
@@ -411,11 +518,97 @@ def test_missing_parameters_are_reported(client):
         "client_id": CLIENT_ID,
     }
     for omitted in ("code", "code_verifier", "redirect_uri", "client_id"):
-        response = client.post(TOKEN, data={**complete, omitted: ""})
-        assert response.status_code == 400, omitted
-        body = response.json()
-        assert body["error"] == "invalid_request", omitted
-        assert omitted in body["error_description"], omitted
+        for data in (
+            {name: value for name, value in complete.items() if name != omitted},
+            {**complete, omitted: ""},
+        ):
+            response = client.post(TOKEN, data=data)
+            assert response.status_code == 400, omitted
+            body = response.json()
+            assert set(body) == {"error", "error_description"}, omitted
+            assert body["error"] == "invalid_request", omitted
+            assert omitted in body["error_description"], omitted
+
+
+def test_missing_grant_type_is_an_oauth_invalid_request(client):
+    for data in ({}, {"grant_type": ""}):
+        response = client.post(TOKEN, data=data)
+
+        assert response.status_code == 400
+        assert response.json() == {
+            "error": "invalid_request",
+            "error_description": "'grant_type' is required.",
+        }
+
+
+def test_refresh_grant_requires_a_non_empty_refresh_token(client):
+    for data in (
+        {"grant_type": "refresh_token"},
+        {"grant_type": "refresh_token", "refresh_token": ""},
+    ):
+        response = client.post(TOKEN, data=data)
+
+        assert response.status_code == 400
+        assert set(response.json()) == {"error", "error_description"}
+        assert response.json()["error"] == "invalid_request"
+        assert "refresh_token" in response.json()["error_description"]
+
+
+def test_duplicate_token_form_fields_are_invalid_requests(client):
+    authorization_code = {
+        "grant_type": "authorization_code",
+        "code": "x" * 43,
+        "code_verifier": "y" * 43,
+        "redirect_uri": REDIRECT_URI,
+        "client_id": CLIENT_ID,
+    }
+    requests = [(authorization_code, name) for name in authorization_code] + [
+        ({"grant_type": "refresh_token", "refresh_token": "not-a-token"}, "refresh_token"),
+        ({"grant_type": "password", "extension": "value"}, "extension"),
+    ]
+
+    for data, repeated_name in requests:
+        pairs = [*data.items(), (repeated_name, data[repeated_name])]
+        response = client.post(
+            TOKEN,
+            content=urlencode(pairs),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+
+        assert response.status_code == 400, repeated_name
+        assert set(response.json()) == {"error", "error_description"}, repeated_name
+        assert response.json()["error"] == "invalid_request", repeated_name
+        assert repeated_name in response.json()["error_description"], repeated_name
+
+
+def test_token_endpoint_rejects_non_form_malformed_or_non_text_input(client):
+    responses = [
+        client.post(TOKEN, json={"grant_type": "authorization_code"}),
+        client.post(
+            TOKEN,
+            content=b"not-a-multipart-body",
+            headers={"Content-Type": "multipart/form-data"},
+        ),
+        client.post(TOKEN, files={"grant_type": ("grant.txt", b"authorization_code")}),
+    ]
+
+    for response in responses:
+        assert response.status_code == 400
+        assert set(response.json()) == {"error", "error_description"}
+        assert response.json()["error"] == "invalid_request"
+
+
+def test_malformed_refresh_grant_is_an_oauth_invalid_grant(client):
+    response = client.post(
+        TOKEN,
+        data={"grant_type": "refresh_token", "refresh_token": "not-a-jwt"},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "error": "invalid_grant",
+        "error_description": "The refresh token is invalid, expired, or was revoked.",
+    }
 
 
 def test_token_endpoint_errors_are_not_cacheable(client):
@@ -423,6 +616,37 @@ def test_token_endpoint_errors_are_not_cacheable(client):
     # intermediary retains an authorization outcome.
     response = client.post(TOKEN, data={"grant_type": "password"})
     assert response.headers["cache-control"] == "no-store"
+
+
+def test_openapi_keeps_the_manually_parsed_oauth_request_contract(client):
+    document = client.get("/openapi.json").json()
+
+    authorization = document["paths"][AUTHORIZE]["get"]
+    query = {parameter["name"]: parameter for parameter in authorization["parameters"]}
+    assert set(query) == {
+        "response_type",
+        "client_id",
+        "redirect_uri",
+        "code_challenge",
+        "code_challenge_method",
+        "idp",
+        "state",
+        "scope",
+    }
+    assert all(query[name]["required"] for name in ("response_type", "client_id", "redirect_uri"))
+    assert all(query[name]["required"] for name in ("code_challenge", "code_challenge_method"))
+    assert all(not query[name]["required"] for name in ("idp", "state", "scope"))
+
+    expected_forms = {
+        TOKEN: ({"grant_type"}, {"grant_type", "code", "code_verifier", "redirect_uri", "client_id", "refresh_token"}),
+        "/api/v1/auth/introspect": ({"token"}, {"token", "token_type_hint"}),
+        "/api/v1/auth/revoke": ({"token", "client_id"}, {"token", "client_id", "token_type_hint"}),
+    }
+    for path, (required, properties) in expected_forms.items():
+        request_body = document["paths"][path]["post"]["requestBody"]
+        schema = request_body["content"]["application/x-www-form-urlencoded"]["schema"]
+        assert set(schema["required"]) == required, path
+        assert set(schema["properties"]) == properties, path
 
 
 def test_successful_token_responses_are_not_cacheable(client, make_user):

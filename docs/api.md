@@ -63,8 +63,17 @@ Relying Party. They are not OpenID Provider endpoints.
 | `POST` | `/public/webauthn/authenticate/begin`, `/public/webauthn/authenticate/complete` | Passwordless passkey login |
 
 Login, MFA, passkey, password, signup, session, API-key, and administrative
-routes are not OAuth grants or endpoints. They use JAFAAL's `{"detail",
-"code"}` error contract rather than the OAuth error body.
+routes are not OAuth grants or endpoints. Their JAFAAL domain failures use the
+`{"detail", "code"}` contract; request-schema validation may use FastAPI's
+native HTTP `422` detail array.
+
+OAuth protocol routes never use that FastAPI validation body. Missing, empty,
+malformed, non-text, and repeated query or form parameters use the OAuth
+`{"error", "error_description"}` shape. `/auth/authorize` renders that JSON
+without redirecting until one registered client and redirect URI validate;
+later errors are sent to that validated URI with `error`, `error_description`,
+`iss`, and an unambiguous `state`. See [Client integration: OAuth protocol
+errors](clients.md#oauth-protocol-errors).
 
 ## Python API
 
