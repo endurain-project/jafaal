@@ -22,14 +22,14 @@ def _pkce_pair():
 
 
 def test_append_query_params_preserves_the_existing_query():
-    url = idp_utils.append_query_params("com.example.app://cb?a=1", {"code": "xyz"})
-    assert url == "com.example.app://cb?a=1&code=xyz"
+    url = idp_utils.append_query_params("com.example.app:/cb?a=1", {"code": "xyz"})
+    assert url == "com.example.app:/cb?a=1&code=xyz"
 
 
 def test_append_query_params_percent_encodes_values():
     # Concatenating instead would let a value smuggle extra parameters into the
     # URL the receiving client parses.
-    url = idp_utils.append_query_params("com.example.app://cb", {"state": "a&code=stolen"})
+    url = idp_utils.append_query_params("com.example.app:/cb", {"state": "a&code=stolen"})
     assert "a%26code%3Dstolen" in url
     assert url.count("code=") == 0
 

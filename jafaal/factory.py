@@ -297,10 +297,10 @@ def create_auth_router(
     """Build the aggregated JAFAAL auth router.
 
     Args:
-        app: When provided, the :class:`~jafaal.exceptions.JafaalError` exception
-            handler is registered on it. Omit it and call
-            :func:`~jafaal.error_handler.register_exception_handlers` yourself if
-            you assemble the app differently.
+        app: When provided, the :class:`~jafaal.exceptions.JafaalError`
+            exception handler and the issuer-derived RFC 8414 metadata route are
+            registered on it. Omit it and install both explicitly if you
+            assemble the app differently.
         rate_limiter: The host's rate limiter. Installed before the sub-routers
             are imported so their decorators resolve it. Defaults to the no-op
             limiter already in effect (no enforcement).
@@ -348,7 +348,7 @@ def create_auth_router(
     from jafaal.identity_providers.public_router import router as idp_public_router
     from jafaal.identity_providers.router import router as idp_router
     from jafaal.jwks import router as jwks_router
-    from jafaal.metadata import create_metadata_router
+    from jafaal.metadata import create_metadata_router, issuer_derived_metadata_path
     from jafaal.password_reset_tokens.router import router as password_reset_router
     from jafaal.router import router as auth_router
     from jafaal.sessions.router import router as sessions_router
@@ -370,21 +370,19 @@ def create_auth_router(
     aggregate.include_router(sign_up_router, prefix=prefixes.sign_up, tags=["sign_up"])
     aggregate.include_router(webauthn_router, prefix=prefixes.webauthn, tags=["webauthn"])
     aggregate.include_router(webauthn_public_router, prefix=prefixes.webauthn_public, tags=["webauthn"])
-    # JWKS is mounted at the aggregate root (no sub-prefix) so it lands at
-    # ``<api-root>/.well-known/jwks.json`` — the URL to advertise as the
-    # ``jwks_uri`` for resource servers verifying asymmetric tokens. The RFC 8414
-    # discovery document sits beside it and points at both.
-    #
-    # It stays on the aggregate router rather than moving to the RFC 8414 §3
-    # issuer-derived path, because the endpoint URLs *inside* the document are
-    # built from the mount, and the mount is only knowable from the request path
-    # of a route that is itself mounted. An app-level absolute route would serve
-    # the document from the right place with the wrong endpoints in it, which is
-    # strictly worse. A host that needs the spec location mounts a second copy —
-    # ``create_metadata_router(prefixes.auth, path=issuer_derived_metadata_path())``
-    # — or serves ``get_authorization_server_metadata()`` there itself.
+    # Keep the aggregate metadata location for compatibility and mount the RFC
+    # 8414 issuer-derived location directly on the application when available.
+    # At request time the app-root handler resolves the named authorization route,
+    # after the host has mounted this aggregate, so both copies advertise the
+    # same real endpoint URLs without guessing the aggregate prefix.
     aggregate.include_router(jwks_router)
     aggregate.include_router(create_metadata_router(prefixes.auth))
+    if app is not None:
+        metadata_path = issuer_derived_metadata_path()
+        installed_paths = set(getattr(app.state, "_jafaal_metadata_paths", ()))
+        if metadata_path not in installed_paths:
+            app.include_router(create_metadata_router(prefixes.auth, path=metadata_path))
+            app.state._jafaal_metadata_paths = (*installed_paths, metadata_path)
     return aggregate
 
 

@@ -288,10 +288,12 @@ first.
 JAFAAL issues browser redirects for the SSO callback, always to the
 `redirect_uri` the initiating client registered and never to a configured
 fallback path. The target is matched byte-for-byte against
-[`OAuthClient.redirect_uris`][jafaal.OAuthClient] before the flow starts, so
-there is no open redirect to defend against — but **setting transport and
-content-security headers is the host's responsibility**. On the frontend pages
-that receive these redirects, and on your API responses generally, set at least:
+[`OAuthClient.redirect_uris`][jafaal.OAuthClient] before the flow starts, except
+that RFC 8252 requires an IP-loopback client's request port to vary. Every other
+component remains exact, so there is no open redirect to defend against — but
+**setting transport and content-security headers is the host's
+responsibility**. On the frontend pages that receive these redirects, and on
+your API responses generally, set at least:
 
 ```text
 Strict-Transport-Security: max-age=63072000; includeSubDomains; preload

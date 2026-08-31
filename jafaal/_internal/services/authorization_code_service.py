@@ -47,6 +47,7 @@ import jafaal.settings as jafaal_settings
 import jafaal.token_hashing as token_hashing
 import jafaal.utils as jafaal_utils
 from jafaal._core import network
+from jafaal._core import redirect_uris as redirect_uri_policy
 
 if TYPE_CHECKING:
     from fastapi import Request, Response
@@ -136,7 +137,10 @@ def resolve_authorization_code(
 
     # RFC 6749 §4.1.3: the redirect_uri sent here MUST be identical to the one in
     # the authorization request.
-    if oauth_state.redirect_uri is None or not hmac.compare_digest(oauth_state.redirect_uri, redirect_uri):
+    if oauth_state.redirect_uri is None or not redirect_uri_policy.redirect_uri_matches_exactly(
+        oauth_state.redirect_uri,
+        redirect_uri,
+    ):
         logger.warning(f"Authorization code redirect_uri mismatch (state {oauth_state.id[:8]}...)")
         raise jafaal_exceptions.InvalidGrantError(_INVALID_GRANT)
 
@@ -310,7 +314,8 @@ def begin_local_authorization(
         code_challenge: The client's PKCE challenge.
         code_challenge_method: The client's PKCE method (``S256``).
         client_id: The registered client, already resolved.
-        redirect_uri: The client's redirect URI, already matched exactly.
+        redirect_uri: The client's redirect URI, already validated against its
+            registration.
         client_state: The client's opaque ``state``, echoed back with the code.
         requested_scope: The client's ``scope`` request, already validated.
 
@@ -441,8 +446,8 @@ def complete_local_authorization(
     params = {"code": code, "iss": jafaal_settings.get_settings().resolved_issuer}
     if oauth_state.client_state:
         params["state"] = oauth_state.client_state
-    # ``redirect_uri`` was matched byte-for-byte against the client's
-    # registration before the request was parked, so it is safe to navigate to.
+    # ``redirect_uri`` was validated against the client's registration before
+    # the request was parked, so it is safe to navigate to.
     assert oauth_state.redirect_uri  # noqa: S101 - guaranteed by begin_local_authorization
     return {"redirect_to": idp_utils.append_query_params(oauth_state.redirect_uri, params)}
 

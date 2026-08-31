@@ -45,6 +45,7 @@ from urllib.parse import urlparse
 from cryptography.fernet import Fernet
 
 from jafaal._core import jwk_keys
+from jafaal._core import redirect_uris as redirect_uri_policy
 from jafaal._core.registry import ConfigSlot
 
 __all__ = [
@@ -209,8 +210,10 @@ class TokenSettings:
             publishes the public key at the JWKS endpoint.
         access_token_expire_minutes: Access-token lifetime, in minutes.
         refresh_token_expire_days: Refresh-token lifetime, in days.
-        issuer: JWT ``iss`` claim. Defaults to ``base_url`` when empty
-            (see :attr:`AuthSettings.resolved_issuer`).
+        issuer: Public authorization-server URL and JWT ``iss`` claim. Defaults
+            to ``base_url`` when empty (see
+            :attr:`AuthSettings.resolved_issuer`). Deployed values require an
+            absolute HTTPS URL without userinfo, query, or fragment.
         audience: JWT ``aud`` claim. Defaults to ``base_url`` when empty
             (see :attr:`AuthSettings.resolved_audience`).
         client_id: Value of the ``client_id`` claim RFC 9068 requires on an
@@ -497,10 +500,10 @@ class SsoSettings:
 
     Notably absent is anything describing *where* to send the browser after a
     flow. Post-login, post-link and post-step-up targets all come from the
-    initiating request's ``redirect_uri``, matched exactly against the calling
+    initiating request's ``redirect_uri``, validated against the calling
     :class:`OAuthClient`'s registration. A configured frontend path would be a
-    second, weaker redirect rule sitting beside the exact-match one — and the
-    weaker rule is the one an attacker would use.
+    second, weaker redirect rule beside that registration policy, and the weaker
+    rule is the one an attacker would use.
 
     Attributes:
         idp_require_https: When ``True`` (default), identity-provider endpoints
@@ -653,8 +656,44 @@ class AuditSettings:
 #: ``refresh_token``.
 TOKEN_DELIVERY_MODES: frozenset[str] = frozenset({"body", "cookie"})
 
-#: Loopback hosts RFC 8252 §7.3 permits a plain-``http`` redirect URI to use.
-_LOOPBACK_HOSTS: frozenset[str] = frozenset({"127.0.0.1", "::1", "localhost"})
+
+_LOCAL_HTTP_HOSTS: frozenset[str] = frozenset({"127.0.0.1", "::1"})
+
+
+def _validate_public_url(name: str, value: str, *, deployed: bool) -> None:
+    """Validate one externally visible deployment URL."""
+    if not value:
+        if deployed:
+            raise ValueError(f"{name} is required in a deployed environment.")
+        return
+    if not value.isascii():
+        raise ValueError(f"{name} must be an ASCII URL; percent-encode non-ASCII characters.")
+    if any(character.isspace() or ord(character) < 0x20 or ord(character) == 0x7F for character in value):
+        raise ValueError(f"{name} must not contain whitespace or control characters.")
+
+    try:
+        parsed = urlparse(value)
+        _ = parsed.port
+    except ValueError as err:
+        raise ValueError(f"{name} is malformed: {err}") from err
+
+    if not parsed.scheme or not parsed.netloc or not parsed.hostname:
+        raise ValueError(f"{name} must be an absolute URL with a scheme and host.")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError(f"{name} must not contain user credentials.")
+    if parsed.hostname == "localhost":
+        raise ValueError(f"{name} must use the loopback IP literal 127.0.0.1 or [::1], not localhost.")
+    if "?" in value or "#" in value:
+        raise ValueError(f"{name} must not contain a query or fragment.")
+
+    scheme = parsed.scheme.lower()
+    if scheme == "https":
+        return
+    if not deployed and scheme == "http" and parsed.hostname in _LOCAL_HTTP_HOSTS:
+        return
+    if deployed:
+        raise ValueError(f"{name} must use HTTPS in a deployed environment.")
+    raise ValueError(f"{name} must use HTTPS or local HTTP on 127.0.0.1 or [::1].")
 
 
 @dataclass(frozen=True)
@@ -681,10 +720,11 @@ class OAuthClient:
             opaque string; a reverse-DNS name (``com.example.app``) is
             conventional for native apps.
         redirect_uris: Every URI the client may receive an authorization code
-            at, matched **exactly** (byte-for-byte, per RFC 9700 §4.1.3 — no
-            prefix, wildcard, or path-suffix matching). A plain-``http`` URI is
-            accepted only for loopback (RFC 8252 §7.3). Not required for a
-            client that only uses the direct login and refresh endpoints.
+            at. HTTPS and private-use URIs match exactly (byte-for-byte, per RFC
+            9700 §4.1.3); only the port may vary for native loopback HTTP on
+            ``127.0.0.1`` or ``[::1]``. Private-use schemes use reverse-domain
+            syntax and one slash, e.g. ``com.example.app:/oauth/callback``.
+            Not required for a client that only uses direct login and refresh.
         token_delivery: ``"body"`` (default, RFC 6749 §5.1) or ``"cookie"``
             (RFC 9700 §7.2 — refresh token as an ``HttpOnly`` cookie, CSRF token
             in the body). Browser clients want ``cookie``; everything else wants
@@ -692,10 +732,8 @@ class OAuthClient:
         scopes: Ceiling on what this client's tokens may carry, intersected with
             what the host's :class:`~jafaal.ports.ScopeResolver` grants the user.
             Empty (default) means "whatever the user holds", which is correct for
-            a first-party app that *is* the application. Set it for any client
-            you do not control: without a ceiling, registering a client grants it
-            the user's entire account, and JAFAAL has no consent screen to ask
-            the user about it.
+            a first-party app that *is* the application. Give each registered
+            first-party client the narrowest ceiling it needs.
         name: Human-readable label, used in logs and audit records.
     """
 
@@ -714,18 +752,23 @@ class OAuthClient:
                 f"{sorted(TOKEN_DELIVERY_MODES)} (got {self.token_delivery!r})."
             )
         for uri in self.redirect_uris:
-            _validate_redirect_uri(self.client_id, uri)
+            try:
+                redirect_uri_policy.validate_redirect_uri(uri)
+            except ValueError as err:
+                raise ValueError(
+                    f"OAuthClient(client_id={self.client_id!r}) redirect_uri {uri!r} is invalid: {err}"
+                ) from err
 
     def permits(self, redirect_uri: str) -> bool:
         """Return whether ``redirect_uri`` is registered for this client.
 
-        Compared in constant time and byte-for-byte. RFC 9700 §4.1.3 requires
-        exact matching precisely because every relaxation (prefix, wildcard,
-        sub-path) has been used to exfiltrate authorization codes.
+        Every registered candidate is evaluated. Matching is byte-for-byte
+        except for the RFC 8252 IP-loopback port rule; prefixes, wildcards, and
+        path suffixes are never accepted.
         """
         matched = False
         for registered in self.redirect_uris:
-            matched |= hmac.compare_digest(registered, redirect_uri)
+            matched |= redirect_uri_policy.redirect_uri_matches(registered, redirect_uri)
         return matched
 
     @property
@@ -756,34 +799,6 @@ class OAuthClient:
         return tuple(scope for scope in granted if scope in ceiling)
 
 
-def _validate_redirect_uri(client_id: str, uri: str) -> None:
-    """Reject a redirect URI that is malformed or transmits a code in cleartext.
-
-    Args:
-        client_id: Owning client, for the error message.
-        uri: The candidate redirect URI.
-
-    Raises:
-        ValueError: If the URI is empty, carries a fragment (RFC 6749 §3.1.2),
-            or uses plain ``http`` for a non-loopback host (RFC 8252 §7.3 allows
-            ``http`` only for loopback, because anything else puts the
-            authorization code on the wire in clear).
-    """
-    if not uri:
-        raise ValueError(f"OAuthClient(client_id={client_id!r}) redirect_uri must not be empty.")
-    if "#" in uri:
-        raise ValueError(
-            f"OAuthClient(client_id={client_id!r}) redirect_uri {uri!r} must not carry a fragment (RFC 6749 §3.1.2)."
-        )
-    parsed = urlparse(uri)
-    if parsed.scheme == "http" and (parsed.hostname or "") not in _LOOPBACK_HOSTS:
-        raise ValueError(
-            f"OAuthClient(client_id={client_id!r}) redirect_uri {uri!r} uses plain http for a non-loopback "
-            f"host. RFC 8252 §7.3 permits http only for loopback ({sorted(_LOOPBACK_HOSTS)}); use https or a "
-            "private-use scheme."
-        )
-
-
 # ===========================================================================
 # Root
 # ===========================================================================
@@ -801,7 +816,10 @@ class AuthSettings:
             group.
         base_url: Public base URL of the host app. Used to build SSO redirect
             and error URLs, and as the default JWT issuer/audience, WebAuthn RP
-            ID and origin, and CSRF trusted origin.
+            ID and origin, and CSRF trusted origin. Required in deployed
+            environments, where it must be absolute HTTPS without userinfo,
+            query, or fragment. Local development may use HTTP only on
+            ``127.0.0.1`` or ``[::1]``.
         app_name: Human-readable application name; used as the MFA TOTP issuer
             shown in authenticator apps and as the default WebAuthn RP name.
         environment: Deployment environment. Must be one of
@@ -897,6 +915,8 @@ class AuthSettings:
                 "as deployed (refresh cookies get Secure, and startup fails closed without a distributed "
                 "state store and an enforcing rate limiter)."
             )
+        _validate_public_url("AuthSettings.base_url", self.base_url, deployed=self.is_deployed)
+        _validate_public_url("TokenSettings.issuer", self.resolved_issuer, deployed=self.is_deployed)
         # Cross-group rule: the signing algorithm and the key material that
         # backs it are configured separately, so their consistency can only be
         # checked here.

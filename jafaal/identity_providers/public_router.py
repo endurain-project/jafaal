@@ -5,10 +5,9 @@ There is exactly one way into an SSO login: ``GET /auth/authorize``, the RFC 674
 trip — the provider's callback — plus the read-only list of enabled providers.
 
 Every browser redirect this module emits targets a ``redirect_uri`` that was
-matched exactly against a registered :class:`~jafaal.settings.OAuthClient` before
-the flow started. There is no configured "frontend path" fallback and no
-scheme-level allow-list: a URI is either registered, byte-for-byte, or JAFAAL
-will not send a browser to it.
+validated against a registered :class:`~jafaal.settings.OAuthClient` before the
+flow started. There is no configured "frontend path" fallback: HTTPS and
+private-use targets are exact, and only an IP-loopback port may vary.
 """
 
 import hmac
@@ -319,9 +318,9 @@ def _claim_callback_state(
 def _return_to_client(oauth_state: oauth_state_models.OAuthState, params: dict[str, str]) -> RedirectResponse:
     """Redirect the browser back to the client that started the flow.
 
-    ``oauth_state.redirect_uri`` was matched exactly against the initiating
-    client's registered list before the flow began, so it is safe to navigate to
-    here. Values go through :func:`_append_query_params`, which percent-encodes,
+    ``oauth_state.redirect_uri`` was validated against the initiating client's
+    registered list before the flow began, so it is safe to navigate to here.
+    Values go through :func:`_append_query_params`, which percent-encodes,
     rather than string concatenation — otherwise a value could inject additional
     parameters into the URL the client parses.
 

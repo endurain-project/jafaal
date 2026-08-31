@@ -18,7 +18,7 @@ Do **not** put the access token in `localStorage` or `sessionStorage`. Anything
 script can read, injected script can read.
 
 The cookie is `HttpOnly`, `SameSite=Strict`, scoped to the auth path, and
-`Secure` whenever `environment` is a deployed value. On localhost the example
+`Secure` whenever `environment` is a deployed value. On local IP loopback the example
 uses `environment="development"` so the cookie survives plain HTTP.
 
 ## 1. Log in

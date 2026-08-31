@@ -224,7 +224,7 @@ WEB_CLIENT_ID = "test-web"
 NATIVE_CLIENT_ID = "test-native"
 
 #: The native client's registered redirect URI, matched byte-for-byte.
-NATIVE_REDIRECT_URI = "com.example.app://callback"
+NATIVE_REDIRECT_URI = "com.example.app:/callback"
 
 #: A client with a scope ceiling, for asserting that a token is narrowed to the
 #: intersection of what the user holds and what the client may receive.
@@ -245,7 +245,7 @@ OAUTH_CLIENTS: tuple[jafaal.OAuthClient, ...] = (
     ),
     jafaal.OAuthClient(
         client_id=LIMITED_CLIENT_ID,
-        redirect_uris=("com.example.limited://callback",),
+        redirect_uris=("com.example.limited:/callback",),
         token_delivery="body",
         scopes=(jafaal_scopes.PROFILE,),
         name="Test limited app",

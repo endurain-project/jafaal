@@ -51,7 +51,8 @@ The database is SQLite in `minimal_app/example.db` — delete it to start over.
 
 ## The endpoints you get
 
-Mounted under `/api/v1` by the example.
+Mounted under `/api/v1` by the example, except the issuer-derived RFC 8414
+metadata route at the application root.
 
 ### Core authentication
 
@@ -70,7 +71,7 @@ Mounted under `/api/v1` by the example.
 | `POST` | `/auth/token` | `authorization_code` and `refresh_token` grants |
 | `POST` | `/auth/introspect` | RFC 7662 introspection (requires `auth:introspect`) |
 | `POST` | `/auth/revoke` | RFC 7009 revocation |
-| `GET` | `/.well-known/oauth-authorization-server` | RFC 8414 metadata |
+| `GET` | `/.well-known/oauth-authorization-server` | RFC 8414 metadata for the example's root issuer |
 | `GET` | `/.well-known/jwks.json` | Public keys (404 under HS256 — there are none) |
 
 ### Account and credential management

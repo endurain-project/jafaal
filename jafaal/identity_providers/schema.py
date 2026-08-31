@@ -234,7 +234,7 @@ class StepUpReauthRequest(BaseModel):
     """Request body for beginning an IdP step-up re-authentication.
 
     Carries the same client/redirect pair the authorization endpoint takes, and
-    it is validated by the same exact-match gate: a step-up round trip ends in a
+    it is validated by the same registration gate: a step-up round trip ends in a
     browser redirect, so it gets the same open-redirect protection a login does.
 
     Attributes:

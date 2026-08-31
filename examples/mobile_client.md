@@ -2,7 +2,7 @@
 
 How a native app drives JAFAAL. Runs against [minimal_app/app.py](minimal_app/app.py)
 with the `example-mobile` client, registered with `token_delivery="body"` and the
-redirect URI `com.example.app://callback`.
+redirect URI `com.example.app:/callback`.
 
 ## Which flow to use
 
@@ -23,7 +23,7 @@ equivalent and point it at the discovery document.
 ## 0. Discover the endpoints
 
 ```http
-GET /api/v1/.well-known/oauth-authorization-server
+GET /.well-known/oauth-authorization-server
 ```
 
 Everything needed to drive JAFAAL is a standard RFC 8414 field. Do not hard-code
@@ -51,7 +51,7 @@ on the real domain) and runs in an isolated process your app cannot read.
 GET /api/v1/auth/authorize
   ?response_type=code
   &client_id=example-mobile
-  &redirect_uri=com.example.app%3A%2F%2Fcallback
+  &redirect_uri=com.example.app%3A%2Fcallback
   &code_challenge=<challenge>
   &code_challenge_method=S256
   &state=<random>
@@ -79,7 +79,7 @@ appears in a redirect** — only a single-use code.
 The browser redirects to your registered scheme:
 
 ```
-com.example.app://callback?code=<code>&state=<state>&iss=http%3A%2F%2F127.0.0.1%3A8000
+com.example.app:/callback?code=<code>&state=<state>&iss=http%3A%2F%2F127.0.0.1%3A8000
 ```
 
 Before doing anything else:
@@ -98,7 +98,7 @@ grant_type=authorization_code
 &code=<code>
 &code_verifier=<verifier>
 &client_id=example-mobile
-&redirect_uri=com.example.app://callback
+&redirect_uri=com.example.app:/callback
 ```
 
 ```json

@@ -150,9 +150,9 @@ def create_oauth_state(
         user_id: User ID for link and step-up modes.
         purpose: Flow purpose (``login``, ``link``, or ``stepup``).
         client_id: The registered public client that started the flow.
-        redirect_uri: The client's redirect URI, already matched exactly against
-            its registration. Every browser redirect this flow later emits goes
-            here and nowhere else.
+        redirect_uri: The client's redirect URI, already validated against its
+            registration. Every browser redirect this flow later emits goes here
+            and nowhere else.
         client_state: The client's opaque ``state``, echoed back with the code.
         requested_scope: The space-delimited ``scope`` from the authorization
             request, already validated against the catalog and the client's

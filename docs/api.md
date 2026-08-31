@@ -5,7 +5,9 @@
 The paths below use the default [`RouterPrefixes`][jafaal.RouterPrefixes] and
 are relative to the path where the host mounts
 [`create_auth_router()`][jafaal.create_auth_router]. A host may override the
-prefixes, so deployed absolute paths can differ.
+prefixes, so deployed absolute paths can differ. The RFC 8414 metadata route is
+the exception: its standard location begins at the issuer's origin root, with a
+compatibility copy retained under the aggregate mount.
 
 JAFAAL's registered clients are trusted, statically configured, first-party
 public clients. Calling a route an OAuth endpoint describes its wire contract;
@@ -21,7 +23,8 @@ extension, even when it implements a standard such as WebAuthn internally.
 | `POST` | `/auth/token` | RFC 6749 token endpoint; authorization-code and refresh-token grants |
 | `POST` | `/auth/introspect` | RFC 7662 token introspection |
 | `POST` | `/auth/revoke` | RFC 7009 token revocation |
-| `GET` | `/.well-known/oauth-authorization-server` | RFC 8414 authorization-server metadata |
+| `GET` | `/.well-known/oauth-authorization-server{issuer-path}` | RFC 8414 authorization-server metadata; `{issuer-path}` is empty for a root issuer |
+| `GET` | `<api-root>/.well-known/oauth-authorization-server` | Compatibility copy of the RFC 8414 metadata document |
 | `GET` | `/.well-known/jwks.json` | RFC 7517 JSON Web Key Set used to verify asymmetric tokens |
 
 ### Upstream OIDC relying-party integration

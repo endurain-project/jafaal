@@ -47,8 +47,8 @@ roles, and implements the standards that govern each:
 > That is the boundary, and it is deliberate rather than unfinished. Register
 > your applications via `AuthSettings.oauth_clients` and drive `/auth/authorize`
 > → `/auth/token` with any standard OAuth client library — PKCE mandatory,
-> `code` the only response type, redirect URIs matched byte-for-byte, clients
-> public per RFC 8252.
+> `code` the only response type, redirect URIs matched byte-for-byte except for
+> native IP-loopback ports, clients public per RFC 8252.
 >
 > **Not planned:** third-party clients (consent screen, client secrets, dynamic
 > registration), being an OpenID Provider (`id_token`, userinfo, the logout
@@ -307,7 +307,7 @@ configure_api_key_scopes(["reports:read"])
 # Register each one so redirect URIs can be matched exactly (RFC 9700 §4.1):
 # jafaal.AuthSettings(..., oauth_clients=(
 #     jafaal.OAuthClient(client_id="com.example.app",
-#                       redirect_uris=("com.example.app://oauth/callback",)),
+#                       redirect_uris=("com.example.app:/oauth/callback",)),
 # ))
 
 # Richer authorisation than the built-in is_superuser two tiers? Implement the

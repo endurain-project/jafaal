@@ -67,6 +67,103 @@ def test_issuer_matches_the_iss_claim_jafaal_mints(doc):
     assert doc["issuer"] == jafaal.get_settings().resolved_issuer
 
 
+def test_metadata_is_served_at_the_issuer_derived_path(client, doc):
+    response = client.get(metadata.issuer_derived_metadata_path())
+
+    assert response.status_code == 200
+    assert response.json() == doc
+
+
+def test_pathful_issuer_metadata_and_every_advertised_endpoint_are_reachable():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    original = jafaal.get_settings()
+    private_key = (
+        ec.generate_private_key(ec.SECP256R1())
+        .private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+        .decode()
+    )
+    jafaal.configure(
+        replace_settings(
+            original,
+            issuer="https://app.test/api/v2",
+            algorithm="ES256",
+            private_key=private_key,
+        )
+    )
+    try:
+        app = FastAPI()
+        app.include_router(jafaal.create_auth_router(app=app, verify=False), prefix="/api/v2")
+
+        with TestClient(app) as test_client:
+            metadata_path = "/.well-known/oauth-authorization-server/api/v2"
+            response = test_client.get(metadata_path)
+            assert response.status_code == 200
+            document = response.json()
+
+            expected = {
+                "issuer": "https://app.test/api/v2",
+                "authorization_endpoint": "https://app.test/api/v2/auth/authorize",
+                "token_endpoint": "https://app.test/api/v2/auth/token",
+                "introspection_endpoint": "https://app.test/api/v2/auth/introspect",
+                "revocation_endpoint": "https://app.test/api/v2/auth/revoke",
+                "jwks_uri": "https://app.test/api/v2/.well-known/jwks.json",
+            }
+            for name, url in expected.items():
+                assert document[name] == url
+
+            for name in (
+                "authorization_endpoint",
+                "token_endpoint",
+                "introspection_endpoint",
+                "revocation_endpoint",
+                "jwks_uri",
+            ):
+                path = document[name].removeprefix("https://app.test")
+                assert test_client.get(path).status_code != 404, name
+
+            compatibility = test_client.get("/api/v2/.well-known/oauth-authorization-server")
+            assert compatibility.json() == document
+    finally:
+        jafaal.configure(original)
+
+
+def test_metadata_uses_external_issuer_origin_and_asgi_root_path():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    original = jafaal.get_settings()
+    jafaal.configure(
+        replace_settings(
+            original,
+            base_url="https://app.example",
+            issuer="https://auth.example/proxy/api/v1",
+        )
+    )
+    try:
+        app = FastAPI(root_path="/proxy")
+        app.include_router(jafaal.create_auth_router(app=app, verify=False), prefix="/api/v1")
+
+        with TestClient(app, base_url="http://internal.test") as test_client:
+            document = test_client.get(
+                "/api/v1/.well-known/oauth-authorization-server",
+                headers={"Host": "attacker.example"},
+            ).json()
+
+        assert document["issuer"] == "https://auth.example/proxy/api/v1"
+        assert document["authorization_endpoint"] == "https://auth.example/proxy/api/v1/auth/authorize"
+        assert document["token_endpoint"] == "https://auth.example/proxy/api/v1/auth/token"
+        assert document["introspection_endpoint"] == "https://auth.example/proxy/api/v1/auth/introspect"
+        assert document["revocation_endpoint"] == "https://auth.example/proxy/api/v1/auth/revoke"
+    finally:
+        jafaal.configure(original)
+
+
 def test_advertised_endpoints_exist(client, doc):
     for key in ("token_endpoint", "introspection_endpoint", "revocation_endpoint", "authorization_endpoint"):
         path = doc[key].removeprefix("https://app.test")
@@ -137,9 +234,19 @@ def test_origin_ignores_a_forged_host_header(client):
     assert document["token_endpoint"].startswith("https://app.test/")
 
 
-def test_origin_falls_back_to_the_request_when_base_url_is_unset(client):
+def test_explicit_issuer_origin_wins_when_base_url_is_unset(client):
     original = jafaal.get_settings()
     jafaal.configure(replace_settings(original, base_url="", issuer="https://issuer.test"))
+    try:
+        document = client.get(METADATA_URL).json()
+        assert document["token_endpoint"] == "https://issuer.test/api/v1/auth/token"
+    finally:
+        jafaal.configure(original)
+
+
+def test_origin_falls_back_to_the_request_only_in_local_configuration(client):
+    original = jafaal.get_settings()
+    jafaal.configure(replace_settings(original, base_url="", issuer=""))
     try:
         document = client.get(METADATA_URL).json()
         assert document["token_endpoint"] == "http://testserver/api/v1/auth/token"

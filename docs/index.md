@@ -62,9 +62,10 @@ above; nothing outside it is planned.
 **Inside the boundary.** Register your applications as
 [`OAuthClient`][jafaal.OAuthClient]s and drive `/auth/authorize` → `/auth/token`
 with any standard OAuth client library. PKCE is mandatory, `code` is the only
-response type, and redirect URIs match byte-for-byte. Clients are public
-(RFC 8252): a native app or browser cannot keep a secret, so PKCE — not a client
-credential — is what binds a code to its requester.
+response type, and redirect URIs match byte-for-byte except for native
+IP-loopback ports. Clients are public (RFC 8252): a native app or browser cannot
+keep a secret, so PKCE — not a client credential — is what binds a code to its
+requester.
 
 **Outside the boundary, and not planned:**
 

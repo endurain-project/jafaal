@@ -10,7 +10,8 @@ and
 [mobile](https://github.com/endurain-project/jafaal/blob/main/examples/mobile_client.md).
 
 Paths below are relative to wherever you mounted the router (the example mounts
-it at `/api/v1`).
+it at `/api/v1`), except the RFC 8414 issuer-derived metadata path, which begins
+at the public origin root.
 
 This reference is only for trusted, statically configured, first-party public
 clients owned by the JAFAAL host. They are registered in
@@ -36,7 +37,8 @@ That single setting is the only difference between the web and mobile flows.
 
 | Method | Path | Notes |
 |---|---|---|
-| `GET` | `/.well-known/oauth-authorization-server` | RFC 8414. Carries no extension members — everything needed to drive JAFAAL is a standard field |
+| `GET` | `/.well-known/oauth-authorization-server{issuer-path}` | RFC 8414 app-root location. Carries no extension members; omit `{issuer-path}` for a root issuer |
+| `GET` | `<api-root>/.well-known/oauth-authorization-server` | Compatibility copy of the same metadata document |
 | `GET` | `/.well-known/jwks.json` | RFC 7517. **404 under HS256**, which is correct: there is no public key, and `jwks_uri` is omitted from the metadata rather than serving an empty key set |
 
 Do not hard-code endpoint URLs; read them from the metadata document.

@@ -37,7 +37,8 @@ jafaal.configure(
 
 Configuration is **grouped by concern** rather than being one flat list of
 options, so you read (and document) only the parts you use. Every group has
-working defaults; only `secrets` is required.
+working defaults. `secrets` is always required; deployed environments also
+require an absolute HTTPS `base_url`.
 
 | Group | Covers |
 |---|---|
@@ -90,13 +91,13 @@ jafaal.configure(
             # A native app: the literal RFC 6749 §5.1 response.
             jafaal.OAuthClient(
                 client_id="com.example.app",
-                redirect_uris=("com.example.app://oauth/callback",),
+                redirect_uris=("com.example.app:/oauth/callback",),
                 name="Example for iOS",
             ),
             # A first-party desktop app, capped at what it actually needs.
             jafaal.OAuthClient(
                 client_id="com.example.desktop",
-                redirect_uris=("com.example.desktop://oauth/callback",),
+                redirect_uris=("com.example.desktop:/oauth/callback",),
                 scopes=("profile",),
                 name="Example desktop app",
             ),
@@ -108,7 +109,7 @@ jafaal.configure(
 | Field | Effect |
 | --- | --- |
 | `client_id` | The identifier the client sends. Any stable opaque string. |
-| `redirect_uris` | Where authorization codes may be delivered, matched **byte-for-byte**. Not needed for a client that only uses `/auth/login` and `/auth/refresh`. |
+| `redirect_uris` | Where authorization codes may be delivered. Exact byte matching except that an IP-literal loopback request may vary only its port. Not needed for direct login/refresh only. |
 | `token_delivery` | `"body"` (RFC 6749 §5.1, the default) or `"cookie"` (RFC 9700 §7.2 — `HttpOnly` refresh cookie plus a CSRF token). |
 | `scopes` | Ceiling on the token's scopes, intersected with what your [`ScopeResolver`][jafaal.ScopeResolver] grants the user. Empty means "whatever the user holds". |
 
@@ -118,9 +119,22 @@ jafaal.configure(
     scopes it needs. Do not register a client you do not control; that trust
     model is outside the v0.1 product boundary.
 
-A plain-`http` `redirect_uri` is accepted only for loopback (`127.0.0.1`,
-`[::1]`, `localhost`) per RFC 8252 §7.3; anything else must use `https` or a
-private-use scheme.
+Allowed redirect registrations are deliberately narrow:
+
+- HTTPS URIs include a host and match byte for byte, including path, query, and
+    case.
+- Native desktop loopback uses plain HTTP with the IP literal `127.0.0.1` or
+    `[::1]`. The request may vary only the port from the registered URI. The path
+    and query still match exactly. `localhost` is rejected because RFC 8252 §8.3
+    recommends IP literals to avoid name-resolution and unintended-interface
+    ambiguity.
+- Private-use schemes use reverse-domain syntax with no authority and one slash,
+    for example `com.example.app:/oauth/callback`. Generic schemes such as
+    `myapp:` and authority forms such as `com.example.app://callback` are
+    rejected.
+
+Relative, opaque, credential-bearing, fragmented, and non-loopback HTTP URIs
+are rejected when settings are constructed.
 
 ## Native apps: the authorization-code flow
 
@@ -131,25 +145,26 @@ AppAuth-Android, `openid-client`, MSAL.
 Registration is not bureaucracy — it is what makes **exact `redirect_uri`
 matching** possible, which RFC 9700 §4.1 requires and which is the control that
 stops an authorization code being steered to an attacker's target. Matching is
-byte-for-byte: no prefixes, wildcards, or sub-paths. Clients are *public*
-(RFC 8252): a native app cannot keep a secret, so PKCE — not client
-authentication — binds the code to the requester.
+byte-for-byte with no prefixes, wildcards, or sub-paths; only an IP-literal
+loopback redirect may vary its port. Clients are *public* (RFC 8252): a native
+app cannot keep a secret, so PKCE — not client authentication — binds the code
+to the requester.
 
 The flow:
 
 ```text
 GET  /auth/authorize?response_type=code
                     &client_id=com.example.app
-                    &redirect_uri=com.example.app://oauth/callback
+                    &redirect_uri=com.example.app:/oauth/callback
                     &code_challenge=<S256>&code_challenge_method=S256
                     &state=<opaque>&idp=<provider-slug>
   → 302 to the identity provider
   → (IdP returns to /public/idp/callback/<slug>)
-  → 302 to com.example.app://oauth/callback?code=…&state=…
+    → 302 to com.example.app:/oauth/callback?code=…&state=…
 
 POST /auth/token
      grant_type=authorization_code&code=…&code_verifier=…
-     &redirect_uri=com.example.app://oauth/callback&client_id=com.example.app
+    &redirect_uri=com.example.app:/oauth/callback&client_id=com.example.app
   → {"access_token": …, "refresh_token": …, "token_type": "Bearer", "expires_in": …, "scope": …}
 ```
 
@@ -205,8 +220,8 @@ alias that also accepts the refresh token from the `HttpOnly` cookie or an
     first-party app that owns its own login form; it is not an OAuth grant and
     is never advertised in discovery.
 
-Everything is advertised in the RFC 8414 discovery document at
-`/.well-known/oauth-authorization-server`, so a client can be configured from a
+Everything is advertised in the RFC 8414 discovery document at the
+issuer-derived path described below, so a client can be configured from a
 single issuer URL.
 
 Every component reads the installed settings through
@@ -230,7 +245,8 @@ the settings and invalidates settings-derived caches (e.g. the token manager).
 | `private_key_fallbacks` | `()` | Verify-only PEM keys kept in the published JWKS during a signing-key rotation. |
 | `idle_timeout_hours` | `1` | Idle-session timeout (opt-in via `idle_timeout_enabled`). |
 | `absolute_timeout_hours` | `720` | Hard ceiling on session lifetime, measured from creation. **Always enforced**, and `expires_at` is capped at it on every rotation, so refreshing cannot extend a login indefinitely. |
-| `base_url` | `""` | Public base URL; default JWT issuer/audience and SSO redirect base. |
+| `base_url` | `""` | Public base URL; default JWT issuer/audience and SSO redirect base. Required as absolute HTTPS in deployed environments. Local HTTP is limited to `127.0.0.1` or `[::1]`. |
+| `issuer` | `""` | Public authorization-server URL and JWT `iss`; defaults to `base_url`. Its path determines the RFC 8414 metadata path. |
 | `login_ui_url` | `""` | Absolute URL of **your** login page. Required to offer local login at `/auth/authorize`; JAFAAL redirects there with an `auth_request` handle. Empty means `idp` is mandatory. |
 | `csrf_trusted_origins` | `()` | Origins allowed to drive the web refresh flow; defaults to the `base_url` origin. **Set this when the frontend is served from a different origin than the API.** |
 | `environment` | `"production"` | One of `production`, `demo`, `staging`, `development`, `local`, `test`, `testing`. The first three are treated as **deployed**; anything else is rejected at construction. |
@@ -398,11 +414,22 @@ API-root path above.
 
 So a resource server does not have to hard-code any of the above, JAFAAL also
 publishes an [RFC 8414](https://www.rfc-editor.org/rfc/rfc8414) authorization
-server metadata document beside the JWKS:
+server metadata document at the issuer-derived location. For an issuer without
+a path:
 
 ```text
-GET  <your-api-root>/.well-known/oauth-authorization-server
+GET  https://app.example.com/.well-known/oauth-authorization-server
 ```
+
+For `issuer="https://app.example.com/api/v1"`, RFC 8414 inserts the well-known
+component before the issuer path:
+
+```text
+GET  https://app.example.com/.well-known/oauth-authorization-server/api/v1
+```
+
+The aggregate compatibility URL remains available at
+`<your-api-root>/.well-known/oauth-authorization-server`.
 
 ```json
 {
@@ -421,10 +448,28 @@ GET  <your-api-root>/.well-known/oauth-authorization-server
 }
 ```
 
-The endpoint URLs follow your [`RouterPrefixes`][jafaal.RouterPrefixes] automatically,
-and `scopes_supported` reflects the installed scope catalog. The origin is taken
-from `base_url` when it is set, so a forged `Host` header cannot make JAFAAL
+The endpoint URLs follow the actual mounted authorization route and your
+[`RouterPrefixes`][jafaal.RouterPrefixes] automatically, and
+`scopes_supported` reflects the installed scope catalog. Their origin is taken
+from the configured issuer, so a forged `Host` header cannot make JAFAAL
 advertise an attacker-controlled `token_endpoint`.
+
+!!! warning "Reverse proxies and non-root mounts"
+    Set `tokens.issuer` to the external authorization-server URL and configure
+    FastAPI/ASGI `root_path` when a trusted proxy exposes the application under
+    a path prefix. JAFAAL combines the configured issuer origin with the mounted
+    route paths; it does not trust forwarded host headers to choose an issuer.
+
+    RFC 8414 places `/.well-known/oauth-authorization-server` at the origin
+    root, before any issuer path. A proxy that exposes the whole ASGI app only
+    below a prefix must add an explicit route for that origin-root well-known
+    URL to JAFAAL's app-root metadata handler. It must sanitize inbound forwarded
+    headers as required by RFC 9700 §4.13.
+
+    Pass `app=app` to `create_auth_router` to install that handler. If you omit
+    `app=`, mount `create_metadata_router(path=issuer_derived_metadata_path())`
+    directly on the application. Rebuild the application after changing the
+    issuer path; settings reconfiguration cannot remove the old route.
 
 `authorization_response_iss_parameter_supported` is
 [RFC 9207](https://www.rfc-editor.org/rfc/rfc9207): every authorization response
@@ -495,14 +540,6 @@ header to get wrong and no mismatch to defend against.
 Errors follow RFC 6749 §5.2 — `{"error": "invalid_grant", "error_description":
 "…"}` with `Cache-Control: no-store` — which is what an OAuth client library
 parses.
-
-!!! note "Document location"
-    RFC 8414 §3 derives the metadata URL from the issuer identifier. JAFAAL
-    cannot know where you mount the aggregate router, so — like the JWKS route —
-    it serves the document at the API root.
-    [`get_authorization_server_metadata()`][jafaal.get_authorization_server_metadata]
-    is exported if you need to serve the identical payload from the strict
-    issuer-derived path instead.
 
 !!! note "`secret_key` is always required"
     Even with asymmetric JWTs, `secret_key` still keys the HMAC hashing of

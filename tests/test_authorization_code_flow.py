@@ -37,8 +37,8 @@ TOKEN = "/api/v1/auth/token"
 CALLBACK = "/api/v1/public/idp/callback"
 
 CLIENT_ID = "com.example.app"
-REDIRECT_URI = "com.example.app://oauth/callback"
-OTHER_REDIRECT_URI = "com.example.app://oauth/other"
+REDIRECT_URI = "com.example.app:/oauth/callback"
+OTHER_REDIRECT_URI = "com.example.app:/oauth/other"
 
 #: A second *registered* client, so "the code belongs to someone else" can be
 #: tested without also tripping the unregistered-client check.
@@ -60,7 +60,7 @@ def _registered_client():
                 ),
                 jafaal.OAuthClient(
                     client_id=SECOND_CLIENT_ID,
-                    redirect_uris=("com.other.app://oauth/callback",),
+                    redirect_uris=("com.other.app:/oauth/callback",),
                     name="Other App",
                 ),
             ),
@@ -125,7 +125,16 @@ def _stub_callback(monkeypatch, user):
     monkeypatch.setattr(idp_service.idp_service, "handle_callback", _handle_callback)
 
 
-def _complete_authorization(client, monkeypatch, make_user, *, state="opaque-state", scope=None, superuser=False):
+def _complete_authorization(
+    client,
+    monkeypatch,
+    make_user,
+    *,
+    state="opaque-state",
+    scope=None,
+    superuser=False,
+    redirect_uri=REDIRECT_URI,
+):
     """Run /authorize → callback and return ``(verifier, code, echoed_state)``."""
     user = make_user(username="ada", is_superuser=superuser)
     _create_idp()
@@ -133,7 +142,7 @@ def _complete_authorization(client, monkeypatch, make_user, *, state="opaque-sta
 
     verifier, challenge = _pkce()
     extra = {"scope": scope} if scope is not None else {}
-    started = _authorize(client, challenge=challenge, state=state, **extra)
+    started = _authorize(client, challenge=challenge, state=state, redirect_uri=redirect_uri, **extra)
     assert started.status_code == 302
     upstream_state = parse_qs(urlsplit(started.headers["location"]).query)["state"][0]
 
@@ -148,7 +157,7 @@ def _complete_authorization(client, monkeypatch, make_user, *, state="opaque-sta
 
     # The code is delivered to the client's *registered* URI, not to JAFAAL's
     # own frontend.
-    assert f"{target.scheme}://{target.netloc}{target.path}" == REDIRECT_URI
+    assert target._replace(query="", fragment="").geturl() == redirect_uri
     return verifier, query["code"][0], query.get("state", [None])[0]
 
 
@@ -227,9 +236,29 @@ def test_unregistered_client_is_refused_without_redirecting(client, monkeypatch,
 def test_unregistered_redirect_uri_is_refused(client, make_user):
     _create_idp()
     _, challenge = _pkce()
-    response = _authorize(client, challenge=challenge, redirect_uri="com.attacker.app://steal")
+    response = _authorize(client, challenge=challenge, redirect_uri="com.attacker.app:/steal")
 
     assert response.status_code == 400
+    assert "location" not in response.headers
+
+
+@pytest.mark.parametrize(
+    "redirect_uri",
+    [
+        "/oauth/callback",
+        "com.example.app:opaque-callback",
+        "javascript:alert(1)",
+        "https://app.example/caf\u00e9",
+        "https://user:password@app.example/callback",
+        "https://app.example/callback#fragment",
+    ],
+)
+def test_unsafe_requested_redirects_are_refused_without_redirecting(client, redirect_uri):
+    _, challenge = _pkce()
+    response = _authorize(client, challenge=challenge, redirect_uri=redirect_uri)
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_request"
     assert "location" not in response.headers
 
 
@@ -297,7 +326,7 @@ def test_duplicate_client_or_redirect_is_never_redirected(client):
 
     for name, second_value in (
         ("client_id", SECOND_CLIENT_ID),
-        ("redirect_uri", "com.attacker.app://steal"),
+        ("redirect_uri", "com.attacker.app:/steal"),
     ):
         response = client.get(
             f"{AUTHORIZE}?{urlencode([*complete, (name, second_value)])}",
@@ -357,6 +386,45 @@ def test_redirect_uri_matching_is_exact_not_prefix(client):
     ):
         response = _authorize(client, challenge=challenge, redirect_uri=near_miss)
         assert response.status_code == 400, near_miss
+
+
+@pytest.mark.parametrize(
+    ("registered", "requested"),
+    [
+        ("http://127.0.0.1:8765/oauth/callback", "http://127.0.0.1:51004/oauth/callback"),
+        ("http://[::1]:8765/oauth/callback", "http://[::1]:61023/oauth/callback"),
+    ],
+)
+def test_authorization_accepts_a_variable_ip_loopback_port(
+    client,
+    monkeypatch,
+    make_user,
+    registered,
+    requested,
+):
+    original = jafaal.get_settings()
+    jafaal.configure(
+        replace_settings(
+            original,
+            oauth_clients=(jafaal.OAuthClient(client_id=CLIENT_ID, redirect_uris=(registered,)),),
+        )
+    )
+    try:
+        verifier, code, _ = _complete_authorization(
+            client,
+            monkeypatch,
+            make_user,
+            redirect_uri=requested,
+        )
+
+        other_port = requested.replace("51004", "51005").replace("61023", "61024")
+        mismatch = _redeem(client, code=code, verifier=verifier, redirect_uri=other_port)
+        assert mismatch.status_code == 400
+        assert mismatch.json()["error"] == "invalid_grant"
+
+        assert _redeem(client, code=code, verifier=verifier, redirect_uri=requested).status_code == 200
+    finally:
+        jafaal.configure(original)
 
 
 def test_implicit_and_hybrid_response_types_are_refused(client):
@@ -791,7 +859,7 @@ def test_a_failed_callback_reports_the_error_to_the_clients_redirect_uri(client,
 
     assert landed.status_code == 302
     target = urlsplit(landed.headers["location"])
-    assert f"{target.scheme}://{target.netloc}{target.path}" == REDIRECT_URI
+    assert target._replace(query="", fragment="").geturl() == REDIRECT_URI
     query = parse_qs(target.query)
     assert query["error"] == ["server_error"]
     assert query["state"] == ["round-trip"]

@@ -7,10 +7,8 @@ RFC 8414 exists to remove, so JAFAAL publishes them as a discovery document:
 
 * :func:`get_authorization_server_metadata` — the document as a plain dict, so a
   host can serve it from its own root path (the strict RFC 8414 location); and
-* :func:`create_metadata_router` — a ready-made
-  ``GET /.well-known/oauth-authorization-server`` route that
-  :func:`jafaal.create_auth_router` mounts under the aggregate root, next to the
-  JWKS endpoint.
+* :func:`create_metadata_router` — a ready-made metadata route used at both the
+    issuer-derived location and the aggregate compatibility location.
 
 **Location.** RFC 8414 §3 derives the metadata URL from the issuer identifier by
 inserting ``/.well-known/oauth-authorization-server`` between the host and the
@@ -18,19 +16,20 @@ issuer's path — so an issuer of ``https://app.example/api/v1`` publishes at
 ``https://app.example/.well-known/oauth-authorization-server/api/v1``, *not*
 under the API mount. :func:`issuer_derived_metadata_path` computes that path.
 
-JAFAAL still serves the document from the aggregate router by default, because
-the endpoint URLs *inside* it are built from wherever the host mounted that
-router — information only available from the request path of a mounted route.
-An absolute app-level route would put the document in the right place with the
-wrong endpoints in it, which is worse than the reverse. To publish at the spec
-location, mount a second copy on the application::
+When :func:`jafaal.create_auth_router` receives the FastAPI application, it
+registers the issuer-derived route directly on that application and retains a
+second copy under the aggregate router for compatibility. At request time both
+copies resolve the named authorization route, after the host has mounted the
+aggregate, so they advertise the same endpoint URLs without guessing its
+prefix. If the host omits ``app=`` while assembling routers, it installs the
+standard route explicitly::
 
     app.include_router(
         jafaal.create_metadata_router(path=jafaal.issuer_derived_metadata_path())
     )
 
-That copy resolves its own mount correctly (see :func:`_resolve_api_root`), so
-both locations serve an identical document.
+The application must be rebuilt when the configured issuer path changes;
+reconfiguring settings does not remove a previously registered route.
 
 **Scope of the document.** JAFAAL is **not a general-purpose OAuth 2.0
 authorization server**: there is no consent screen, no client secret, no dynamic
@@ -75,6 +74,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Request, Response
+from starlette.routing import NoMatchFound
 
 import jafaal.scopes as jafaal_scopes
 import jafaal.settings as jafaal_settings
@@ -170,17 +170,18 @@ def get_authorization_server_metadata(*, api_root: str, auth_prefix: str = "/aut
     return metadata
 
 
-def _resolve_api_root(request: Request) -> str:
+def _resolve_api_root(request: Request, auth_prefix: str) -> str:
     """Return the absolute URL of the API root the endpoints hang off.
 
-    The origin is taken from :attr:`~jafaal.AuthSettings.base_url` when it is
-    configured, so a forged ``Host`` header cannot make JAFAAL advertise an
-    attacker-controlled ``token_endpoint`` to whoever fetches the document. Only
-    when no usable ``base_url`` exists does it fall back to the request's own
-    origin.
+    The origin is taken from the configured issuer, so a forged ``Host`` header
+    or an internal reverse-proxy origin cannot change the advertised endpoints.
+    A local configuration with no issuer falls back to the request origin.
 
-    The mount is recovered from the request path, which takes one of two shapes
-    depending on where the document was registered:
+    The mount is recovered from the named authorization route when the aggregate
+    router is installed on the same application. This works even when this
+    metadata handler was registered before the host mounted the aggregate, and
+    preserves an ASGI ``root_path`` supplied by a trusted proxy. A standalone
+    metadata router falls back to its request path, which takes one of two forms:
 
     * ``<mount>/.well-known/oauth-authorization-server`` — the aggregate-router
       fallback, where the mount is the prefix; or
@@ -188,12 +189,22 @@ def _resolve_api_root(request: Request) -> str:
       location, where the mount is the *suffix*.
     """
     settings = jafaal_settings.get_settings()
-    configured = settings._base_url_origin
-    if configured:
-        origin = configured[0]
+    configured_issuer = urlparse(settings.resolved_issuer)
+    if configured_issuer.scheme and configured_issuer.netloc:
+        origin = f"{configured_issuer.scheme}://{configured_issuer.netloc}"
+    elif settings._base_url_origin:
+        origin = settings._base_url_origin[0]
     else:
         parsed = urlparse(str(request.base_url))
         origin = f"{parsed.scheme}://{parsed.netloc}"
+
+    route_suffix = _join_url(auth_prefix, "/authorize")
+    try:
+        authorization_path = urlparse(str(request.url_for("jafaal_authorize"))).path
+    except NoMatchFound:
+        authorization_path = ""
+    if authorization_path.endswith(route_suffix):
+        return _join_url(origin, authorization_path[: -len(route_suffix)])
 
     path = request.url.path
     if path.endswith(METADATA_PATH):
@@ -212,9 +223,8 @@ def issuer_derived_metadata_path() -> str:
     between the issuer's host and its path component — so an issuer of
     ``https://app.example/api/v1`` publishes at
     ``/.well-known/oauth-authorization-server/api/v1``. The naive
-    ``<issuer>/.well-known/...`` is *not* the spec location whenever the issuer
-    carries a path, which it does for every deployment mounted under an API
-    prefix.
+    ``<issuer>/.well-known/...`` is *not* the spec location when the configured
+    issuer carries a path.
 
     Returns:
         The absolute path to register on the host application.
@@ -233,8 +243,8 @@ def create_metadata_router(auth_prefix: str = "/auth", *, path: str = METADATA_P
     Args:
         auth_prefix: Prefix the core auth router is mounted under.
         path: Route path to expose the document at. Defaults to the aggregate
-            root; :func:`jafaal.create_auth_router` passes the issuer-derived
-            path when it registers the route on the host application.
+            compatibility location; :func:`jafaal.create_auth_router` passes
+            the issuer-derived path for the host application route.
 
     Returns:
         An :class:`~fastapi.APIRouter` exposing ``path``.
@@ -246,7 +256,7 @@ def create_metadata_router(auth_prefix: str = "/auth", *, path: str = METADATA_P
         """Serve this deployment's OAuth 2.0 authorization-server metadata."""
         response.headers["Cache-Control"] = f"public, max-age={_METADATA_CACHE_MAX_AGE_SECONDS}"
         return get_authorization_server_metadata(
-            api_root=_resolve_api_root(request),
+            api_root=_resolve_api_root(request, auth_prefix),
             auth_prefix=auth_prefix,
         )
 

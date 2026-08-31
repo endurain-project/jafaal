@@ -975,6 +975,7 @@ def _authorize_error_redirect(
 
 @router.get(
     "/authorize",
+    name="jafaal_authorize",
     status_code=status.HTTP_302_FOUND,
     openapi_extra=_AUTHORIZATION_OPENAPI,
     summary="OAuth 2.0 authorization endpoint (RFC 6749 §4.1, PKCE required)",

@@ -199,7 +199,7 @@ async def initiate_step_up_reauth(
     are sent so the provider re-prompts the user, and the callback verifies the
     ID token's ``auth_time`` is recent.
 
-    ``client_id``/``redirect_uri`` go through the same exact-match gate as
+    ``client_id``/``redirect_uri`` go through the same registration gate as
     ``/auth/authorize``. A step-up round trip ends in a browser redirect just
     like a login does, so it gets the same open-redirect protection — there is
     no second, weaker rule for "internal" redirects.

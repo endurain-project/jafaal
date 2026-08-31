@@ -52,7 +52,7 @@ jafaal.configure(
         base_url="http://127.0.0.1:8000",
         app_name="JAFAAL Example",
         # "development" keeps the refresh cookie non-Secure so it survives plain
-        # HTTP on localhost. Use "production" anywhere real, and serve HTTPS.
+        # HTTP on IP loopback. Use "production" anywhere real, and serve HTTPS.
         environment="development",
         # Where /auth/authorize sends a browser that still has to log in.
         login_ui_url="http://127.0.0.1:8000/login",
@@ -69,7 +69,7 @@ jafaal.configure(
             # the response body and the app stores it in the platform keystore.
             jafaal.OAuthClient(
                 client_id="example-mobile",
-                redirect_uris=("com.example.app://callback",),
+                redirect_uris=("com.example.app:/callback",),
                 token_delivery="body",
                 name="Example mobile app",
             ),

@@ -50,8 +50,8 @@ async def begin_idp_authorization(
         code_challenge: The client's PKCE challenge.
         code_challenge_method: The client's PKCE method (``S256``).
         client_id: The registered client, already resolved.
-        redirect_uri: The client's redirect URI, already matched exactly against
-            its registration.
+        redirect_uri: The client's redirect URI, already validated against its
+            registration.
         client_state: The client's opaque ``state``, echoed back with the code.
         requested_scope: The client's ``scope`` request, already validated. Kept
             on the state so it can narrow the tokens minted at redemption; it is

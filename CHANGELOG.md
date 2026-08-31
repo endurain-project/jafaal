@@ -114,6 +114,22 @@ future-facing until the surface has been validated with production consumers.
 
 **Tokens and sessions**
 
+- Redirect URI policy now accepts only complete HTTPS URIs, native HTTP
+  loopback on `127.0.0.1` or `[::1]`, and reverse-domain private-use schemes.
+  HTTPS/private URIs match exactly; only an IP-loopback port may vary between
+  registration and authorization. `localhost`, relative/opaque URIs, userinfo,
+  fragments, unsafe schemes, and malformed reverse-domain names fail at
+  configuration and request time. Private-use registrations must migrate from
+  authority syntax such as `com.example.app://callback` to RFC 8252's
+  single-slash form, `com.example.app:/callback`.
+- Deployed `base_url` and issuer values are now required secure absolute HTTPS
+  URLs without userinfo, query, or fragment. Local HTTP development is limited
+  to the IP literals `127.0.0.1` and `[::1]`.
+- Passing `app=` to `create_auth_router` now mounts RFC 8414 metadata at the
+  issuer-derived origin-root path, including pathful issuers, while retaining
+  the aggregate compatibility path. Advertised OAuth and JWKS URLs are resolved
+  from the actual mounted authorization route under the configured external
+  issuer origin, including trusted ASGI `root_path` deployments.
 - OAuth authorization, token, introspection, and revocation requests are parsed
   from raw query/form multi-items before schema conversion. Missing, empty,
   malformed, non-text, and repeated parameters now return RFC-shaped
@@ -144,9 +160,9 @@ future-facing until the surface has been validated with production consumers.
   `nbf == iat` makes a sub-second clock difference reject a token minted moments
   earlier. RFC 7519 §4.1.5 anticipates the allowance; applying it at issuance is
   what makes the token portable without asking every verifier to configure one.
-- RFC 8414 authorization-server metadata at
-  `/.well-known/oauth-authorization-server`, so a client discovers the issuer,
-  JWKS, and endpoint URLs instead of hard-coding them. It carries **no extension
+- RFC 8414 authorization-server metadata at the issuer-derived origin-root
+  path, so a client discovers the issuer, JWKS, and endpoint URLs instead of
+  hard-coding them. It carries **no extension
   members** and only IANA-registered values in its `*_auth_methods_supported`
   fields: everything needed to drive JAFAAL is a standard field. `/auth/login`
   is deliberately **not** advertised — it authenticates a first-party user

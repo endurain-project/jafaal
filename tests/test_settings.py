@@ -173,6 +173,84 @@ def test_step_up_windows_must_be_positive():
         jafaal.SsoSettings(step_up_grant_ttl_seconds=0)
 
 
+@pytest.mark.parametrize(
+    "redirect_uri",
+    [
+        "/oauth/callback",
+        "com.example.app:opaque-callback",
+        "com.example.app://callback",
+        "com..example:/callback",
+        "com.-example:/callback",
+        "com.example_foo:/callback",
+        "myapp:/callback",
+        "javascript:alert(1)",
+        "http://localhost:8765/callback",
+        "https://localhost/callback",
+        "https://app.example/caf\u00e9",
+        "https://user:password@app.example/callback",
+        "https://app.example/callback#fragment",
+    ],
+)
+def test_oauth_client_rejects_unsafe_registered_redirects(redirect_uri):
+    with pytest.raises(ValueError, match="redirect_uri"):
+        jafaal.OAuthClient(client_id="com.example.app", redirect_uris=(redirect_uri,))
+
+
+@pytest.mark.parametrize(
+    "redirect_uri",
+    [
+        "https://app.example/oauth/callback?source=native",
+        "com.example.app:/oauth/callback",
+        "http://127.0.0.1:49152/oauth/callback",
+        "http://[::1]:49152/oauth/callback",
+    ],
+)
+def test_oauth_client_accepts_supported_registered_redirects(redirect_uri):
+    client = jafaal.OAuthClient(client_id="com.example.app", redirect_uris=(redirect_uri,))
+    assert client.permits(redirect_uri)
+
+
+def test_https_redirect_matching_is_exact():
+    registered = "https://App.Example/oauth/Callback?source=Native"
+    client = jafaal.OAuthClient(client_id="web", redirect_uris=(registered,))
+
+    assert client.permits(registered)
+    for near_miss in (
+        "https://app.example/oauth/Callback?source=Native",
+        "https://App.Example/oauth/callback?source=Native",
+        "https://App.Example/oauth/Callback?source=native",
+        "https://App.Example/oauth/Callback?source=Native&extra=1",
+        "https://App.Example/oauth/Callback/child?source=Native",
+    ):
+        assert not client.permits(near_miss), near_miss
+
+
+@pytest.mark.parametrize(
+    ("registered", "requested"),
+    [
+        ("http://127.0.0.1/oauth/callback", "http://127.0.0.1:51004/oauth/callback"),
+        ("http://127.0.0.1:8765/oauth/callback", "http://127.0.0.1:49152/oauth/callback"),
+        ("http://[::1]/oauth/callback", "http://[::1]:61023/oauth/callback"),
+        ("http://[::1]:8765/oauth/callback", "http://[::1]:49152/oauth/callback"),
+    ],
+)
+def test_loopback_redirect_matching_allows_only_the_port_to_vary(registered, requested):
+    client = jafaal.OAuthClient(client_id="desktop", redirect_uris=(registered,))
+
+    assert client.permits(requested)
+    assert not client.permits(requested.replace("/oauth/callback", "/oauth/other"))
+    assert not client.permits(f"{requested}?extra=1")
+
+
+def test_loopback_redirect_matching_does_not_cross_ip_families():
+    client = jafaal.OAuthClient(
+        client_id="desktop",
+        redirect_uris=("http://127.0.0.1:8765/oauth/callback",),
+    )
+
+    assert not client.permits("http://[::1]:8765/oauth/callback")
+
+
 def test_webauthn_challenge_ttl_must_be_positive():
     with pytest.raises(ValueError, match="challenge_ttl_seconds"):
         jafaal.WebAuthnSettings(challenge_ttl_seconds=0)
@@ -248,8 +326,8 @@ def test_issuer_audience_and_client_id_fall_back_to_base_url():
     assert s.resolved_issuer == "https://app.test"
     assert s.resolved_audience == "https://app.test"
     assert s.resolved_client_id == "https://app.test"
-    s2 = _valid(tokens=jafaal.TokenSettings(issuer="iss", audience="aud", client_id="cid"))
-    assert s2.resolved_issuer == "iss"
+    s2 = _valid(tokens=jafaal.TokenSettings(issuer="https://issuer.test", audience="aud", client_id="cid"))
+    assert s2.resolved_issuer == "https://issuer.test"
     assert s2.resolved_audience == "aud"
     assert s2.resolved_client_id == "cid"
 
@@ -305,6 +383,50 @@ def test_deployed_and_local_environment_sets_are_disjoint():
 def test_default_environment_is_the_safe_one():
     # Forgetting to set it must not weaken a deployment.
     assert _valid().is_deployed is True
+
+
+@pytest.mark.parametrize("field", ["base_url", "issuer"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        "http://app.example/auth",
+        "/auth",
+        "https://user:password@app.example/auth",
+        "https://localhost/auth",
+        "https://app.example/caf\u00e9",
+        "https://app.example/auth?tenant=one",
+        "https://app.example/auth#fragment",
+    ],
+)
+def test_deployed_public_urls_require_secure_absolute_values(field, value):
+    overrides = {field: value} if field == "base_url" else {"tokens": jafaal.TokenSettings(issuer=value)}
+    with pytest.raises(ValueError, match=field):
+        _valid(**overrides)
+
+
+def test_deployed_base_url_is_required():
+    with pytest.raises(ValueError, match="base_url"):
+        _valid(base_url="")
+
+
+@pytest.mark.parametrize("field", ["base_url", "issuer"])
+@pytest.mark.parametrize("value", ["http://127.0.0.1:8000/api/v1", "http://[::1]:8000/api/v1"])
+def test_local_public_urls_allow_ip_literal_loopback_http(field, value):
+    overrides = {field: value} if field == "base_url" else {"tokens": jafaal.TokenSettings(issuer=value)}
+    assert _valid(environment="development", **overrides)
+
+
+@pytest.mark.parametrize("field", ["base_url", "issuer"])
+@pytest.mark.parametrize("value", ["http://192.0.2.1/api/v1", "http://localhost:8000/api/v1", "/api/v1"])
+def test_local_public_urls_reject_non_loopback_or_relative_values(field, value):
+    overrides = {field: value} if field == "base_url" else {"tokens": jafaal.TokenSettings(issuer=value)}
+    with pytest.raises(ValueError, match=field):
+        _valid(environment="development", **overrides)
+
+
+def test_pathful_https_issuer_is_valid_in_deployment():
+    settings = _valid(tokens=jafaal.TokenSettings(issuer="https://auth.example/tenant/api/v1"))
+    assert settings.resolved_issuer == "https://auth.example/tenant/api/v1"
 
 
 # --------------------------------------------------------------------------- #

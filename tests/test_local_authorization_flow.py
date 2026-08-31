@@ -33,7 +33,7 @@ TOKEN = "/api/v1/auth/token"
 MFA_VERIFY = "/api/v1/auth/mfa/verify"
 
 CLIENT_ID = "com.example.local"
-REDIRECT_URI = "com.example.local://oauth/callback"
+REDIRECT_URI = "com.example.local:/oauth/callback"
 LOGIN_UI = "https://app.test/sign-in"
 PASSWORD = "Str0ng!Pass"
 
@@ -211,7 +211,7 @@ def test_another_client_cannot_complete_the_request(client, make_user):
             original,
             oauth_clients=(
                 *original.oauth_clients,
-                jafaal.OAuthClient(client_id="com.other.app", redirect_uris=("com.other.app://cb",)),
+                jafaal.OAuthClient(client_id="com.other.app", redirect_uris=("com.other.app:/cb",)),
             ),
         )
     )
@@ -360,6 +360,6 @@ def test_an_unregistered_redirect_uri_is_still_refused(client):
     # RFC 6749 §4.1.2.1: reported to the user agent, never redirected — an
     # unvalidated redirect target is exactly the open redirect that leaks codes.
     _verifier, challenge = _pkce()
-    resp = _authorize(client, challenge=challenge, redirect_uri="com.example.local://evil")
+    resp = _authorize(client, challenge=challenge, redirect_uri="com.example.local:/evil")
     assert resp.status_code == 400
     assert resp.json()["error"] == "invalid_request"
