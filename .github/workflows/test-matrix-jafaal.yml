@@ -23,12 +23,6 @@ on:
 permissions:
   contents: read
 
-env:
-  # Pin the toolchain so a uv release cannot change a CI result on its own. The
-  # floor/ceiling in pyproject.toml governs which uv may *drive* the project;
-  # this is which one CI actually installs.
-  UV_VERSION: "0.12.5"
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -51,7 +45,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: ${{ env.UV_VERSION }}
+          version-file: pyproject.toml
 
       - name: Sync dependencies
         run: uv sync --frozen --no-dev --group test --group lint --no-install-project --python ${{ matrix.python }}
@@ -94,7 +88,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: ${{ env.UV_VERSION }}
+          version-file: pyproject.toml
 
       - name: Create the migrations database
         run: |
@@ -140,7 +134,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: ${{ env.UV_VERSION }}
+          version-file: pyproject.toml
 
       - name: Create the migrations database
         run: |
@@ -167,7 +161,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: ${{ env.UV_VERSION }}
+          version-file: pyproject.toml
 
       - name: Build the wheel
         run: uv build --wheel --no-sources --out-dir "$RUNNER_TEMP/dist"

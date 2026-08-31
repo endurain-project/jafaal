@@ -45,13 +45,22 @@ def _fresh_engine():
     return create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
 
 
+@pytest.fixture
+def migration_engine():
+    engine = _fresh_engine()
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+
+
 def _create_host_users(engine):
     # JAFAAL's tables carry foreign keys to users.id, so the host table exists first.
     Base.metadata.tables["users"].create(bind=engine)
 
 
-def test_upgrade_creates_all_jafaal_tables():
-    engine = _fresh_engine()
+def test_upgrade_creates_all_jafaal_tables(migration_engine):
+    engine = migration_engine
     _create_host_users(engine)
     migrations.upgrade(engine)
 
@@ -63,11 +72,11 @@ def test_upgrade_creates_all_jafaal_tables():
     assert migrations.db_revision(engine) == migrations.head_revision()
 
 
-def test_upgrade_matches_models_without_drift():
+def test_upgrade_matches_models_without_drift(migration_engine):
     from alembic.autogenerate import compare_metadata
     from alembic.runtime.migration import MigrationContext
 
-    engine = _fresh_engine()
+    engine = migration_engine
     _create_host_users(engine)
     migrations.upgrade(engine)
 
@@ -93,8 +102,8 @@ def test_upgrade_matches_models_without_drift():
     assert structural == [], f"schema drift vs models: {structural}"
 
 
-def test_downgrade_drops_jafaal_tables_but_keeps_users():
-    engine = _fresh_engine()
+def test_downgrade_drops_jafaal_tables_but_keeps_users(migration_engine):
+    engine = migration_engine
     _create_host_users(engine)
     migrations.upgrade(engine)
     migrations.downgrade(engine, "base")
@@ -104,8 +113,8 @@ def test_downgrade_drops_jafaal_tables_but_keeps_users():
     assert not (jafaal_orm.jafaal_table_names() & remaining)
 
 
-def test_verify_schema_current_fails_then_passes():
-    engine = _fresh_engine()
+def test_verify_schema_current_fails_then_passes(migration_engine):
+    engine = migration_engine
     _create_host_users(engine)
     with pytest.raises(RuntimeError, match="out of date"):
         migrations.verify_schema_current(engine)
@@ -114,8 +123,8 @@ def test_verify_schema_current_fails_then_passes():
     migrations.verify_schema_current(engine)  # now current → no raise
 
 
-def test_stamp_marks_head_for_pre_existing_tables():
-    engine = _fresh_engine()
+def test_stamp_marks_head_for_pre_existing_tables(migration_engine):
+    engine = migration_engine
     _create_host_users(engine)
     # Simulate a deployment whose tables were created out-of-band (create_all).
     Base.metadata.create_all(
@@ -146,7 +155,7 @@ def test_every_revision_id_fits_alembics_version_column():
     assert too_long == {}, f"revision ids exceed Alembic's {migrations.MAX_REVISION_LENGTH}-char column: {too_long}"
 
 
-def test_an_incremental_revision_applies_to_an_older_database():
+def test_an_incremental_revision_applies_to_an_older_database(migration_engine):
     """Exercise a revision's own DDL, not just the baseline.
 
     ``0001_initial`` builds every table from the *current* models, so on a fresh
@@ -157,7 +166,7 @@ def test_an_incremental_revision_applies_to_an_older_database():
     executes. Against Postgres and MySQL in CI, that is what catches DDL a
     revision only got away with on SQLite.
     """
-    engine = _fresh_engine()
+    engine = migration_engine
     _create_host_users(engine)
     migrations.upgrade(engine)
 

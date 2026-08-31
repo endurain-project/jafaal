@@ -94,7 +94,10 @@ async def parse_oauth_form(request: Request) -> OAuthRequestParameters:
         form = await request.form()
     except (StarletteHTTPException, UnicodeError, ValueError) as err:
         raise invalid_request("The request body is not valid form data.") from err
-    return OAuthRequestParameters.from_items(form.multi_items())
+    try:
+        return OAuthRequestParameters.from_items(form.multi_items())
+    finally:
+        await form.close()
 
 
 def parse_oauth_query(request: Request) -> OAuthRequestParameters:
