@@ -23,6 +23,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import jafaal
+import jafaal.credentials.crud as credentials_crud
 import jafaal.identity_providers.crud as idp_crud
 import jafaal.identity_providers.links.crud as links_crud
 import jafaal.identity_providers.schema as idp_schema
@@ -31,6 +32,7 @@ import jafaal.oauth_state.utils as oauth_state_utils
 import jafaal.orm as jafaal_orm
 import jafaal.sessions.crud as sessions_crud
 import jafaal.sessions.rotated_refresh_tokens.utils as rotated_utils
+from jafaal.adapters import SqlAlchemyUserRepository
 
 
 def _session():
@@ -96,6 +98,49 @@ def test_host_can_roll_back_a_jafaal_write_with_its_own(make_user):
 
     with _session() as observer:
         assert oauth_state_crud.get_oauth_state_by_id_and_not_used(state_id, observer) is None
+
+
+def test_host_can_roll_back_user_credential_and_identity_link_together():
+    repo = SqlAlchemyUserRepository()
+    setup = _session()
+    try:
+        with jafaal_orm.unit_of_work(setup):
+            idp = idp_crud.create_identity_provider(
+                idp_schema.IdentityProviderCreate(
+                    name="Composite IdP",
+                    slug="composite-idp",
+                    client_id="client-id",
+                    client_secret="client-secret",
+                ),
+                setup,
+            )
+        idp_id = idp.id
+    finally:
+        setup.close()
+
+    session = _session()
+    try:
+        with pytest.raises(RuntimeError), jafaal_orm.unit_of_work(session):
+            user = repo.create_local_user(
+                "composite-user",
+                "composite-user@test.dev",
+                session,
+                is_active=True,
+                is_verified=True,
+            )
+            user_id = user.id
+            credentials_crud.upsert_password_hash(user_id, "test-password-hash", session)
+            links_crud.create_user_identity_provider(user_id, idp_id, "composite-subject", session)
+            raise RuntimeError("host profile creation failed")
+    finally:
+        session.close()
+
+    with _session() as observer:
+        assert repo.get_by_username("composite-user", observer) is None
+        assert credentials_crud.get_credential(user_id, observer) is None
+        assert (
+            links_crud.get_user_identity_provider_by_subject_and_idp_id(idp_id, "composite-subject", observer) is None
+        )
 
 
 def test_unit_of_work_is_reentrant(make_user):

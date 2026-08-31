@@ -185,3 +185,16 @@ jobs:
           set -euo pipefail
           cd "$RUNNER_TEMP"
           VIRTUAL_ENV="$RUNNER_TEMP/base-venv" uv run --no-project python "$GITHUB_WORKSPACE/.github/scripts/smoke_import.py"
+
+      - name: Smoke-test each optional extra independently
+        run: |
+          set -euo pipefail
+          wheel=$(find "$RUNNER_TEMP/dist" -name '*.whl' -print -quit)
+          cd "$RUNNER_TEMP"
+          for extra in mfa sso webauthn redis migrations all; do
+            extra_venv="$RUNNER_TEMP/extra-$extra"
+            uv venv "$extra_venv"
+            VIRTUAL_ENV="$extra_venv" uv pip install "${wheel}[${extra}]"
+            VIRTUAL_ENV="$extra_venv" uv run --no-project python \
+              "$GITHUB_WORKSPACE/.github/scripts/smoke_import.py" --extra "$extra"
+          done

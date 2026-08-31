@@ -217,7 +217,7 @@ class SqlUserRepository:
     def create_local_user(self, username, email, db, *, is_active, is_verified):
         user = Users(username=username, email=email, is_active=is_active, is_verified=is_verified)
         db.add(user)
-        db.commit()
+        db.flush()
         db.refresh(user)
         return user
 
@@ -228,7 +228,7 @@ class SqlUserRepository:
         user.is_verified = True
         if activate:
             user.is_active = True
-        db.commit()
+        db.flush()
 
 
 class StaticSettingsProvider:

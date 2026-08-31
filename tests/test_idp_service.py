@@ -31,6 +31,7 @@ import jafaal.ports as ports
 from jafaal._core import crypto
 from jafaal._internal.password_hasher import password_hasher
 from jafaal._internal.security_stores import consume_step_up_reauth_grant
+from jafaal.adapters import SqlAlchemyUserRepository
 from jafaal.identity_providers.service import IdentityProviderService
 
 JWKS_URI = "https://idp.example.com/jwks"
@@ -263,6 +264,32 @@ def test_email_linking_adopts_the_account_when_enabled_and_verified(db, make_use
     )
     assert linked.id == user.id
     assert links_crud.get_user_identity_provider_by_subject_and_idp_id(idp.id, "owner-subject", db) is not None
+
+
+def test_reference_repository_rolls_back_idp_user_when_link_creation_fails(db, monkeypatch):
+    idp = _create_idp(db, slug="rollback")
+    repo = SqlAlchemyUserRepository()
+    original_repo = ports.get_user_repository()
+
+    def fail_link_creation(*args, **kwargs):
+        raise RuntimeError("forced link failure")
+
+    monkeypatch.setattr(links_crud, "create_user_identity_provider", fail_link_creation)
+    jafaal.configure_user_repository(repo)
+    try:
+        with pytest.raises(RuntimeError, match="forced link failure"):
+            IdentityProviderService()._create_user_from_idp(
+                idp,
+                "rollback-subject",
+                {"username": "rollback-user", "email": "rollback@test.dev"},
+                db,
+                email_verified=True,
+            )
+        db.rollback()
+
+        assert repo.get_by_username("rollback-user", db) is None
+    finally:
+        jafaal.configure_user_repository(original_repo)
 
 
 def test_profile_sync_withholds_an_unverified_email(db, make_user, monkeypatch):

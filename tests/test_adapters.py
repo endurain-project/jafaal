@@ -116,6 +116,18 @@ class TestSqlAlchemyUserRepository:
         assert refreshed.is_verified is True
         assert refreshed.is_active is False
 
+    def test_set_email_verified_joins_caller_transaction(self, db):
+        repo = SqlAlchemyUserRepository()
+        user = repo.create_local_user("eve", "eve@test.dev", db, is_active=False, is_verified=False)
+        db.commit()
+
+        repo.set_email_verified(user.id, db, activate=True)
+        db.rollback()
+
+        refreshed = repo.get_by_id(user.id, db)
+        assert refreshed.is_verified is False
+        assert refreshed.is_active is False
+
     def test_set_email_verified_missing_user_raises(self, db):
         repo = SqlAlchemyUserRepository()
         with pytest.raises(NotFoundError):

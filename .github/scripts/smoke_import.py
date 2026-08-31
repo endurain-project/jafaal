@@ -1,8 +1,8 @@
 """Smoke-test a JAFAAL install: bare import, model mapping, router assembly.
 
-Run against an environment that has **only** the base runtime dependencies (no
-``mfa`` / ``sso`` / ``redis`` / ``webauthn`` extras, no dev groups). It proves
-three things a packaging mistake would break:
+By default, run against an environment that has **only** the base runtime
+dependencies (no feature extras or dev groups). It proves four things a
+packaging mistake would break:
 
 1. ``import jafaal`` works without any optional dependency - the feature modules
    really do import defensively.
@@ -10,6 +10,12 @@ three things a packaging mistake would break:
    merely found on ``sys.path``).
 3. The full router assembles, which transitively imports every sub-router,
    model, and schema in the package.
+4. Using each optional feature fails with its documented ``jafaal[extra]``
+    installation hint.
+
+With ``--extra``, run against a wheel installed with exactly that feature extra.
+The named feature must work and every unrelated feature must remain guarded;
+``--extra all`` checks that the convenience union activates every feature.
 
 Step 3 needs a host ``Users`` model, because JAFAAL's companion tables carry
 foreign keys and relationships to it - the library deliberately does not own the
@@ -24,8 +30,9 @@ validate the working tree instead of the built artifact::
 
 from __future__ import annotations
 
+import argparse
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -34,6 +41,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 import jafaal
+from jafaal._core.optional_deps import MissingDependencyError
 from jafaal.adapters.static_settings import StaticSettingsProvider
 
 
@@ -91,9 +99,60 @@ class SmokeUserRepository:
 # number of sub-routers that imported cleanly - exactly what this smoke test
 # checks.
 EXPECTED_SUB_ROUTERS = 11
+FEATURE_EXTRAS = ("mfa", "sso", "webauthn", "redis", "migrations")
 
 
-def main() -> int:
+def _optional_feature_probes() -> dict[str, tuple[tuple[str, Callable[[], object]], ...]]:
+    import jafaal.identity_providers.service as idp_service
+    import jafaal.mfa.service as mfa_service
+    import jafaal.migrations as migrations
+    import jafaal.webauthn.service as webauthn_service
+    from jafaal.adapters import RedisStateStore
+
+    return {
+        "mfa": (("pyotp", mfa_service._pyotp), ("qrcode", mfa_service._qrcode)),
+        "sso": (("authlib", idp_service._oauth_client_cls),),
+        "webauthn": (("webauthn", webauthn_service._require_webauthn),),
+        "redis": (("redis", RedisStateStore),),
+        "migrations": (("alembic", migrations._require_alembic),),
+    }
+
+
+def _expect_missing(extra: str, package: str, probe: Callable[[], object]) -> None:
+    try:
+        probe()
+    except MissingDependencyError as err:
+        hint = f"pip install 'jafaal[{extra}]'"
+        if package not in str(err) or hint not in str(err):
+            raise AssertionError(f"{extra} guard did not include package and install hint: {err}") from err
+    else:
+        raise AssertionError(f"{extra} feature unexpectedly available in an isolated base install")
+
+
+def _smoke_base_optional_guards() -> None:
+    for extra, probes in _optional_feature_probes().items():
+        for package, probe in probes:
+            _expect_missing(extra, package, probe)
+
+
+def _smoke_extra(extra: str) -> None:
+    probes_by_extra = _optional_feature_probes()
+    selected = FEATURE_EXTRAS if extra == "all" else (extra,)
+
+    for selected_extra in selected:
+        for _, probe in probes_by_extra[selected_extra]:
+            probe()
+
+    if extra == "all":
+        return
+    for other_extra in FEATURE_EXTRAS:
+        if other_extra == extra:
+            continue
+        for package, probe in probes_by_extra[other_extra]:
+            _expect_missing(other_extra, package, probe)
+
+
+def main(extra: str | None = None) -> int:
     """Run the smoke checks, returning a process exit code."""
     if (Path.cwd() / "jafaal" / "__init__.py").exists():
         print("FAIL: run this from outside the repository root, or the source tree shadows the install")
@@ -108,6 +167,11 @@ def main() -> int:
         return 1
 
     jafaal.map_models(Base)
+    if extra is not None:
+        _smoke_extra(extra)
+        print(f"extra smoke OK: jafaal {jafaal.__version__}[{extra}], from {jafaal.__file__}")
+        return 0
+
     engine = create_engine("sqlite://")
     jafaal.configure(
         jafaal.AuthSettings(
@@ -129,9 +193,16 @@ def main() -> int:
         print(f"FAIL: expected {EXPECTED_SUB_ROUTERS} sub-routers, got {len(router.routes)}")
         return 1
 
-    print(f"smoke OK: jafaal {jafaal.__version__}, {len(router.routes)} sub-routers, from {jafaal.__file__}")
+    _smoke_base_optional_guards()
+    print(
+        f"base smoke OK: jafaal {jafaal.__version__}, {len(router.routes)} sub-routers, "
+        f"all optional guards, from {jafaal.__file__}"
+    )
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--extra", choices=(*FEATURE_EXTRAS, "all"))
+    args = parser.parse_args()
+    sys.exit(main(args.extra))

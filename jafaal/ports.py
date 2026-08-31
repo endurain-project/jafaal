@@ -155,7 +155,9 @@ class UserRepository(Protocol):
         """Create a user row from an IdP identity and return it.
 
         The account has no local password (JAFAAL persists no credential).
-        Profile shape and defaults are the host's concern.
+        Profile shape and defaults are the host's concern. Flush to populate the
+        primary key, but do not commit: JAFAAL creates the identity-provider link
+        in the same caller-owned transaction.
         """
         ...
 
@@ -179,7 +181,8 @@ class UserRepository(Protocol):
 
         When ``activate`` is ``True`` the account is also activated (used when
         email verification is the last gate before login); when ``False`` the
-        account stays inactive (e.g. admin approval is still pending).
+        account stays inactive (e.g. admin approval is still pending). Flush,
+        but do not commit; token consumption and this update are one transaction.
         """
         ...
 

@@ -5,14 +5,10 @@ A generic adapter over a host user model mapped via :func:`jafaal.map_models` (s
 columns (``username``, ``email``, ``is_active``, ``is_verified``) are enough to
 create a row.
 
-**Transaction behaviour.** :meth:`create_local_user` **flushes** so the generated
-primary key is populated without committing: JAFAAL writes the password
-credential to its own table immediately afterwards, and the two must land
-together or not at all — committing the user row first leaves a
-credential-less account squatting the username on any later failure. The
-remaining mutating methods (:meth:`provision_from_idp`,
-:meth:`set_email_verified`) commit, since nothing else is pending.
-This mirrors JAFAAL's "CRUD helpers own their commit" convention.
+**Transaction behaviour.** User creation methods **flush** so the generated
+primary key is populated without committing: JAFAAL writes a password
+credential or identity-provider link immediately afterwards, and each pair
+must land together or not at all. The caller owns the transaction.
 
 **Extending.** If your user table has additional NOT NULL columns without
 defaults, subclass and override :meth:`create_local_user` /
@@ -101,7 +97,7 @@ class SqlAlchemyUserRepository:
             is_verified=identity.email_verified,
         )
         db.add(user)
-        db.commit()
+        db.flush()
         db.refresh(user)
         return user
 
@@ -117,4 +113,4 @@ class SqlAlchemyUserRepository:
         user.is_verified = True
         if activate:
             user.is_active = True
-        db.commit()
+        db.flush()
