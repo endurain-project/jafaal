@@ -8,23 +8,17 @@ name: Test matrix jafaal
 #     mfa / sso / redis / webauthn extras, no dev groups), proving the
 #     optional-feature modules import defensively.
 
+# These jobs are required checks on main. Do not add path filters: when GitHub
+# skips an entire required workflow, its checks remain pending and block merge.
 on:
   push:
     branches:
       - master
       - main
-    paths: &paths
-      - jafaal/**
-      - tests/**
-      - pyproject.toml
-      - uv.lock
-      - .github/workflows/test-matrix-jafaal.yml
-      - .github/scripts/smoke_import.py
   pull_request:
     branches:
       - master
       - main
-    paths: *paths
 
 permissions:
   contents: read
