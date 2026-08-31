@@ -18,6 +18,9 @@ on:
       - 'jafaal/**/*.py'
       - '.github/workflows/docs.yml'
 
+permissions:
+  contents: read
+
 concurrency:
   group: github-pages
   cancel-in-progress: false
