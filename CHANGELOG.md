@@ -101,4 +101,5 @@ Initial pre-1.0 release. The documented public surface is available for integrat
 
 See [Security](https://jafaal.endurain.com/security/) and [Threat model](https://jafaal.endurain.com/threat-model/) for the security design and the host's responsibilities.
 
+[0.1.1]: https://github.com/endurain-project/jafaal/releases/tag/v0.1.1
 [0.1.0]: https://github.com/endurain-project/jafaal/releases/tag/v0.1.0
