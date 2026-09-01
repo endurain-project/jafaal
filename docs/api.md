@@ -45,6 +45,10 @@ Relying Party. They are not OpenID Provider endpoints.
 | `POST` | `/auth/mfa/verify` | Complete a pending login with TOTP or a backup code |
 | `POST` | `/auth/refresh` | Native cookie/header alias for the refresh-token grant; OAuth clients use `/auth/token` |
 | `POST` | `/auth/logout` | Delete the current JAFAAL session; not an OIDC logout endpoint |
+| `GET` | `/profile/mfa` | Read the authenticated user's MFA status |
+| `POST` | `/profile/mfa/setup`, `/profile/mfa/enable` | Begin and confirm TOTP enrollment |
+| `POST` | `/profile/mfa/disable`, `/profile/mfa/verify` | Disable MFA after step-up or verify a current MFA code |
+| `GET`, `POST` | `/profile/mfa/backup-codes` | Read backup-code status or replace codes after step-up |
 | `POST` | `/auth/password/change` | Change the authenticated user's password after step-up |
 | `POST` | `/auth/password/renew` | Replace a password marked as requiring change |
 | `POST` | `/auth/password/user/{user_id}` | Administrative password reset |

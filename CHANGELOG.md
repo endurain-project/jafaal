@@ -6,7 +6,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 What counts as a breaking change, and what does not, is defined in [API stability](docs/api-stability.md). During the pre-1.0 series, its public surface is a compatibility target rather than a frozen guarantee: breaking changes may ship in a minor release and are documented here. The full major-version guarantee begins with 1.0.0.
 
-## [0.1.0]
+## [0.1.1] - 2026-09-01
+
+### Added
+
+- Authenticated `/profile/mfa` routes for TOTP status, setup, enable, disable, verification, and backup-code status and replacement.
+
+## [0.1.0] - 2026-08-31
 
 Initial pre-1.0 release. The documented public surface is available for integration feedback and may still change between v0.x minor releases. The 1.0.0 compatibility guarantees in [API stability](docs/api-stability.md) remain future-facing until the surface has been validated with production consumers.
 

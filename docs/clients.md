@@ -59,6 +59,25 @@ Do not hard-code endpoint URLs; read them from the metadata document.
 deliberately not the resource-owner password-credentials grant (removed by
 OAuth 2.1) and is not advertised in the discovery document.
 
+### Managing MFA
+
+The authenticated self-service endpoints use the `profile` scope:
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| `GET` | `/profile/mfa` | none | `{"mfa_enabled": boolean}` |
+| `POST` | `/profile/mfa/setup` | none | TOTP secret, QR data URI, and authenticator app name |
+| `POST` | `/profile/mfa/enable` | `current_password` when present, plus the new `mfa_code` | Confirmation and one-time backup codes |
+| `POST` | `/profile/mfa/disable` | `current_password` when present, plus the current `mfa_code` | Confirmation |
+| `POST` | `/profile/mfa/verify` | current `mfa_code` | Confirmation; a backup code is consumed |
+| `GET` | `/profile/mfa/backup-codes` | none | Counts only; stored codes are never returned |
+| `POST` | `/profile/mfa/backup-codes` | `current_password` when present, plus the current `mfa_code` | Replacement codes, shown once |
+
+Setup does not change the account until `/profile/mfa/enable` confirms a code
+from the new secret. Enabling, disabling, and replacing backup codes require
+step-up verification; SSO-only accounts may omit `current_password` where the
+new or existing MFA factor supplies the required proof.
+
 ### Changing a password
 
 `/auth/password/change` requires **step-up**: a valid access token is not enough,

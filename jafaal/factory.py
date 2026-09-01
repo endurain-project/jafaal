@@ -60,6 +60,7 @@ class RouterPrefixes:
     sign_up: str = "/auth"
     webauthn: str = "/auth/webauthn"
     webauthn_public: str = "/public/webauthn"
+    profile: str = "/profile"
 
 
 def _warn_on_insecure_defaults() -> None:
@@ -369,6 +370,7 @@ def create_auth_router(
     from jafaal.identity_providers.router import router as idp_router
     from jafaal.jwks import router as jwks_router
     from jafaal.metadata import create_metadata_router, issuer_derived_metadata_path
+    from jafaal.mfa.router import router as mfa_router
     from jafaal.password_reset_tokens.router import router as password_reset_router
     from jafaal.router import router as auth_router
     from jafaal.sessions.router import router as sessions_router
@@ -388,6 +390,7 @@ def create_auth_router(
     )
     aggregate.include_router(password_reset_router, prefix=prefixes.password_reset, tags=["password_reset"])
     aggregate.include_router(sign_up_router, prefix=prefixes.sign_up, tags=["sign_up"])
+    aggregate.include_router(mfa_router, prefix=prefixes.profile, tags=["mfa"])
     aggregate.include_router(webauthn_router, prefix=prefixes.webauthn, tags=["webauthn"])
     aggregate.include_router(webauthn_public_router, prefix=prefixes.webauthn_public, tags=["webauthn"])
     # Keep the aggregate metadata location for compatibility and mount the RFC

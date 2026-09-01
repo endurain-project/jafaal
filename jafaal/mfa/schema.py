@@ -180,3 +180,17 @@ class MFAStatusResponse(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
+
+
+class MFAActionResponse(BaseModel):
+    """Confirmation returned by an MFA management operation."""
+
+    message: StrictStr
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class MFAEnableResponse(MFAActionResponse):
+    """Confirmation and one-time backup codes returned when MFA is enabled."""
+
+    backup_codes: list[StrictStr] = Field(..., min_length=1)
