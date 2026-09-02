@@ -16,7 +16,7 @@ at the public origin root.
 This reference is only for trusted, statically configured, first-party public
 clients owned by the JAFAAL host. They are registered in
 [`AuthSettings.oauth_clients`][jafaal.AuthSettings], use PKCE instead of a client
-secret, and do not represent third-party integrations. v0.1 has no consent,
+secret, and do not represent third-party integrations. v0.2 has no consent,
 grant, confidential-client, or dynamic-registration surface.
 
 ## Registered clients decide the response shape
@@ -288,11 +288,33 @@ and from the OAuth contract above.
 
 Bearer failures carry a `WWW-Authenticate` challenge (RFC 6750).
 
+## Polling sign-up confirmation
+
+When email verification is required, every successful
+`POST /auth/sign-up/request` response includes a 256-bit `signup_handle`. Keep
+that handle in the waiting client and poll
+`GET /auth/sign-up/status?handle=<signup_handle>` no more often than every five
+seconds. The response is exactly `{"confirmed": false}` until the emailed token
+is confirmed, then `{"confirmed": true}`. Unknown and expired handles return
+`404`; handles expire with the sign-up token after 24 hours.
+
+The handle is not a credential. It can only read this boolean; confirming the
+account still requires the separate token delivered by email. JAFAAL also
+returns a fresh decoy handle when the username or email already exists. That
+handle remains `false`, so neither the presence of the field nor the initial
+status reveals whether an account was created.
+
+The route uses the distinct `polling` rate-limit category, whose built-in
+budget is `30/minute`, and sends `Cache-Control: no-store`. Hosts with a custom
+`RateLimiter` must map that category to a bounded polling budget. Handles live
+in the configured `StateStore`; multi-worker or replicated deployments must
+use a shared backend such as `RedisStateStore` so any worker can answer a poll.
+
 ## Other endpoints
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/auth/sign-up/request` · `/auth/sign-up/confirm` | Enumeration-safe sign-up |
+| `POST`/`GET` | `/auth/sign-up/request` · `/auth/sign-up/confirm` · `/auth/sign-up/status` | Enumeration-safe sign-up and confirmation polling |
 | `POST` | `/auth/password-reset/request` · `/auth/password-reset/confirm` | Enumeration-safe reset |
 | `GET`/`DELETE` | `/auth/sessions/user/{user_id}` | List / revoke the user's sessions |
 | `DELETE` | `/auth/sessions/{session_id}/user/{user_id}` | Revoke one session |

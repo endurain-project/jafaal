@@ -5,8 +5,8 @@ password reset, sign-up, OAuth) or write operations; the *enforcement* — the
 limiter backend, its storage, and the concrete request budgets — is host
 infrastructure. Routers therefore tag endpoints with a category via
 :func:`limit`, and the host injects a :class:`RateLimiter` that maps each
-category to a real limit (see :attr:`~jafaal.settings.AuthSettings.rate_limit_sensitive`
-/ :attr:`~jafaal.settings.AuthSettings.rate_limit_write` for the canonical budgets).
+category to a real limit (see :class:`~jafaal.settings.RateLimitSettings` for
+the canonical budgets).
 
 The default :class:`NoOpRateLimiter` enforces nothing, so JAFAAL imports and runs
 without a limiter. :func:`limit` resolves the configured limiter *lazily* (on the
@@ -30,6 +30,9 @@ F = TypeVar("F", bound=Callable[..., object])
 #: Sensitive operations — login, MFA, password reset, sign-up, OAuth flows.
 SENSITIVE: str = "sensitive"
 
+#: Read-only polling operations with a more frequent bounded request budget.
+POLLING: str = "polling"
+
 #: Write operations — creating or mutating resources.
 WRITE: str = "write"
 
@@ -38,8 +41,9 @@ WRITE: str = "write"
 class RateLimiter(Protocol):
     """Maps a JAFAAL rate-limit category to an endpoint decorator.
 
-    The host implementation resolves the category (``"sensitive"`` / ``"write"``)
-    to a concrete budget and returns the decorator its limiter uses (e.g.
+    The host implementation resolves the category (``"sensitive"``,
+    ``"polling"``, or ``"write"``) to a concrete budget and returns the
+    decorator its limiter uses (e.g.
     ``slowapi``'s ``Limiter.limit("10/minute")``).
     """
 
@@ -112,7 +116,7 @@ def limit(category: str) -> Callable[[F], F]:
     sync/async nature so it runs in the correct execution context.
 
     Args:
-        category: :data:`SENSITIVE` or :data:`WRITE`.
+        category: :data:`SENSITIVE`, :data:`POLLING`, or :data:`WRITE`.
 
     Returns:
         A decorator that wraps the endpoint and applies the configured limiter

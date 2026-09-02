@@ -38,6 +38,16 @@ def get_sign_up_token_by_hash(token_hash: str, db: Session) -> sign_up_tokens_mo
 
 
 @db_errors.handle_db_errors
+def is_sign_up_token_confirmed(token_id: str, db: Session) -> bool | None:
+    """Return an unexpired sign-up token's usage state, or ``None`` if absent."""
+    stmt = select(sign_up_tokens_models.SignUpToken.used).where(
+        sign_up_tokens_models.SignUpToken.id == token_id,
+        sign_up_tokens_models.SignUpToken.expires_at > datetime.now(UTC),
+    )
+    return db.execute(stmt).scalar_one_or_none()
+
+
+@db_errors.handle_db_errors
 def create_sign_up_token(
     token: sign_up_tokens_schema.SignUpToken,
     db: Session,

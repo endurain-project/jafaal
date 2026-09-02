@@ -196,19 +196,41 @@ def test_signup_disabled_returns_403(client):
 
 def test_signup_email_verification_flow(client, event_sink):
     with _signup(enabled=True, verify=True):
+        signup_payload = {"username": "ver", "email": "ver@test.dev", "password": "Str0ng!Pass"}
         r = client.post(
             "/api/v1/auth/sign-up/request",
-            json={"username": "ver", "email": "ver@test.dev", "password": "Str0ng!Pass"},
+            json=signup_payload,
         )
         assert r.status_code == 201
+        signup_handle = r.json()["signup_handle"]
+        assert isinstance(signup_handle, str)
+        assert len(signup_handle) >= 32
+
+        duplicate = client.post("/api/v1/auth/sign-up/request", json=signup_payload)
+        assert duplicate.status_code == 201
+        decoy_handle = duplicate.json()["signup_handle"]
+        assert isinstance(decoy_handle, str)
+        assert len(decoy_handle) >= 32
+        assert decoy_handle != signup_handle
+
         assert len(event_sink.events) == 1
         token = event_sink.events[0].token
+
+        pending = client.get("/api/v1/auth/sign-up/status", params={"handle": signup_handle})
+        assert pending.status_code == 200
+        assert pending.json() == {"confirmed": False}
+        assert pending.headers["Cache-Control"] == "no-store"
+        assert client.get("/api/v1/auth/sign-up/status", params={"handle": decoy_handle}).json() == {"confirmed": False}
+        assert client.get("/api/v1/auth/sign-up/status", params={"handle": "unknown"}).status_code == 404
 
         # Account is inactive until verified → login is forbidden.
         assert _login(client, "ver", "Str0ng!Pass").status_code == 401
 
         confirm = client.post("/api/v1/auth/sign-up/confirm", json={"token": token})
         assert confirm.status_code == 200
+
+        assert client.get("/api/v1/auth/sign-up/status", params={"handle": signup_handle}).json() == {"confirmed": True}
+        assert client.get("/api/v1/auth/sign-up/status", params={"handle": decoy_handle}).json() == {"confirmed": False}
 
         # Now the account is active.
         assert _login(client, "ver", "Str0ng!Pass").status_code == 200

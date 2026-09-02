@@ -8,7 +8,7 @@ data **you** own.
     `jafaal.configure()` and the `configure_*` adapter functions install
     process-wide module registries. Every JAFAAL router in the process shares
     those settings, ports, stores, scope catalog, session factory, and model
-    mapping. v0.1 cannot isolate two differently configured JAFAAL deployments
+    mapping. v0.2 cannot isolate two differently configured JAFAAL deployments
     in one process. Configure each worker at startup and use the documented
     distributed stores when state must span workers or replicas.
 
@@ -68,7 +68,7 @@ jafaal.configure(
 
 ## Registered clients
 
-v0.1 supports only trusted, statically configured, first-party public clients
+v0.2 supports only trusted, statically configured, first-party public clients
 owned by the same host as the users and authorization server. There is no
 dynamic registration, confidential-client authentication, or consent/grant
 store. Every request that issues a token names the client it is for. The
@@ -117,7 +117,7 @@ jafaal.configure(
     JAFAAL has no consent screen, so without `scopes` a registered client can
     receive every scope the user holds. Give each host-owned client only the
     scopes it needs. Do not register a client you do not control; that trust
-    model is outside the v0.1 product boundary.
+    model is outside the v0.2 product boundary.
 
 Allowed redirect registrations are deliberately narrow:
 
@@ -272,6 +272,7 @@ the settings and invalidates settings-derived caches (e.g. the token manager).
 | `challenge_ttl_seconds` | `300` | Lifetime of a WebAuthn challenge held in the state store. |
 | `sensitive` | `"10/minute"` | Budget hint for sensitive endpoints. |
 | `write` | `"30/minute"` | Budget hint for write endpoints. |
+| `polling` | `"30/minute"` | Budget hint for read-only status polling, including sign-up confirmation. |
 | `trusted_proxies` | `()` | Peers **and forwarding hops** whose `X-Forwarded-For`/`X-Real-IP` are honoured (empty = trust only the direct peer). |
 | `ssrf_allowed_hosts` | `()` | Hosts/CIDRs exempted from the SSRF private-address guard. |
 | `idp_require_https` | `True` | Require `https` for identity-provider endpoints (authorization, token, userinfo, JWKS, discovery, revocation); set `False` to allow `http://` for local or self-hosted development. |

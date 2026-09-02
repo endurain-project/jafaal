@@ -1,6 +1,6 @@
 [project]
 name = "jafaal"
-version = "0.1.2"
+version = "0.2.0"
 description = "Just Another FastAPI Authentication Library"
 authors = [{name = "João Vitória Silva", email = "joao@endurain.com"}]
 license = {text = "MIT"}

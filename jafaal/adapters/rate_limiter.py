@@ -11,10 +11,9 @@ distributed** the moment the host configures
 counters then all share one backend.
 
 Budgets come from :class:`~jafaal.settings.AuthSettings`
-(:attr:`~jafaal.settings.AuthSettings.rate_limit_sensitive` /
-:attr:`~jafaal.settings.AuthSettings.rate_limit_write`), so tuning is config, not
-code. The client IP is resolved through :func:`jafaal._core.network.get_ip_address`,
-so configure ``trusted_proxies`` behind a reverse proxy (otherwise every client
+(:class:`~jafaal.settings.RateLimitSettings`), so tuning is config, not code.
+The client IP is resolved through :func:`jafaal._core.network.get_ip_address`, so
+configure ``trusted_proxies`` behind a reverse proxy (otherwise every client
 shares the proxy's address). Wire it in one line::
 
     import jafaal
@@ -119,7 +118,8 @@ class StateStoreRateLimiter:
         """Return a decorator that enforces ``category``'s budget on the endpoint.
 
         Args:
-            category: :data:`jafaal.rate_limit.SENSITIVE` or
+            category: :data:`jafaal.rate_limit.SENSITIVE`,
+                :data:`jafaal.rate_limit.POLLING`, or
                 :data:`jafaal.rate_limit.WRITE`.
 
         Returns:
@@ -172,11 +172,12 @@ class StateStoreRateLimiter:
 
         try:
             settings = jafaal_settings.get_settings()
-            raw = (
-                settings.rate_limits.sensitive
-                if category == jafaal_rate_limit.SENSITIVE
-                else settings.rate_limits.write
-            )
+            if category == jafaal_rate_limit.SENSITIVE:
+                raw = settings.rate_limits.sensitive
+            elif category == jafaal_rate_limit.POLLING:
+                raw = settings.rate_limits.polling
+            else:
+                raw = settings.rate_limits.write
             limit, window = _parse_budget(raw)
         except (ValueError, RuntimeError) as err:
             logger.warning("Rate limiter disabled for this request (bad or unavailable budget): %s", err)

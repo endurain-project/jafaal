@@ -529,6 +529,22 @@ class TestStateStoreRateLimiter:
 
         assert await endpoint(request=_make_request("9.9.9.9")) == "async-ok"
 
+    def test_polling_uses_its_own_budget(self):
+        original = jafaal.get_settings()
+        jafaal.configure(replace_settings(original, sensitive="100/hour", polling="1/hour"))
+        limiter = StateStoreRateLimiter()
+
+        @limiter.limit(rate_limit.POLLING)
+        def endpoint(request):
+            return "ok"
+
+        try:
+            assert endpoint(request=_make_request("1.1.1.1")) == "ok"
+            with pytest.raises(jafaal.RateLimitedError):
+                endpoint(request=_make_request("1.1.1.1"))
+        finally:
+            jafaal.configure(original)
+
     def test_fails_open_when_no_request_argument(self):
         limiter = StateStoreRateLimiter()
 

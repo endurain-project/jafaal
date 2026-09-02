@@ -80,6 +80,7 @@ class SignUpResponse(BaseModel):
         message: Human-readable result message.
         email_verification_required: Whether email verification is required.
         admin_approval_required: Whether admin approval is required.
+        signup_handle: Opaque handle for polling email-verification status.
     """
 
     message: StrictStr = Field(
@@ -94,5 +95,19 @@ class SignUpResponse(BaseModel):
         default=None,
         description=("Whether admin approval is required"),
     )
+    signup_handle: StrictStr | None = Field(
+        default=None,
+        description="Opaque handle for polling email-verification status",
+        min_length=32,
+        max_length=256,
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class SignUpStatusResponse(BaseModel):
+    """Email-verification status exposed to a sign-up handle holder."""
+
+    confirmed: StrictBool
 
     model_config = ConfigDict(extra="forbid")
