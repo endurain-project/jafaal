@@ -15,7 +15,7 @@ requires a major-version bump.
 This page is the contract. If something is not listed as public, it is not
 covered, even if it happens to be importable.
 
-The runtime descriptions below apply to v0.1. Compatibility statements such as
+The runtime descriptions below apply to v0.2. Compatibility statements such as
 "never renamed within a major version" describe the policy that takes effect at
 1.0. Until then, the pre-1.0 policy above governs every listed surface.
 

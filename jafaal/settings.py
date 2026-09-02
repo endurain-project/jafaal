@@ -594,10 +594,12 @@ class RateLimitSettings:
             sign-up, OAuth, API-key minting).
         write: Budget for write endpoints (logout, refresh, session and API-key
             revocation, introspection).
+        polling: Budget for read-only status polling endpoints.
     """
 
     sensitive: str = "10/minute"
     write: str = "30/minute"
+    polling: str = "30/minute"
 
 
 # ===========================================================================

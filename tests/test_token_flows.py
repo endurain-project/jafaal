@@ -12,6 +12,7 @@ import jafaal.orm as jafaal_orm
 import jafaal.password_reset_tokens.crud as prt_crud
 import jafaal.password_reset_tokens.utils as prt_utils
 import jafaal.sign_up_tokens.crud as sut_crud
+import jafaal.sign_up_tokens.status_store as sut_status_store
 import jafaal.sign_up_tokens.utils as sut_utils
 import jafaal.token_hashing as token_hashing
 from jafaal._internal.password_hasher import get_password_hasher, password_hasher
@@ -167,6 +168,44 @@ def test_use_sign_up_token_consumes_once(db, make_user):
 def test_use_sign_up_token_rejects_invalid(db):
     with pytest.raises(exc.InvalidRequestError):
         sut_utils.use_sign_up_token("bogus", db)
+
+
+def test_sign_up_status_store_issues_opaque_real_and_decoy_handles():
+    state = jafaal.InMemoryStateStore()
+    store = sut_status_store.SignUpStatusStore(state)
+
+    real_handle = store.create("token-row-id", ttl_seconds=60)
+    decoy_handle = store.create(None, ttl_seconds=60)
+
+    assert len(real_handle) >= 32
+    assert len(decoy_handle) >= 32
+    assert real_handle != decoy_handle
+    assert store.resolve(real_handle) == (True, "token-row-id")
+    assert store.resolve(decoy_handle) == (True, None)
+    assert all(real_handle not in key and decoy_handle not in key for key in state.iter_keys(""))
+
+
+def test_sign_up_status_store_expires_handles():
+    store = sut_status_store.SignUpStatusStore(jafaal.InMemoryStateStore())
+    handle = store.create("token-row-id", ttl_seconds=0)
+
+    assert store.resolve(handle) == (False, None)
+
+
+def test_sign_up_status_store_wraps_backend_outages():
+    class UnavailableStateStore(jafaal.InMemoryStateStore):
+        def set(self, key, value, ttl_seconds=None):
+            raise jafaal.StateStoreUnavailableError("unavailable")
+
+        def get(self, key):
+            raise jafaal.StateStoreUnavailableError("unavailable")
+
+    store = sut_status_store.SignUpStatusStore(UnavailableStateStore())
+
+    with pytest.raises(sut_status_store.SignUpStatusStoreUnavailableError):
+        store.create(None, ttl_seconds=60)
+    with pytest.raises(sut_status_store.SignUpStatusStoreUnavailableError):
+        store.resolve("unknown")
 
 
 def test_register_local_user_and_email_verification_event(db, event_sink):

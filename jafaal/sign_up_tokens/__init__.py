@@ -10,7 +10,7 @@ Exports:
       mark_sign_up_token_used,
       delete_expired_sign_up_tokens
     - Schemas: SignUpToken, SignUpConfirm,
-      SignUpResponse
+      SignUpResponse, SignUpStatusResponse
     - Models: SignUpToken (ORM model)
 """
 
@@ -24,12 +24,14 @@ from .models import SignUpToken as SignUpTokenModel
 from .schema import (
     SignUpConfirm,
     SignUpResponse,
+    SignUpStatusResponse,
     SignUpToken,
 )
 
 __all__ = [
     "SignUpConfirm",
     "SignUpResponse",
+    "SignUpStatusResponse",
     # Pydantic schemas
     "SignUpToken",
     # Database model

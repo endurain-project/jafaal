@@ -65,6 +65,8 @@ class KeyPurpose(StrEnum):
     PASSWORD_RESET = "jafaal/v1/password-reset"
     #: Digest of a sign-up / email-verification token.
     SIGN_UP = "jafaal/v1/sign-up"
+    #: Digest of a caller-held sign-up status polling handle.
+    SIGN_UP_STATUS = "jafaal/v1/sign-up-status"
     #: Digest of an identity-provider account-link token.
     IDP_LINK = "jafaal/v1/idp-link"
     #: Digest of an RFC 6749 authorization code.

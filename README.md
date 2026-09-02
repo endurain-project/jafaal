@@ -84,7 +84,7 @@ never touches it, per RFC 9700 §7.2), native clients get it in the response bod
     must configure itself, and replicas need distributed state where documented.
 - **First-party public clients only.** OAuth clients are trusted applications
     owned by the same host, registered statically in `AuthSettings.oauth_clients`,
-    and authenticated with PKCE rather than a client secret. JAFAAL v0.1 has no
+    and authenticated with PKCE rather than a client secret. JAFAAL v0.2 has no
     third-party client lifecycle, consent records, confidential-client
     authentication, or dynamic registration.
 

@@ -4,7 +4,9 @@ from typing import Annotated
 
 from fastapi import (
     Depends,
+    Query,
     Request,
+    Response,
 )
 from sqlalchemy.orm import Session
 
@@ -15,8 +17,11 @@ import jafaal.orm as jafaal_orm
 import jafaal.ports as jafaal_ports
 import jafaal.rate_limit as jafaal_rate_limit
 import jafaal.schema as jafaal_schema
+import jafaal.sign_up_tokens.crud as sign_up_tokens_crud
 import jafaal.sign_up_tokens.schema as sign_up_tokens_schema
+import jafaal.sign_up_tokens.status_store as sign_up_status_store
 import jafaal.sign_up_tokens.utils as sign_up_tokens_utils
+import jafaal.utils as jafaal_utils
 
 # Define the API router
 router = jafaal_orm.auth_router()
@@ -39,6 +44,10 @@ async def signup(
         Session,
         Depends(jafaal_orm.get_db),
     ],
+    status_store: Annotated[
+        sign_up_status_store.SignUpStatusStore,
+        Depends(sign_up_status_store.get_sign_up_status_store),
+    ],
 ) -> sign_up_tokens_schema.SignUpResponse:
     """
     Handle user sign-up request.
@@ -48,6 +57,7 @@ async def signup(
         user: Sign-up payload (username, email, password).
         identity_service: Injected identity service.
         db: Database session.
+        status_store: Ephemeral sign-up status handle store.
 
     Returns:
         Sign-up result with message and flags.
@@ -73,10 +83,16 @@ async def signup(
     message = "User created successfully."
     email_verification_required: bool | None = None
     admin_approval_required: bool | None = None
+    signup_handle: str | None = None
 
     if signup_config.require_email_verification:
+        token_id: str | None = None
         if created_user is not None:
-            await sign_up_tokens_utils.request_email_verification(created_user, db)
+            token_id = await sign_up_tokens_utils.request_email_verification_with_reference(created_user, db)
+        signup_handle = status_store.create(
+            token_id,
+            ttl_seconds=sign_up_tokens_utils.SIGN_UP_TOKEN_TTL_SECONDS,
+        )
         message += " Email sent with verification instructions."
         email_verification_required = True
     if signup_config.require_admin_approval:
@@ -88,7 +104,40 @@ async def signup(
         message=message,
         email_verification_required=email_verification_required,
         admin_approval_required=admin_approval_required,
+        signup_handle=signup_handle,
     )
+
+
+@router.get(
+    "/sign-up/status",
+    response_model=sign_up_tokens_schema.SignUpStatusResponse,
+)
+@jafaal_rate_limit.limit(jafaal_rate_limit.POLLING)
+def get_signup_status(
+    request: Request,
+    response: Response,
+    handle: Annotated[str, Query(min_length=1, max_length=256)],
+    status_store: Annotated[
+        sign_up_status_store.SignUpStatusStore,
+        Depends(sign_up_status_store.get_sign_up_status_store),
+    ],
+    db: Annotated[
+        Session,
+        Depends(jafaal_orm.get_db),
+    ],
+) -> sign_up_tokens_schema.SignUpStatusResponse:
+    """Return whether the email token associated with an opaque handle was confirmed."""
+    jafaal_utils.apply_no_store(response)
+    found, token_id = status_store.resolve(handle)
+    if not found:
+        raise jafaal_exceptions.NotFoundError("Sign-up handle not found or expired")
+    if token_id is None:
+        return sign_up_tokens_schema.SignUpStatusResponse(confirmed=False)
+
+    confirmed = sign_up_tokens_crud.is_sign_up_token_confirmed(token_id, db)
+    if confirmed is None:
+        raise jafaal_exceptions.NotFoundError("Sign-up handle not found or expired")
+    return sign_up_tokens_schema.SignUpStatusResponse(confirmed=confirmed)
 
 
 @router.post(

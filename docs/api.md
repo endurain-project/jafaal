@@ -54,6 +54,7 @@ Relying Party. They are not OpenID Provider endpoints.
 | `POST` | `/auth/password/user/{user_id}` | Administrative password reset |
 | `POST` | `/auth/password-reset/request`, `/auth/password-reset/confirm` | Request and consume a password-reset token |
 | `POST` | `/auth/sign-up/request`, `/auth/sign-up/confirm` | Create a local account and confirm its email token |
+| `GET` | `/auth/sign-up/status?handle=...` | Poll email-confirmation status with the opaque handle returned by sign-up |
 | `GET` | `/auth/sessions/user/{user_id}` | List a user's sessions |
 | `DELETE` | `/auth/sessions/{session_id}/user/{user_id}`, `/auth/sessions/user/{user_id}` | Revoke one or all of a user's sessions |
 | `GET`, `POST` | `/auth/api-keys` | List or create API keys |

@@ -24,8 +24,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+SIGN_UP_TOKEN_TTL_SECONDS = 24 * 60 * 60
 
-def create_sign_up_token(user_id: UserId, db: Session) -> tuple[str, datetime]:
+
+def create_sign_up_token(user_id: UserId, db: Session, *, token_id: str | None = None) -> tuple[str, datetime]:
     """
     Create and persist a sign-up token for a user.
 
@@ -43,11 +45,11 @@ def create_sign_up_token(user_id: UserId, db: Session) -> tuple[str, datetime]:
     token, token_hash = token_hashing.generate_token_and_hash(token_hashing.KeyPurpose.SIGN_UP)
 
     # Compute the expiry once so the persisted row and the returned value agree.
-    expires_at = datetime.now(UTC) + timedelta(hours=24)  # 24 hour expiration
+    expires_at = datetime.now(UTC) + timedelta(seconds=SIGN_UP_TOKEN_TTL_SECONDS)
 
     # Create token object
     reset_token = sign_up_tokens_schema.SignUpToken(
-        id=str(uuid4()),
+        id=token_id or str(uuid4()),
         user_id=user_id,
         token_hash=token_hash,
         created_at=datetime.now(UTC),
@@ -140,6 +142,11 @@ def register_local_user(
 
 
 async def request_email_verification(user: jafaal_ports.UserProtocol, db: Session) -> None:
+    """Mint an email-verification token and emit ``EmailVerificationRequested``."""
+    await request_email_verification_with_reference(user, db)
+
+
+async def request_email_verification_with_reference(user: jafaal_ports.UserProtocol, db: Session) -> str:
     """Mint an email-verification token and emit ``EmailVerificationRequested``.
 
     The host delivers the token (e.g. by email). Delivery is best-effort:
@@ -148,8 +155,13 @@ async def request_email_verification(user: jafaal_ports.UserProtocol, db: Sessio
     Args:
         user: The newly created user awaiting email verification.
         db: Active SQLAlchemy session.
+
+    Returns:
+        Random database identifier of the sign-up token, for internal status
+        handle linkage only.
     """
-    token, expires_at = create_sign_up_token(user.id, db)
+    token_id = str(uuid4())
+    token, expires_at = create_sign_up_token(user.id, db, token_id=token_id)
     event = jafaal_ports.EmailVerificationRequested(
         user_id=user.id,
         email=user.email,
@@ -162,6 +174,7 @@ async def request_email_verification(user: jafaal_ports.UserProtocol, db: Sessio
         await jafaal_ports.get_event_sink().on_email_verification_requested(event)
     except Exception:
         logger.exception("Failed to deliver email-verification event for user %s", user.id)
+    return token_id
 
 
 async def notify_pending_admin_approval(user: jafaal_ports.UserProtocol) -> None:
