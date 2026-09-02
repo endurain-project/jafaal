@@ -4,7 +4,9 @@ API-key authentication over the wire, and lazy rate-limiter binding.
 
 from __future__ import annotations
 
+import ast
 import functools
+from pathlib import Path
 
 from conftest import WEB_CLIENT_ID, replace_settings
 from fastapi import FastAPI, Response, Security
@@ -136,6 +138,33 @@ class _BlockingLimiter:
             return wrapper
 
         return decorator
+
+
+def test_every_rate_limited_endpoint_declares_request_parameter():
+    violations = []
+    package_root = Path(jafaal.__file__).parent
+
+    for path in package_root.rglob("*.py"):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            is_rate_limited = any(
+                isinstance(decorator, ast.Call)
+                and isinstance(decorator.func, ast.Attribute)
+                and decorator.func.attr == "limit"
+                for decorator in node.decorator_list
+            )
+            if not is_rate_limited:
+                continue
+
+            parameters = (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs)
+            request = next((parameter for parameter in parameters if parameter.arg == "request"), None)
+            annotation = ast.unparse(request.annotation) if request and request.annotation else None
+            if annotation != "Request":
+                violations.append(f"{path.relative_to(package_root)}::{node.name} ({annotation=})")
+
+    assert not violations, "Rate-limited endpoints require request: Request:\n" + "\n".join(violations)
 
 
 def test_rate_limiter_configured_after_router_import_is_enforced(client, make_user):

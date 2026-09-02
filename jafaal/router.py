@@ -1404,6 +1404,7 @@ def logout(
 )
 @jafaal_rate_limit.limit(jafaal_rate_limit.SENSITIVE)
 def change_password(
+    request: Request,
     data: jafaal_schema.PasswordChangeRequest,
     token_user_id: Annotated[
         jafaal_orm.UserId,
@@ -1426,6 +1427,7 @@ def change_password(
     """Change the authenticated user's own password.
 
     Args:
+        request: HTTP request used for rate limiting.
         data: Step-up factors, the new password, and the session-revocation
             preference.
         token_user_id: The authenticated user (from the access token ``sub``).
@@ -1473,6 +1475,7 @@ def change_password(
 )
 @jafaal_rate_limit.limit(jafaal_rate_limit.SENSITIVE)
 def renew_password(
+    request: Request,
     data: jafaal_schema.PasswordRenewalRequest,
     password_hasher: Annotated[
         jafaal_password_hasher.PasswordHasher,
@@ -1491,6 +1494,7 @@ def renew_password(
     """Replace a password the account is required to change before signing in.
 
     Args:
+        request: HTTP request used for rate limiting.
         data: The account, its current (required-to-change) password, any MFA
             code, and the replacement.
         password_hasher: Used to equalise the timing of the rejection paths.
@@ -1548,6 +1552,7 @@ def renew_password(
 )
 @jafaal_rate_limit.limit(jafaal_rate_limit.SENSITIVE)
 def admin_reset_password(
+    request: Request,
     user_id: jafaal_orm.UserId,
     data: jafaal_schema.AdminPasswordResetRequest,
     _check_scope: Annotated[
@@ -1571,6 +1576,7 @@ def admin_reset_password(
     """Set another user's password on an administrator's authority.
 
     Args:
+        request: HTTP request used for rate limiting.
         user_id: The account to reset.
         data: The administrator's own step-up factors, the new password, and
             whether the owner must replace it at first use.
@@ -1621,6 +1627,7 @@ def admin_reset_password(
 )
 @jafaal_rate_limit.limit(jafaal_rate_limit.WRITE)
 def introspect_token_endpoint(
+    request: Request,
     response: Response,
     _scopes: Annotated[
         None,
@@ -1643,6 +1650,7 @@ def introspect_token_endpoint(
     ``jafaal.configure_api_key_scopes([..., jafaal.scopes.AUTH_INTROSPECT])``.
 
     Args:
+        request: HTTP request used for rate limiting.
         response: The HTTP response object, marked ``no-store``.
         introspection_request: Parsed token and optional RFC 7662 hint. The hint
             is ignored because the token's ``token_use`` claim is authoritative.
@@ -1665,6 +1673,7 @@ def introspect_token_endpoint(
 )
 @jafaal_rate_limit.limit(jafaal_rate_limit.WRITE)
 def revoke_token_endpoint(
+    request: Request,
     response: Response,
     revocation_request: Annotated[
         oauth_requests.OAuthRevocationRequest,
@@ -1692,6 +1701,7 @@ def revoke_token_endpoint(
     Unknown and client-mismatched tokens return a silent 200.
 
     Args:
+        request: HTTP request used for rate limiting.
         response: The HTTP response object, marked ``no-store``.
         revocation_request: Parsed token, client id, and optional RFC 7009 hint.
             The hint is ignored because the token's ``token_use`` claim is

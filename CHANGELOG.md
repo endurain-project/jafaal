@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 What counts as a breaking change, and what does not, is defined in [API stability](docs/api-stability.md). During the pre-1.0 series, its public surface is a compatibility target rather than a frozen guarantee: breaking changes may ship in a minor release and are documented here. The full major-version guarantee begins with 1.0.0.
 
+## [0.1.2] - 2026-09-02
+
+### Fixed
+
+- All rate-limited routes now receive the HTTP request explicitly, ensuring the built-in limiter enforces their budgets and host adapters such as SlowAPI can decorate them safely.
+
 ## [0.1.1] - 2026-09-01
 
 ### Added
@@ -101,5 +107,6 @@ Initial pre-1.0 release. The documented public surface is available for integrat
 
 See [Security](https://jafaal.endurain.com/security/) and [Threat model](https://jafaal.endurain.com/threat-model/) for the security design and the host's responsibilities.
 
+[0.1.2]: https://github.com/endurain-project/jafaal/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/endurain-project/jafaal/releases/tag/v0.1.1
 [0.1.0]: https://github.com/endurain-project/jafaal/releases/tag/v0.1.0

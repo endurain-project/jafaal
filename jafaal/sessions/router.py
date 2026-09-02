@@ -6,6 +6,7 @@ from typing import Annotated
 from fastapi import (
     Depends,
     Query,
+    Request,
     Security,
     status,
 )
@@ -73,6 +74,7 @@ def read_sessions_user(
 )
 @jafaal_rate_limit.limit(jafaal_rate_limit.WRITE)
 def delete_session_user(
+    request: Request,
     session_id: str,
     user_id: UserId,
     _check_scope: Annotated[
@@ -89,6 +91,7 @@ def delete_session_user(
     Delete a user session.
 
     Args:
+        request: HTTP request used for rate limiting.
         session_id: The ID of the session to delete.
         user_id: The ID of the user who owns the session.
         _check_scope: Scope validation dependency.
@@ -111,6 +114,7 @@ def delete_session_user(
 )
 @jafaal_rate_limit.limit(jafaal_rate_limit.WRITE)
 def delete_sessions_user(
+    request: Request,
     user_id: UserId,
     _check_scope: Annotated[
         None,
@@ -135,6 +139,7 @@ def delete_sessions_user(
     all of that user's sessions.
 
     Args:
+        request: HTTP request used for rate limiting.
         user_id: The ID of the user whose sessions to revoke.
         _check_scope: Scope validation dependency.
         principal: The authenticated principal (object-level access check).

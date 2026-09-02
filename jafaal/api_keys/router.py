@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from fastapi import Depends, status
+from fastapi import Depends, Request, status
 from sqlalchemy.orm import Session
 
 import jafaal._internal.internal_dependencies as jafaal_internal_dependencies
@@ -54,6 +54,7 @@ def get_user_api_keys(
 )
 @jafaal_rate_limit.limit(jafaal_rate_limit.SENSITIVE)
 def create_user_api_key(
+    request: Request,
     data: api_keys_schema.UsersApiKeyCreate,
     principal: Annotated[
         Principal,
@@ -84,6 +85,7 @@ def create_user_api_key(
     token alone must not be sufficient to mint one.
 
     Args:
+        request: HTTP request used for rate limiting.
         data: Key creation data (name, scopes, expiry,
             step-up credentials).
         principal: The authenticated caller, including the scopes it holds.
@@ -138,6 +140,7 @@ def create_user_api_key(
 )
 @jafaal_rate_limit.limit(jafaal_rate_limit.WRITE)
 def revoke_user_api_key(
+    request: Request,
     api_key_id: str,
     token_user_id: Annotated[
         int,
@@ -152,6 +155,7 @@ def revoke_user_api_key(
     will be rejected on any subsequent use.
 
     Args:
+        request: HTTP request used for rate limiting.
         api_key_id: UUID of the API key to revoke.
         token_user_id: User ID from access token.
         db: Database session dependency.
@@ -172,6 +176,7 @@ def revoke_user_api_key(
 )
 @jafaal_rate_limit.limit(jafaal_rate_limit.WRITE)
 def delete_user_api_key(
+    request: Request,
     api_key_id: str,
     token_user_id: Annotated[
         int,
@@ -186,6 +191,7 @@ def delete_user_api_key(
     or recovered after this operation.
 
     Args:
+        request: HTTP request used for rate limiting.
         api_key_id: UUID of the API key to delete.
         token_user_id: User ID from access token.
         db: Database session dependency.
