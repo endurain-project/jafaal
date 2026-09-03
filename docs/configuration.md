@@ -312,6 +312,39 @@ the settings and invalidates settings-derived caches (e.g. the token manager).
     `https://api.example.com`), list the **frontend** origin in
     `csrf_trusted_origins` or every refresh will be rejected with a 403.
 
+## Startup diagnostics
+
+`create_auth_router()` logs soft configuration problems through
+`jafaal.factory`. Each record carries a stable `warning_code` for selective
+filtering:
+
+| `warning_code` | Condition |
+| --- | --- |
+| `rate_limiter_unconfigured` | The no-op rate limiter is active outside a deployed environment. |
+| `trusted_proxies_wildcard` | Every proxy is trusted in a deployed environment. |
+| `password_breach_checker_unconfigured` | The no-op breached-password checker is active. |
+| `symmetric_oauth_signing` | OAuth clients are registered while tokens use symmetric signing. |
+| `login_token_url_prefix_mismatch` | `login_token_url` does not match the auth router prefix. |
+| `refresh_cookie_path_prefix_mismatch` | The refresh-cookie path does not match the auth router prefix. |
+
+For example, a deployment where JAFAAL is intentionally the only token verifier
+can suppress the symmetric-signing warning without hiding other logs:
+
+```python
+import logging
+
+
+class SuppressSymmetricOAuthSigning(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return getattr(record, "warning_code", None) != "symmetric_oauth_signing"
+
+
+logging.getLogger("jafaal.factory").addFilter(SuppressSymmetricOAuthSigning())
+```
+
+Deployed configurations that violate a fail-closed guard raise `RuntimeError`;
+logging filters do not bypass those guards.
+
 ## JWT wire format
 
 JAFAAL publishes a [JWKS](#asymmetric-signing-jwks) so third-party resource

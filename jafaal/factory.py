@@ -43,6 +43,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _log_startup_warning(code: str, message: str) -> None:
+    """Log a suppressible startup diagnostic with a stable structured code."""
+    logger.warning(message, extra={"warning_code": code})
+
+
 @dataclass(frozen=True)
 class RouterPrefixes:
     """Sub-prefixes for the aggregated routers (relative to the host's API root).
@@ -83,29 +88,32 @@ def _warn_on_insecure_defaults() -> None:
     deployed = jafaal_settings.is_configured() and jafaal_settings.get_settings().is_deployed
 
     if not deployed and not jafaal_rate_limit.is_enforcing():
-        logger.warning(
+        _log_startup_warning(
+            "rate_limiter_unconfigured",
             "JAFAAL rate limiting is not configured: the no-op limiter is active, so login / MFA / "
             "password-reset / refresh endpoints are NOT rate-limited. Install a real limiter — the "
             "batteries-included jafaal.adapters.StateStoreRateLimiter needs no extra dependency — via "
             "rate_limiter= on create_auth_router() (or jafaal.configure_rate_limiter(...)) in production. "
-            "Per-account progressive lockout still applies."
+            "Per-account progressive lockout still applies.",
         )
 
     if deployed and tuple(jafaal_settings.get_settings().network.trusted_proxies) == ("*",):
-        logger.warning(
+        _log_startup_warning(
+            "trusted_proxies_wildcard",
             "JAFAAL trusted_proxies is set to ('*',) in a deployed environment: every peer is trusted, so "
             "any client can spoof its source IP via X-Forwarded-For / X-Real-IP (poisoning session-IP audit "
-            "records and IdP link-token IP checks). Set trusted_proxies to your reverse proxy's IPs/CIDRs."
+            "records and IdP link-token IP checks). Set trusted_proxies to your reverse proxy's IPs/CIDRs.",
         )
 
     if isinstance(jafaal_ports.get_password_breach_checker(), jafaal_ports.NullPasswordBreachChecker):
-        logger.warning(
+        _log_startup_warning(
+            "password_breach_checker_unconfigured",
             "JAFAAL breached-password screening is not configured: the no-op checker is active, so a "
             "password known to be in a public breach corpus is accepted at sign-up, reset, and change. "
             "NIST SP 800-63B-4 §3.1.1.2 pairs 'no composition rules' with a blocklist check — JAFAAL's "
             "default policy drops the former, so install the latter: "
             "jafaal.configure_password_breach_checker(jafaal.adapters.HibpBreachChecker()) needs no "
-            "credentials and sends only a five-character SHA-1 prefix."
+            "credentials and sends only a five-character SHA-1 prefix.",
         )
 
     _warn_on_symmetric_signing()
@@ -138,14 +146,15 @@ def _warn_on_symmetric_signing() -> None:
     settings = jafaal_settings.get_settings()
     if settings.tokens.is_asymmetric or not settings.oauth_clients:
         return
-    logger.warning(
+    _log_startup_warning(
+        "symmetric_oauth_signing",
         f"JAFAAL is signing tokens with {settings.tokens.algorithm} (symmetric) while "
         f"{len(settings.oauth_clients)} OAuth client(s) are registered. The signing secret and the "
         "verification key are the same value, so anything able to verify a token can also mint one: a "
         "resource server cannot verify statelessly without being handed the power to issue. The JWKS "
         "endpoint has no key to publish and answers 404, and jwks_uri is omitted from the discovery "
         "document. Configure an asymmetric algorithm — tokens=TokenSettings(algorithm='ES256') with "
-        "secrets=Secrets(private_key=<PEM>) — so verifiers get a public key instead."
+        "secrets=Secrets(private_key=<PEM>) — so verifiers get a public key instead.",
     )
 
 
@@ -168,17 +177,19 @@ def _warn_on_router_prefix_mismatch(prefixes: RouterPrefixes) -> None:
     settings = jafaal_settings.get_settings()
     expected_login_suffix = f"{prefixes.auth}/login"
     if not settings.login_token_url.endswith(expected_login_suffix):
-        logger.warning(
+        _log_startup_warning(
+            "login_token_url_prefix_mismatch",
             f"AuthSettings.login_token_url={settings.login_token_url!r} does not end with the auth router "
             f"prefix {expected_login_suffix!r}; Swagger's 'Authorize' password flow will POST to the wrong "
-            "URL. Keep login_token_url in lockstep with RouterPrefixes.auth."
+            "URL. Keep login_token_url in lockstep with RouterPrefixes.auth.",
         )
     if not settings.sessions.refresh_cookie_path.endswith(prefixes.auth):
-        logger.warning(
+        _log_startup_warning(
+            "refresh_cookie_path_prefix_mismatch",
             f"AuthSettings.refresh_cookie_path={settings.sessions.refresh_cookie_path!r} does not end with the auth "
             f"router prefix {prefixes.auth!r}; the refresh cookie will be scoped to a path that the /refresh "
             "and /logout endpoints are not served under, so web sessions will silently fail to refresh. Keep "
-            "refresh_cookie_path in lockstep with RouterPrefixes.auth."
+            "refresh_cookie_path in lockstep with RouterPrefixes.auth.",
         )
 
 

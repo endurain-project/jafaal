@@ -108,6 +108,7 @@ def test_warns_when_rate_limiter_unconfigured(caplog):
         with caplog.at_level(logging.WARNING, logger=FACTORY_LOGGER):
             jafaal.create_auth_router()
         assert "rate limiting is not configured" in caplog.text.lower()
+        assert any(getattr(record, "warning_code", None) == "rate_limiter_unconfigured" for record in caplog.records)
     finally:
         jafaal_rate_limit.reset_rate_limiter()
 
@@ -118,7 +119,76 @@ def test_no_rate_limit_warning_when_configured(caplog):
         with caplog.at_level(logging.WARNING, logger=FACTORY_LOGGER):
             jafaal.create_auth_router(rate_limiter=_DummyLimiter())
         assert "rate limiting is not configured" not in caplog.text.lower()
+        assert all(getattr(record, "warning_code", None) != "rate_limiter_unconfigured" for record in caplog.records)
     finally:
+        jafaal_rate_limit.reset_rate_limiter()
+
+
+# --------------------------------------------------------------------------- #
+# Symmetric OAuth signing warning
+# --------------------------------------------------------------------------- #
+
+
+def test_symmetric_oauth_signing_uses_structured_warning_code(caplog):
+    with caplog.at_level(logging.WARNING, logger=FACTORY_LOGGER):
+        jafaal.create_auth_router(rate_limiter=_DummyLimiter())
+    matching = [
+        record for record in caplog.records if getattr(record, "warning_code", None) == "symmetric_oauth_signing"
+    ]
+    assert len(matching) == 1
+    assert "signing tokens with HS256" in matching[0].getMessage()
+
+
+def test_symmetric_oauth_signing_warning_can_be_selectively_suppressed(caplog):
+    class SuppressSymmetricOAuthSigning(logging.Filter):
+        def filter(self, record):
+            return getattr(record, "warning_code", None) != "symmetric_oauth_signing"
+
+    factory_logger = logging.getLogger(FACTORY_LOGGER)
+    warning_filter = SuppressSymmetricOAuthSigning()
+    factory_logger.addFilter(warning_filter)
+    try:
+        with caplog.at_level(logging.WARNING, logger=FACTORY_LOGGER):
+            jafaal.create_auth_router(rate_limiter=_DummyLimiter())
+    finally:
+        factory_logger.removeFilter(warning_filter)
+
+    assert "signing tokens with HS256" not in caplog.text
+
+
+# --------------------------------------------------------------------------- #
+# Other insecure-default warning codes
+# --------------------------------------------------------------------------- #
+
+
+def test_password_breach_checker_warning_uses_structured_code(caplog):
+    checker = jafaal.get_password_breach_checker()
+    jafaal.configure_password_breach_checker(jafaal.NullPasswordBreachChecker())
+    try:
+        with caplog.at_level(logging.WARNING, logger=FACTORY_LOGGER):
+            jafaal.create_auth_router(rate_limiter=_DummyLimiter())
+        assert any(
+            getattr(record, "warning_code", None) == "password_breach_checker_unconfigured" for record in caplog.records
+        )
+    finally:
+        jafaal.configure_password_breach_checker(checker)
+
+
+def test_trusted_proxy_warning_uses_structured_code(caplog):
+    original = jafaal.get_settings()
+    settings = replace_settings(
+        _production_settings(),
+        network=jafaal.NetworkSettings(trusted_proxies=("*",)),
+        allow_in_memory_state_store_when_deployed=True,
+        allow_no_password_breach_check_when_deployed=True,
+    )
+    jafaal.configure(settings)
+    try:
+        with caplog.at_level(logging.WARNING, logger=FACTORY_LOGGER):
+            jafaal.create_auth_router(rate_limiter=_DummyLimiter())
+        assert any(getattr(record, "warning_code", None) == "trusted_proxies_wildcard" for record in caplog.records)
+    finally:
+        jafaal.configure(original)
         jafaal_rate_limit.reset_rate_limiter()
 
 
@@ -340,6 +410,9 @@ def test_warns_on_router_prefix_settings_mismatch(caplog):
         text = caplog.text
         assert "login_token_url" in text
         assert "refresh_cookie_path" in text
+        codes = {getattr(record, "warning_code", None) for record in caplog.records}
+        assert "login_token_url_prefix_mismatch" in codes
+        assert "refresh_cookie_path_prefix_mismatch" in codes
     finally:
         jafaal_rate_limit.reset_rate_limiter()
 
