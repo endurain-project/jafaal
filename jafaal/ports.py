@@ -27,7 +27,7 @@ import threading
 from collections.abc import Coroutine, Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, runtime_checkable
 
 from jafaal._core.registry import ConfigSlot
 
@@ -367,6 +367,22 @@ class AuthenticatorChanged:
     remaining_factors: int | None = None
 
 
+@dataclass(frozen=True)
+class PasswordChanged:
+    """A stored password was replaced for an existing account.
+
+    ``change_kind`` is one of ``"self_service"``, ``"forced_renewal"``,
+    ``"password_reset"``, or ``"administrator_reset"``. The event is emitted
+    only after the password transaction commits and contains no credentials.
+    """
+
+    user_id: Any
+    username: str
+    change_kind: Literal["self_service", "forced_renewal", "password_reset", "administrator_reset"]
+    revoked_sessions: int
+    initiating_administrator_user_id: Any | None = None
+
+
 class AuthEventSink(Protocol):
     """Host-owned delivery of JAFAAL's outbound notifications.
 
@@ -401,6 +417,8 @@ class AuthEventSink(Protocol):
 
     async def on_authenticator_changed(self, event: AuthenticatorChanged) -> None: ...
 
+    async def on_password_changed(self, event: PasswordChanged) -> None: ...
+
 
 class NullAuthEventSink:
     """Default no-op sink — a host that skips these flows implements nothing."""
@@ -430,6 +448,9 @@ class NullAuthEventSink:
         return None
 
     async def on_authenticator_changed(self, event: AuthenticatorChanged) -> None:
+        return None
+
+    async def on_password_changed(self, event: PasswordChanged) -> None:
         return None
 
 
@@ -636,15 +657,16 @@ CRITICAL_EVENT_METHODS: frozenset[str] = frozenset(
         "on_refresh_token_theft_detected",
         "on_idp_account_linked",
         "on_authenticator_changed",
+        "on_password_changed",
     }
 )
 """Events whose loss is itself a security incident.
 
-An undelivered "your account was locked", "refresh-token theft detected", or
-"a new identity provider can now sign in as you" notification is not a missed
-convenience email — it is the signal a user or operator needs to react to an
-attack in progress. A flood of ordinary notifications must therefore never be
-able to starve them out, so these are admitted against
+An undelivered account lockout, password or authenticator change,
+refresh-token theft detection, or identity-provider link notification is not a
+missed convenience email — it is the signal a user or operator needs to react
+to an attack in progress. A flood of ordinary notifications must therefore
+never be able to starve them out, so these are admitted against
 :data:`MAX_INFLIGHT_CRITICAL_EVENTS` (strictly larger than the general bound),
 which reserves headroom that routine traffic cannot consume.
 """
@@ -854,6 +876,7 @@ __all__ = [
     "NullAuthEventSink",
     "NullPasswordBreachChecker",
     "PasswordBreachChecker",
+    "PasswordChanged",
     "PasswordPolicy",
     "PasswordResetRequested",
     "RefreshTokenTheftDetected",

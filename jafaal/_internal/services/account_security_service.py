@@ -182,7 +182,7 @@ def change_managed_user_password(
     db: Session,
     *,
     must_change: bool = False,
-) -> None:
+) -> int:
     """
     Change a managed user's password and revoke auth state.
 
@@ -196,7 +196,7 @@ def change_managed_user_password(
             a password is known to that administrator.
 
     Returns:
-        None.
+        The number of sessions revoked.
 
     Raises:
         JafaalError: If password persistence fails.
@@ -210,7 +210,7 @@ def change_managed_user_password(
     identity_service.set_local_password_hash(user_id, hashed_password)
     if must_change:
         jafaal_credentials_crud.upsert_password_hash(user_id, hashed_password, db, must_change=True)
-    credential_sweep.revoke_derived_credentials(user_id, db, reason="admin_password_change")
+    revoked = credential_sweep.revoke_derived_credentials(user_id, db, reason="admin_password_change")
     jafaal_audit.record(
         jafaal_audit.Event.PASSWORD_CHANGED,
         level=logging.WARNING,
@@ -223,3 +223,4 @@ def change_managed_user_password(
         scope="all",
         reason="password_change",
     )
+    return revoked

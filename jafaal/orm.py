@@ -316,6 +316,26 @@ def get_db(request: Request) -> Generator[Session]:
 # ---------------------------------------------------------------------------
 
 _UOW_FLAG = "jafaal_unit_of_work"
+_AFTER_COMMIT_CALLBACKS = "jafaal_after_commit_callbacks"
+
+
+def defer_until_commit(db: Session, callback: Callable[[], None]) -> None:
+    """Run ``callback`` only after the request transaction commits."""
+    callbacks = db.info.setdefault(_AFTER_COMMIT_CALLBACKS, [])
+    callbacks.append(callback)
+
+
+def _run_after_commit_callbacks(db: Session) -> None:
+    callbacks = db.info.pop(_AFTER_COMMIT_CALLBACKS, ())
+    for callback in callbacks:
+        try:
+            callback()
+        except Exception as err:  # pragma: no cover - defensive adapter boundary
+            logger.warning("Post-commit callback failed: %s", type(err).__name__, exc_info=err)
+
+
+def _discard_after_commit_callbacks(db: Session) -> None:
+    db.info.pop(_AFTER_COMMIT_CALLBACKS, None)
 
 
 @contextmanager
@@ -351,7 +371,9 @@ def unit_of_work(db: Session) -> Generator[Session]:
     try:
         yield db
         db.commit()
+        _run_after_commit_callbacks(db)
     except Exception:
+        _discard_after_commit_callbacks(db)
         db.rollback()
         raise
     finally:
@@ -386,6 +408,7 @@ class TransactionalRoute(APIRoute):
                 # Outside the try above on purpose: a failing commit must surface
                 # as an error response, not be masked by the rollback path.
                 db.commit()
+                _run_after_commit_callbacks(db)
             return response
 
         return transactional_handler
@@ -397,6 +420,7 @@ def _rollback_request_session(request: Request) -> None:
     if db is None:
         return
     try:
+        _discard_after_commit_callbacks(db)
         db.rollback()
     except Exception as err:  # pragma: no cover - defensive
         logger.error(f"Rollback failed for the request session: {type(err).__name__}", exc_info=err)

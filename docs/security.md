@@ -183,7 +183,8 @@ filter still surfaces them.
     **security notifications** it can turn into user-facing alerts:
     `on_new_device_login`, `on_account_locked`,
     `on_refresh_token_theft_detected`, `on_idp_account_linked`, and
-    `on_authenticator_changed` (any factor added or removed). They are
+    `on_authenticator_changed` (any factor added or removed), and
+    `on_password_changed` (after the password transaction commits). They are
     fire-and-forget and forward-compatible — a sink that does not implement a
     method simply skips it.
 

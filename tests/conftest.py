@@ -153,6 +153,9 @@ class RecordingEventSink:
     async def on_refresh_token_theft_detected(self, event):
         self.events.append(event)
 
+    async def on_password_changed(self, event):
+        self.events.append(event)
+
 
 # --------------------------------------------------------------------------- #
 # Settings override helper

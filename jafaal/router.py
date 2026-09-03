@@ -836,7 +836,7 @@ def _grant_refresh_token(
         raise jafaal_exceptions.InvalidTokenError("Invalid refresh token")
 
     # get user
-    user = jafaal_ports.get_user_repository().get_by_id(token_user_id, db)
+    user = jafaal_user_guards.get_user_by_id_or_404(token_user_id, db)
 
     if user is None:
         logger.warning(f"User ID {token_user_id} not found during token refresh")
@@ -1457,6 +1457,19 @@ def change_password(
         revoke_other_sessions=data.revoke_other_sessions,
         current_session_id=session_id,
     )
+    user = jafaal_user_guards.get_user_by_id_or_404(token_user_id, db)
+    jafaal_orm.defer_until_commit(
+        db,
+        lambda: jafaal_ports.dispatch_event(
+            "on_password_changed",
+            jafaal_ports.PasswordChanged(
+                user_id=token_user_id,
+                username=user.username,
+                change_kind="self_service",
+                revoked_sessions=revoked,
+            ),
+        ),
+    )
     return {"message": "Password changed", "revoked_sessions": revoked}
 
 
@@ -1529,6 +1542,18 @@ def renew_password(
         identity_service,
         step_up_store,
         db,
+    )
+    jafaal_orm.defer_until_commit(
+        db,
+        lambda: jafaal_ports.dispatch_event(
+            "on_password_changed",
+            jafaal_ports.PasswordChanged(
+                user_id=user.id,
+                username=user.username,
+                change_kind="forced_renewal",
+                revoked_sessions=revoked,
+            ),
+        ),
     )
     return {"message": "Password changed", "revoked_sessions": revoked}
 
@@ -1609,15 +1634,29 @@ def admin_reset_password(
         db,
     )
 
-    account_security_service.change_managed_user_password(
+    revoked = account_security_service.change_managed_user_password(
         user_id,
         data.new_password,
         identity_service,
         db,
         must_change=data.must_change,
     )
+    user = jafaal_user_guards.get_user_by_id_or_404(user_id, db)
+    jafaal_orm.defer_until_commit(
+        db,
+        lambda: jafaal_ports.dispatch_event(
+            "on_password_changed",
+            jafaal_ports.PasswordChanged(
+                user_id=user_id,
+                username=user.username,
+                change_kind="administrator_reset",
+                revoked_sessions=revoked,
+                initiating_administrator_user_id=principal.user_id,
+            ),
+        ),
+    )
     logger.info(f"Administrator {principal.user_id} reset the password for user {user_id}")
-    return {"message": "Password changed", "revoked_sessions": 0}
+    return {"message": "Password changed", "revoked_sessions": revoked}
 
 
 @router.post(

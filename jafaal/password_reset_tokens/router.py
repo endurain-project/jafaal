@@ -13,6 +13,7 @@ import jafaal.identity_service as jafaal_identity_service
 import jafaal.orm as jafaal_orm
 import jafaal.password_reset_tokens.schema as password_reset_tokens_schema
 import jafaal.password_reset_tokens.utils as password_reset_tokens_utils
+import jafaal.ports as jafaal_ports
 import jafaal.rate_limit as jafaal_rate_limit
 
 # Define the API router
@@ -91,8 +92,20 @@ def confirm_password_reset(
         JafaalError: 500 if password reset fails.
     """
     # Use the token to reset password
-    password_reset_tokens_utils.use_password_reset_token(
+    user_id, username, revoked = password_reset_tokens_utils.use_password_reset_token(
         confirm_data.token, confirm_data.new_password, identity_service, db
+    )
+    jafaal_orm.defer_until_commit(
+        db,
+        lambda: jafaal_ports.dispatch_event(
+            "on_password_changed",
+            jafaal_ports.PasswordChanged(
+                user_id=user_id,
+                username=username,
+                change_kind="password_reset",
+                revoked_sessions=revoked,
+            ),
+        ),
     )
 
     return password_reset_tokens_schema.PasswordResetResponse(message="Password reset successful")

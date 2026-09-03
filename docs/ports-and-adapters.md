@@ -63,11 +63,26 @@ expiry, enumeration-safe response) and **emits an event**; the host delivers it
 (email, SMS, websocket, queue, or just a log). This keeps email templates and
 i18n entirely out of the auth core.
 
-The emitted events are [`PasswordResetRequested`][jafaal.PasswordResetRequested],
+Notification events include
+[`PasswordResetRequested`][jafaal.PasswordResetRequested],
 [`EmailVerificationRequested`][jafaal.EmailVerificationRequested],
-[`SignupPendingAdminApproval`][jafaal.SignupPendingAdminApproval] and
+[`SignupPendingAdminApproval`][jafaal.SignupPendingAdminApproval], and
 [`SignupApproved`][jafaal.SignupApproved]. Each reset/verification event carries
-the plaintext `token` for you to build and send the link.
+the plaintext `token` for you to build and send the link. Security events include
+[`PasswordChanged`][jafaal.PasswordChanged],
+[`NewDeviceLogin`][jafaal.NewDeviceLogin],
+[`AccountLocked`][jafaal.AccountLocked],
+[`RefreshTokenTheftDetected`][jafaal.RefreshTokenTheftDetected],
+[`IdpAccountLinked`][jafaal.IdpAccountLinked], and
+[`AuthenticatorChanged`][jafaal.AuthenticatorChanged].
+
+`PasswordChanged.change_kind` is `self_service`, `forced_renewal`,
+`password_reset`, or `administrator_reset`. It also reports the number of
+revoked sessions and identifies the initiating administrator for an
+administrator reset. JAFAAL queues this event only after a password replacement
+succeeds and dispatches it only after the transaction commits. It never carries
+passwords, hashes, reset tokens, session tokens, MFA codes, cookies, or other
+credentials. Sign-up and initial credential creation do not emit it.
 
 ```python
 from jafaal import configure_event_sink
@@ -80,14 +95,15 @@ class EmailEventSink:
     async def on_email_verification_requested(self, event) -> None: ...
     async def on_signup_pending_admin_approval(self, event) -> None: ...
     async def on_signup_approved(self, event) -> None: ...
+    async def on_password_changed(self, event) -> None: ...
 
 
 configure_event_sink(EmailEventSink())
 ```
 
-Delivery is best-effort: for the enumeration-safe reset/verify flows, failures
-are swallowed and logged so they can never change the HTTP response or leak
-whether an account exists. If you skip these flows, the default
+Delivery is best-effort: failures are swallowed and logged so they cannot change
+a successful password operation or leak whether an account exists in an
+enumeration-safe flow. If you skip these flows, the default
 [`NullAuthEventSink`][jafaal.NullAuthEventSink] is a no-op.
 
 ### `PasswordBreachChecker`

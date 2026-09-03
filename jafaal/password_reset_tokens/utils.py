@@ -121,7 +121,7 @@ def use_password_reset_token(
     new_password: str,
     identity_service: "LocalCredentialStore",
     db: Session,
-) -> None:
+) -> tuple[UserId, str, int]:
     """
     Reset a user's password using a valid reset token.
 
@@ -132,7 +132,7 @@ def use_password_reset_token(
         db: Active SQLAlchemy session.
 
     Returns:
-        None
+        User ID, username, and number of sessions revoked.
 
     Raises:
         JafaalError: 400 if the token is invalid or expired.
@@ -172,7 +172,7 @@ def use_password_reset_token(
         )
         # Every other credential the old password could still reach. The list
         # lives in one place; see credential_sweep for why each entry is on it.
-        credential_sweep.revoke_derived_credentials(token_user_id, db, reason="password_reset")
+        revoked = credential_sweep.revoke_derived_credentials(token_user_id, db, reason="password_reset")
         db.flush()
     except jafaal_exceptions.JafaalError:
         db.rollback()
@@ -188,6 +188,7 @@ def use_password_reset_token(
         scope="all",
         reason="password_reset",
     )
+    return token_user_id, db_user.username, revoked
 
 
 def delete_invalid_tokens_from_db() -> None:
