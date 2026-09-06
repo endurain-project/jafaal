@@ -6,6 +6,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 What counts as a breaking change, and what does not, is defined in [API stability](docs/api-stability.md). During the pre-1.0 series, its public surface is a compatibility target rather than a frozen guarantee: breaking changes may ship in a minor release and are documented here. The full major-version guarantee begins with 1.0.0.
 
+## [0.3.0] - 2026-09-06
+
+### Breaking
+
+- Removed the unsafe public `jafaal.migrations.stamp()` API. Existing deployments must use validated schema adoption rather than recording an arbitrary revision without checking the physical schema.
+
+### Added
+
+- Added `jafaal.migrations.adopt_existing_schema(engine)` and `SchemaCompatibilityError` for safely adopting complete legacy unversioned JAFAAL tables. Adoption validates columns, types, nullability, primary keys, uniqueness, foreign keys, and required indexes before recording the packaged head, while leaving host tables and additional non-unique host indexes untouched.
+
 ## [0.2.1] - 2026-09-03
 
 ### Added
@@ -120,8 +130,9 @@ Initial pre-1.0 release. The documented public surface is available for integrat
 
 See [Security](https://jafaal.endurain.com/security/) and [Threat model](https://jafaal.endurain.com/threat-model/) for the security design and the host's responsibilities.
 
-[0.2.1]: https://github.com/endurain-project/jafaal/compare/v0.2.0...v0.2.1
-[0.2.0]: https://github.com/endurain-project/jafaal/compare/v0.1.2...v0.2.0
-[0.1.2]: https://github.com/endurain-project/jafaal/compare/v0.1.1...v0.1.2
+[0.3.0]: https://github.com/endurain-project/jafaal/releases/tag/v0.3.0
+[0.2.1]: https://github.com/endurain-project/jafaal/releases/tag/v0.2.1
+[0.2.0]: https://github.com/endurain-project/jafaal/releases/tag/v0.2.0
+[0.1.2]: https://github.com/endurain-project/jafaal/releases/tag/v0.1.2
 [0.1.1]: https://github.com/endurain-project/jafaal/releases/tag/v0.1.1
 [0.1.0]: https://github.com/endurain-project/jafaal/releases/tag/v0.1.0

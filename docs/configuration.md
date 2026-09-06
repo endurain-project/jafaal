@@ -777,15 +777,20 @@ tables — your `users` table and your Alembic history are left alone.
 ```python
 from jafaal import migrations
 
+migrations.adopt_existing_schema(engine)  # validate/stamp complete legacy tables, if any
 migrations.upgrade(engine)  # create/upgrade JAFAAL's tables
-# migrations.stamp(engine)                  # existing DB whose tables already exist
-# migrations.verify_schema_current(engine)  # fail fast at startup if not migrated
+migrations.verify_schema_current(engine)  # fail fast at startup if not migrated
 ```
 
 Your `users` table must exist first (JAFAAL's tables reference `users.id`), so
-run your own migrations before JAFAAL's. Prefer a single, unified Alembic
-history? Point your `env.py` at `jafaal.orm.Base.metadata` and add the package's
-`versions` directory to your `version_locations` instead.
+run your own migrations before JAFAAL's. `adopt_existing_schema()` is only for
+legacy deployments with a complete, unversioned JAFAAL schema: it validates the
+owned tables against the active metadata before recording the packaged head and
+never repairs an incompatible schema. Normal deployments should run `upgrade()`.
+
+Prefer a single, unified Alembic history? Point your `env.py` at
+`jafaal.orm.Base.metadata` and add the package's `versions` directory to your
+`version_locations` instead.
 
 ## Scopes
 

@@ -19,7 +19,7 @@ import pytest
 
 pytest.importorskip("alembic")
 
-from sqlalchemy import MetaData, create_engine, inspect
+from sqlalchemy import Column, Integer, MetaData, Table, UniqueConstraint, create_engine, inspect
 from sqlalchemy.pool import StaticPool
 
 import jafaal.orm as jafaal_orm
@@ -57,6 +57,40 @@ def migration_engine():
 def _create_host_users(engine):
     # JAFAAL's tables carry foreign keys to users.id, so the host table exists first.
     Base.metadata.tables["users"].create(bind=engine)
+
+
+def _drop_version_table(engine):
+    with engine.begin() as connection:
+        connection.exec_driver_sql(f"DROP TABLE {migrations.VERSION_TABLE}")
+
+
+def _stamp_revision(engine, revision):
+    from alembic import command
+
+    with engine.connect() as connection:
+        command.stamp(migrations._config(connection), revision)
+        connection.commit()
+
+
+def _copied_metadata():
+    metadata = MetaData()
+    Base.metadata.tables["users"].to_metadata(metadata)
+    for table_name in jafaal_orm.jafaal_table_names():
+        Base.metadata.tables[table_name].to_metadata(metadata)
+    return metadata
+
+
+def _drop_host_users(engine):
+    with engine.begin() as connection:
+        if engine.dialect.name == "postgresql":
+            connection.exec_driver_sql("DROP TABLE users CASCADE")
+        elif engine.dialect.name == "mysql":
+            connection.exec_driver_sql("SET FOREIGN_KEY_CHECKS=0")
+            connection.exec_driver_sql("DROP TABLE users")
+            connection.exec_driver_sql("SET FOREIGN_KEY_CHECKS=1")
+        else:
+            connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+            connection.exec_driver_sql("DROP TABLE users")
 
 
 def test_upgrade_creates_all_jafaal_tables(migration_engine):
@@ -123,17 +157,240 @@ def test_verify_schema_current_fails_then_passes(migration_engine):
     migrations.verify_schema_current(engine)  # now current → no raise
 
 
-def test_stamp_marks_head_for_pre_existing_tables(migration_engine):
+def test_empty_database_is_not_adopted(migration_engine):
+    engine = migration_engine
+    assert migrations.adopt_existing_schema(engine) is False
+    assert migrations.db_revision(engine) is None
+
+
+def test_complete_unversioned_schema_is_adopted_idempotently(migration_engine):
     engine = migration_engine
     _create_host_users(engine)
-    # Simulate a deployment whose tables were created out-of-band (create_all).
     Base.metadata.create_all(
         bind=engine,
         tables=[Base.metadata.tables[name] for name in jafaal_orm.jafaal_table_names()],
     )
     assert migrations.db_revision(engine) is None
-    migrations.stamp(engine)
+    assert migrations.adopt_existing_schema(engine) is True
     assert migrations.db_revision(engine) == migrations.head_revision()
+    assert migrations.adopt_existing_schema(engine) is False
+
+
+def test_partial_schema_is_rejected_without_revision(migration_engine):
+    engine = migration_engine
+    _create_host_users(engine)
+    Base.metadata.tables["identity_providers"].create(engine)
+
+    with pytest.raises(migrations.SchemaCompatibilityError, match=r"missing tables:"):
+        migrations.adopt_existing_schema(engine)
+
+    assert migrations.db_revision(engine) is None
+
+
+def test_missing_column_is_rejected_without_revision(migration_engine):
+    engine = migration_engine
+    _create_host_users(engine)
+    migrations.upgrade(engine)
+    _drop_version_table(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql("ALTER TABLE identity_providers DROP COLUMN name")
+
+    with pytest.raises(migrations.SchemaCompatibilityError, match=r"identity_providers.*missing column 'name'"):
+        migrations.adopt_existing_schema(engine)
+
+    assert migrations.db_revision(engine) is None
+
+
+def test_unexpected_column_is_rejected_without_revision(migration_engine):
+    engine = migration_engine
+    _create_host_users(engine)
+    migrations.upgrade(engine)
+    _drop_version_table(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql("ALTER TABLE identity_providers ADD COLUMN legacy_value VARCHAR(20)")
+
+    with pytest.raises(
+        migrations.SchemaCompatibilityError, match=r"identity_providers.*unexpected column 'legacy_value'"
+    ):
+        migrations.adopt_existing_schema(engine)
+
+    assert migrations.db_revision(engine) is None
+
+
+def test_wrong_type_is_rejected_without_revision(migration_engine):
+    engine = migration_engine
+    metadata = _copied_metadata()
+    metadata.tables["identity_providers"].c.name.type = Integer()
+    metadata.create_all(engine)
+
+    with pytest.raises(migrations.SchemaCompatibilityError, match=r"identity_providers.name.*expected type"):
+        migrations.adopt_existing_schema(engine)
+
+    assert migrations.db_revision(engine) is None
+
+
+def test_wrong_nullability_is_rejected_without_revision(migration_engine):
+    engine = migration_engine
+    metadata = _copied_metadata()
+    metadata.tables["identity_providers"].c.name.nullable = True
+    metadata.create_all(engine)
+
+    with pytest.raises(migrations.SchemaCompatibilityError, match=r"identity_providers.name.*nullable=False"):
+        migrations.adopt_existing_schema(engine)
+
+    assert migrations.db_revision(engine) is None
+
+
+def test_missing_server_default_is_rejected_without_revision(migration_engine):
+    engine = migration_engine
+    metadata = _copied_metadata()
+    metadata.tables["identity_providers"].c.created_at.server_default = None
+    metadata.create_all(engine)
+
+    with pytest.raises(
+        migrations.SchemaCompatibilityError,
+        match=r"identity_providers.created_at.*expected server default",
+    ):
+        migrations.adopt_existing_schema(engine)
+
+    assert migrations.db_revision(engine) is None
+
+
+def test_missing_primary_key_is_rejected_without_revision(migration_engine):
+    engine = migration_engine
+    metadata = _copied_metadata()
+    copied_table = metadata.tables["password_reset_tokens"]
+    columns = [
+        Column(
+            column.name,
+            column.type,
+            nullable=column.nullable,
+            server_default=column.server_default,
+        )
+        for column in copied_table.columns
+    ]
+    metadata.remove(copied_table)
+    Table("password_reset_tokens", metadata, *columns)
+    metadata.create_all(engine)
+
+    with pytest.raises(migrations.SchemaCompatibilityError, match=r"password_reset_tokens.*expected primary key"):
+        migrations.adopt_existing_schema(engine)
+
+    assert migrations.db_revision(engine) is None
+
+
+def test_missing_unique_constraint_is_rejected_without_revision(migration_engine):
+    engine = migration_engine
+    metadata = _copied_metadata()
+    table = metadata.tables["users_identity_providers"]
+    constraint = next(item for item in table.constraints if isinstance(item, UniqueConstraint))
+    table.constraints.remove(constraint)
+    metadata.create_all(engine)
+
+    with pytest.raises(
+        migrations.SchemaCompatibilityError, match=r"users_identity_providers.*missing unique constraint"
+    ):
+        migrations.adopt_existing_schema(engine)
+
+    assert migrations.db_revision(engine) is None
+
+
+def test_missing_foreign_key_is_rejected_as_schema_error(migration_engine):
+    engine = migration_engine
+    metadata = _copied_metadata()
+    table = metadata.tables["users_sessions"]
+    foreign_key = next(iter(table.c.user_id.foreign_keys))
+    table.c.user_id.foreign_keys.remove(foreign_key)
+    table.foreign_keys.remove(foreign_key)
+    table.constraints.remove(foreign_key.constraint)
+    metadata.create_all(engine)
+
+    with pytest.raises(
+        migrations.SchemaCompatibilityError,
+        match=r"users_sessions.*missing foreign key.*user_id.*users.*id",
+    ):
+        migrations.adopt_existing_schema(engine)
+
+    assert migrations.db_revision(engine) is None
+
+
+def test_missing_required_index_is_rejected_without_revision(migration_engine):
+    engine = migration_engine
+    _create_host_users(engine)
+    migrations.upgrade(engine)
+    _drop_version_table(engine)
+    expected_index = next(
+        index for index in Base.metadata.tables["mfa_backup_codes"].indexes if index.name == "idx_user_unused_codes"
+    )
+    expected_index.drop(engine)
+
+    with pytest.raises(migrations.SchemaCompatibilityError, match=r"mfa_backup_codes.*missing index"):
+        migrations.adopt_existing_schema(engine)
+
+    assert migrations.db_revision(engine) is None
+
+
+def test_additional_non_unique_index_is_accepted(migration_engine):
+    engine = migration_engine
+    _create_host_users(engine)
+    migrations.upgrade(engine)
+    _drop_version_table(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql("CREATE INDEX idx_host_identity_provider_name ON identity_providers (name)")
+
+    assert migrations.adopt_existing_schema(engine) is True
+
+
+def test_additional_unique_index_is_rejected_without_revision(migration_engine):
+    engine = migration_engine
+    _create_host_users(engine)
+    migrations.upgrade(engine)
+    _drop_version_table(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql("CREATE UNIQUE INDEX uq_host_identity_provider_name ON identity_providers (name)")
+
+    with pytest.raises(migrations.SchemaCompatibilityError, match=r"identity_providers.*unexpected index"):
+        migrations.adopt_existing_schema(engine)
+
+    assert migrations.db_revision(engine) is None
+
+
+def test_missing_host_users_table_is_rejected_without_revision(migration_engine):
+    engine = migration_engine
+    _create_host_users(engine)
+    migrations.upgrade(engine)
+    _drop_version_table(engine)
+    _drop_host_users(engine)
+
+    try:
+        with pytest.raises(migrations.SchemaCompatibilityError, match=r"host-owned 'users' table"):
+            migrations.adopt_existing_schema(engine)
+
+        assert migrations.db_revision(engine) is None
+    finally:
+        _create_host_users(engine)
+
+
+def test_existing_head_and_older_revisions_are_preserved(migration_engine):
+    engine = migration_engine
+    _create_host_users(engine)
+    migrations.upgrade(engine)
+    assert migrations.adopt_existing_schema(engine) is False
+    assert migrations.db_revision(engine) == migrations.head_revision()
+
+    with engine.begin() as connection:
+        connection.exec_driver_sql(f"DELETE FROM {migrations.VERSION_TABLE}")  # noqa: S608 - fixed identifier
+        connection.exec_driver_sql(
+            f"INSERT INTO {migrations.VERSION_TABLE} (version_num) "  # noqa: S608 - fixed identifier and revision
+            "VALUES ('0006_oauth_requested_scope')"
+        )
+    assert migrations.adopt_existing_schema(engine) is False
+    assert migrations.db_revision(engine) == "0006_oauth_requested_scope"
+
+
+def test_verify_schema_current_names_adoption_remedy(migration_engine):
+    with pytest.raises(RuntimeError, match=r"jafaal\.migrations\.adopt_existing_schema"):
+        migrations.verify_schema_current(migration_engine)
 
 
 def test_every_revision_id_fits_alembics_version_column():
@@ -176,7 +433,7 @@ def test_an_incremental_revision_applies_to_an_older_database(migration_engine):
     with engine.begin() as connection:
         connection.exec_driver_sql(f"ALTER TABLE {table} DROP COLUMN {column}")
         connection.exec_driver_sql(f"DELETE FROM {migrations.VERSION_TABLE}")  # noqa: S608 - fixed identifier
-    migrations.stamp(engine, "0006_oauth_requested_scope")
+    _stamp_revision(engine, "0006_oauth_requested_scope")
     assert column not in {col["name"] for col in inspect(engine).get_columns(table)}
 
     migrations.upgrade(engine)

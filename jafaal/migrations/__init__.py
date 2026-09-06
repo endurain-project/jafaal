@@ -12,9 +12,9 @@ never pulls this in; import it explicitly::
     import jafaal
     from jafaal import migrations
 
+    migrations.adopt_existing_schema(engine)   # validate/stamp legacy tables, if any
     migrations.upgrade(engine)                  # create/upgrade JAFAAL tables
-    # migrations.stamp(engine)                  # existing DB already at head
-    # migrations.verify_schema_current(engine)  # fail fast if not migrated
+    migrations.verify_schema_current(engine)   # fail fast if not migrated
 
 The host's ``users`` table must exist before the baseline runs (JAFAAL's tables
 carry foreign keys to ``users.id``), so run the host's own migrations first.
@@ -43,11 +43,12 @@ if TYPE_CHECKING:
 __all__ = [
     "MAX_REVISION_LENGTH",
     "VERSION_TABLE",
+    "SchemaCompatibilityError",
+    "adopt_existing_schema",
     "db_revision",
     "downgrade",
     "head_revision",
     "jafaal_include_object",
-    "stamp",
     "upgrade",
     "verify_schema_current",
 ]
@@ -65,6 +66,10 @@ VERSION_TABLE = "jafaal_alembic_version"
 MAX_REVISION_LENGTH = 32
 
 _MIGRATIONS_DIR = Path(__file__).resolve().parent
+
+
+class SchemaCompatibilityError(RuntimeError):
+    """An unversioned JAFAAL schema cannot safely be adopted."""
 
 
 def jafaal_include_object(obj: Any, name: str | None, type_: str, reflected: bool, compare_to: Any) -> bool:
@@ -102,13 +107,17 @@ def _config(connection: Any = None) -> Any:
     return config
 
 
-def _run(engine: Engine, command_name: str, *args: Any) -> None:
+def _run_on_connection(connection: Any, command_name: str, *args: Any) -> None:
     _require_alembic()
     from alembic import command
 
+    config = _config(connection)
+    getattr(command, command_name)(config, *args)
+
+
+def _run(engine: Engine, command_name: str, *args: Any) -> None:
     with engine.connect() as connection:
-        config = _config(connection)
-        getattr(command, command_name)(config, *args)
+        _run_on_connection(connection, command_name, *args)
 
 
 def upgrade(engine: Engine, revision: str = "head") -> None:
@@ -119,16 +128,6 @@ def upgrade(engine: Engine, revision: str = "head") -> None:
 def downgrade(engine: Engine, revision: str) -> None:
     """Downgrade JAFAAL's tables to ``revision`` (e.g. ``"base"`` drops them all)."""
     _run(engine, "downgrade", revision)
-
-
-def stamp(engine: Engine, revision: str = "head") -> None:
-    """Record ``revision`` in the version table without running migrations.
-
-    Use on an existing deployment whose JAFAAL tables were created with
-    ``Base.metadata.create_all`` (or an older release): ``stamp(engine)`` marks it
-    as being at head so future :func:`upgrade` calls apply only new revisions.
-    """
-    _run(engine, "stamp", revision)
 
 
 def head_revision() -> str | None:
@@ -149,6 +148,161 @@ def db_revision(engine: Engine) -> str | None:
         return context.get_current_revision()
 
 
+def _format_foreign_key(difference: Any, state: str) -> str:
+    constraint = difference[1]
+    source_table = getattr(getattr(constraint, "table", None), "name", "<unknown>")
+    source_columns = [getattr(column, "name", str(column)) for column in getattr(constraint, "columns", ())]
+    elements = list(getattr(constraint, "elements", ()))
+    referred_table = "<unknown>"
+    referred_columns: list[str] = []
+    if elements:
+        referred_table = getattr(elements[0], "target_fullname", "<unknown>").rsplit(".", 1)[0]
+        referred_columns = [getattr(element, "target_fullname", "<unknown>").rsplit(".", 1)[-1] for element in elements]
+    return f"{source_table}: {state} foreign key {source_columns!r} referencing {referred_table}.{referred_columns!r}"
+
+
+def _format_difference(difference: Any) -> str:
+    if isinstance(difference, list):
+        return "; ".join(_format_difference(item) for item in difference)
+    if not isinstance(difference, tuple) or not difference:
+        return f"incompatible schema difference {difference!r}"
+
+    operation = difference[0]
+    if operation == "add_fk" and len(difference) > 1:
+        return _format_foreign_key(difference, "missing")
+    if operation == "remove_fk" and len(difference) > 1:
+        return _format_foreign_key(difference, "unexpected")
+    if operation in {"add_index", "remove_index", "add_constraint", "remove_constraint"} and len(difference) > 1:
+        obj = difference[1]
+        state = "missing" if operation.startswith("add_") else "unexpected"
+        kind = "index" if operation.endswith("index") else "unique constraint"
+        table_name = getattr(getattr(obj, "table", None), "name", "<unknown>")
+        return f"{table_name}: {state} {kind} {getattr(obj, 'name', None)!r}"
+    if len(difference) > 3:
+        table_name = difference[2]
+        if operation == "add_column":
+            return f"{table_name}: missing column {difference[3].name!r}"
+        if operation == "remove_column":
+            return f"{table_name}: unexpected column {difference[3].name!r}"
+        if operation == "modify_type" and len(difference) > 6:
+            return f"{table_name}.{difference[3]}: expected type {difference[6]}, found {difference[5]}"
+        if operation == "modify_nullable" and len(difference) > 6:
+            return (
+                f"{table_name}.{difference[3]}: expected nullable={difference[6]!r}, found nullable={difference[5]!r}"
+            )
+        if operation == "modify_default" and len(difference) > 6:
+            return f"{table_name}.{difference[3]}: expected server default {difference[6]}, found {difference[5]}"
+        return f"{table_name}: incompatible schema operation {operation!r}"
+    return f"incompatible schema operation {operation!r}: {difference!r}"
+
+
+def _adoption_include_object(obj: Any, name: str | None, type_: str, reflected: bool, compare_to: Any) -> bool:
+    if type_ == "index" and reflected and compare_to is None and not getattr(obj, "unique", False):
+        # Host-created lookup indexes do not change JAFAAL's write contract.
+        return False
+    return jafaal_include_object(obj, name, type_, reflected, compare_to)
+
+
+def _primary_key_differences(inspector: Any, metadata: Any, table_names: frozenset[str]) -> list[str]:
+    differences = []
+    for table_name in sorted(table_names):
+        expected = [column.name for column in metadata.tables[table_name].primary_key.columns]
+        actual = inspector.get_pk_constraint(table_name).get("constrained_columns") or []
+        if actual != expected:
+            differences.append(f"{table_name}: expected primary key {expected!r}, found {actual!r}")
+    return differences
+
+
+def _unexpected_uniqueness_differences(inspector: Any, metadata: Any, table_names: frozenset[str]) -> list[str]:
+    from sqlalchemy import UniqueConstraint
+
+    differences: list[str] = []
+    for table_name in sorted(table_names):
+        table = metadata.tables[table_name]
+        expected = {
+            tuple(column.name for column in constraint.columns)
+            for constraint in table.constraints
+            if isinstance(constraint, UniqueConstraint)
+        }
+        expected.update(tuple(column.name for column in index.columns) for index in table.indexes if index.unique)
+        actual_objects = [
+            ("index", item.get("name"), tuple(item.get("column_names") or ()))
+            for item in inspector.get_indexes(table_name)
+            if item.get("unique")
+        ]
+        actual_objects.extend(
+            ("unique constraint", item.get("name"), tuple(item.get("column_names") or ()))
+            for item in inspector.get_unique_constraints(table_name)
+        )
+        differences.extend(
+            f"{table_name}: unexpected {kind} {name!r} on columns {list(columns)!r}"
+            for kind, name, columns in actual_objects
+            if columns not in expected
+        )
+    return differences
+
+
+def adopt_existing_schema(engine: Engine) -> bool:
+    """Validate and adopt complete, compatible, unversioned JAFAAL tables.
+
+    Returns ``True`` only when this call records the installed head. An empty
+    database or one that already has a JAFAAL revision is left unchanged and
+    returns ``False``.
+
+    Raises:
+        SchemaCompatibilityError: If the host ``users`` table is absent, only
+            some JAFAAL tables exist, or their physical schema is incompatible.
+    """
+    _require_alembic()
+    from alembic.autogenerate import compare_metadata
+    from alembic.runtime.migration import MigrationContext
+    from sqlalchemy import inspect
+
+    from jafaal.orm import get_active_base, jafaal_table_names
+
+    with engine.connect() as connection:
+        context = MigrationContext.configure(connection, opts={"version_table": VERSION_TABLE})
+        if context.get_current_revision() is not None:
+            return False
+
+        inspector = inspect(connection)
+        physical_tables = set(inspector.get_table_names())
+        expected_tables = jafaal_table_names()
+        present_tables = physical_tables & expected_tables
+        if not present_tables:
+            return False
+        if present_tables != expected_tables:
+            missing = sorted(expected_tables - present_tables)
+            raise SchemaCompatibilityError(
+                "Cannot adopt a partial JAFAAL schema; missing tables: " + ", ".join(missing)
+            )
+        if "users" not in physical_tables:
+            raise SchemaCompatibilityError("Cannot adopt JAFAAL schema without the host-owned 'users' table")
+
+        metadata = get_active_base().metadata
+        comparison_context = MigrationContext.configure(
+            connection,
+            opts={
+                "compare_type": True,
+                "compare_server_default": True,
+                "include_object": _adoption_include_object,
+            },
+        )
+        raw_differences = compare_metadata(comparison_context, metadata)
+        differences = [_format_difference(difference) for difference in raw_differences]
+        differences.extend(_primary_key_differences(inspector, metadata, expected_tables))
+        differences.extend(_unexpected_uniqueness_differences(inspector, metadata, expected_tables))
+        if differences:
+            raise SchemaCompatibilityError("Cannot adopt an incompatible JAFAAL schema: " + "; ".join(differences))
+
+        head = head_revision()
+        if head is None:
+            raise RuntimeError("JAFAAL has no packaged migration head")
+        _run_on_connection(connection, "stamp", head)
+        connection.commit()
+        return True
+
+
 def verify_schema_current(engine: Engine) -> None:
     """Raise if the database is not migrated to the packaged head revision.
 
@@ -164,6 +318,6 @@ def verify_schema_current(engine: Engine) -> None:
         raise RuntimeError(
             "JAFAAL database schema is out of date "
             f"(database revision={current!r}, expected head={head!r}). "
-            "Run jafaal.migrations.upgrade(engine) at deploy time, or "
-            "jafaal.migrations.stamp(engine) if the tables already exist."
+            "Run jafaal.migrations.adopt_existing_schema(engine) for complete legacy unversioned tables, "
+            "then jafaal.migrations.upgrade(engine) at deploy time."
         )
