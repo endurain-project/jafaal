@@ -40,7 +40,7 @@ class LocalCredential(Base):
         users: Back-reference to the owning ``Users`` row.
     """
 
-    __tablename__ = "users_local_credentials"
+    __tablename__ = "jafaal_users_local_credentials"
 
     user_id: Mapped[UserId] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"),

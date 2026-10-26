@@ -8,7 +8,7 @@ Module layering (where MFA logic lives):
   MFA state (:func:`setup_user_mfa`, :func:`enable_user_mfa`,
   :func:`disable_user_mfa`, :func:`verify_user_mfa`,
   :func:`is_mfa_enabled_for_user`). No HTTP request/response shapes here.
-- ``jafaal.mfa.crud``: persistence for the ``users_mfa`` table.
+- ``jafaal.mfa.crud``: persistence for the ``jafaal_users_mfa`` table.
 - ``jafaal._internal.services.mfa_workflow``: route-facing orchestration (step-up
   verification, setup-secret store handling, response/schema shaping) that
   composes the helpers in this module. Profile routes call that module, not

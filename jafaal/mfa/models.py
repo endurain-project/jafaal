@@ -1,4 +1,4 @@
-"""SQLAlchemy ORM model for the ``users_mfa`` table.
+"""SQLAlchemy ORM model for the ``jafaal_users_mfa`` table.
 
 This module defines the 1:1 companion table that owns MFA
 state for a user. Rows are written by
@@ -40,12 +40,12 @@ class UsersMFA(Base):
             ``Users`` row.
     """
 
-    __tablename__ = "users_mfa"
+    __tablename__ = "jafaal_users_mfa"
 
     __table_args__ = (
         UniqueConstraint(
             "user_id",
-            name="uq_users_mfa_user_id",
+            name="uq_jafaal_users_mfa_user_id",
         ),
     )
 

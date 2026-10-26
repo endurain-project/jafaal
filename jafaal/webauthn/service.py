@@ -20,7 +20,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.orm import Session
 
@@ -38,17 +38,25 @@ logger = logging.getLogger(__name__)
 
 # Optional dependency (``jafaal[webauthn]``). Imported defensively so the package
 # imports without it; the accessors fail fast with an install hint when used.
-try:
+# Type checkers see only the real imports, so these names are never typed as
+# possibly ``None``: every entry point calls :func:`_require_webauthn` first.
+if TYPE_CHECKING:
     import webauthn as _webauthn
     from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
     from webauthn.helpers import structs as _structs
     from webauthn.helpers.exceptions import WebAuthnException
-except ImportError:  # pragma: no cover - exercised via the missing-dep guard
-    _webauthn = None  # type: ignore[assignment]
-    _structs = None  # type: ignore[assignment]
-    base64url_to_bytes = None  # type: ignore[assignment]
-    bytes_to_base64url = None  # type: ignore[assignment]
-    WebAuthnException = None  # type: ignore[assignment,misc]
+else:
+    try:
+        import webauthn as _webauthn
+        from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
+        from webauthn.helpers import structs as _structs
+        from webauthn.helpers.exceptions import WebAuthnException
+    except ImportError:  # pragma: no cover - exercised via the missing-dep guard
+        _webauthn = None
+        _structs = None
+        base64url_to_bytes = None
+        bytes_to_base64url = None
+        WebAuthnException = None
 
 # Errors a verify_* call may raise on an invalid/forged ceremony. ``py_webauthn``
 # raises WebAuthnException subclasses; malformed input surfaces as ValueError
@@ -124,7 +132,7 @@ def _attestation() -> Any:
 
 def _options_to_dict(options: Any) -> dict[str, Any]:
     """Serialise ``py_webauthn`` options to the browser-facing JSON object."""
-    return json.loads(_webauthn.options_to_json(options))  # type: ignore[union-attr]
+    return json.loads(_webauthn.options_to_json(options))
 
 
 def _normalized_credential_id(credential: dict[str, Any]) -> str:
@@ -133,7 +141,7 @@ def _normalized_credential_id(credential: dict[str, Any]) -> str:
     if not isinstance(raw, str) or not raw:
         raise jafaal_exceptions.InvalidRequestError("Malformed WebAuthn credential: missing id.")
     try:
-        return bytes_to_base64url(base64url_to_bytes(raw))  # type: ignore[misc]
+        return bytes_to_base64url(base64url_to_bytes(raw))
     except Exception as err:
         raise jafaal_exceptions.InvalidRequestError("Malformed WebAuthn credential id.") from err
 
@@ -154,7 +162,7 @@ def _descriptors_for_user(user_id: UserId, db: Session) -> list[Any]:
     descriptors = []
     for cred in webauthn_crud.get_credentials_by_user_id(user_id, db):
         try:
-            raw = base64url_to_bytes(cred.credential_id)  # type: ignore[misc]
+            raw = base64url_to_bytes(cred.credential_id)
         except Exception:
             # A stored id we wrote should always decode; skip (don't fail the
             # whole ceremony) if one somehow cannot.
@@ -201,7 +209,7 @@ def begin_registration(user: jafaal_ports.UserProtocol, db: Session) -> dict[str
         resident_key=_structs.ResidentKeyRequirement.PREFERRED,
         user_verification=_user_verification(),
     )
-    options = _webauthn.generate_registration_options(  # type: ignore[union-attr]
+    options = _webauthn.generate_registration_options(
         rp_id=_rp_id(),
         rp_name=settings.resolved_webauthn_rp_name,
         user_name=user.username,
@@ -231,7 +239,7 @@ def complete_registration(
         )
 
     try:
-        verification = _webauthn.verify_registration_response(  # type: ignore[union-attr]
+        verification = _webauthn.verify_registration_response(
             credential=credential,
             expected_challenge=challenge,
             expected_rp_id=_rp_id(),
@@ -242,7 +250,7 @@ def complete_registration(
         logger.warning("WebAuthn registration verification failed: %s", err)
         raise jafaal_exceptions.InvalidRequestError("WebAuthn registration verification failed.") from err
 
-    credential_id_b64 = bytes_to_base64url(verification.credential_id)  # type: ignore[misc]
+    credential_id_b64 = bytes_to_base64url(verification.credential_id)
     if webauthn_crud.get_credential_by_credential_id(credential_id_b64, db) is not None:
         raise jafaal_exceptions.ConflictError("This passkey is already registered.")
 
@@ -290,7 +298,7 @@ def begin_authentication(username: str | None, db: Session) -> tuple[str, dict[s
         real = _descriptors_for_user(user.id, db) if user is not None else []
         allow_credentials = real or _decoy_descriptors(username)
 
-    options = _webauthn.generate_authentication_options(  # type: ignore[union-attr]
+    options = _webauthn.generate_authentication_options(
         rp_id=_rp_id(),
         allow_credentials=allow_credentials or None,
         user_verification=_passwordless_user_verification(),
@@ -326,7 +334,7 @@ def _verify_assertion(
     require_user_verification: bool,
 ) -> Any:
     try:
-        return _webauthn.verify_authentication_response(  # type: ignore[union-attr]
+        return _webauthn.verify_authentication_response(
             credential=credential,
             expected_challenge=challenge,
             expected_rp_id=_rp_id(),
@@ -385,7 +393,7 @@ def begin_second_factor(mfa_token: str, user_id: UserId | None, db: Session) -> 
     _require_webauthn()
 
     allow_credentials = _descriptors_for_user(user_id, db) if user_id is not None else []
-    options = _webauthn.generate_authentication_options(  # type: ignore[union-attr]
+    options = _webauthn.generate_authentication_options(
         rp_id=_rp_id(),
         allow_credentials=allow_credentials or None,
         user_verification=_user_verification(),

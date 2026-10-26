@@ -22,9 +22,9 @@ transaction in a pending-rollback state that no later statement can use.
 
 import inspect
 import logging
-from collections.abc import Callable, Coroutine
+from collections.abc import Awaitable, Callable
 from functools import wraps
-from typing import Any, NoReturn, overload
+from typing import Any, NoReturn, cast
 
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -52,15 +52,7 @@ def _handle_db_error(db_err: SQLAlchemyError, func_name: str) -> NoReturn:
     raise jafaal_exceptions.InternalError("Database error occurred") from db_err
 
 
-@overload
-def handle_db_errors[T, **P](func: Callable[P, Coroutine[Any, Any, T]]) -> Callable[P, Coroutine[Any, Any, T]]: ...
-
-
-@overload
-def handle_db_errors[T, **P](func: Callable[P, T]) -> Callable[P, T]: ...
-
-
-def handle_db_errors(func: Callable[..., Any]) -> Callable[..., Any]:
+def handle_db_errors[T, **P](func: Callable[P, T]) -> Callable[P, T]:
     """Decorator to handle SQLAlchemy database errors consistently.
 
     Catches ``SQLAlchemyError``, logs it, and converts it to a 500
@@ -78,26 +70,33 @@ def handle_db_errors(func: Callable[..., Any]) -> Callable[..., Any]:
     Returns:
         Wrapped function with error handling.
     """
+    # One signature covers both kinds: for a coroutine function ``T`` is the
+    # coroutine it returns. A separate async overload listed first would also
+    # match a sync function whose return type is untyped (the ORM models are),
+    # and so mistype its result as a coroutine.
+    func_name = getattr(func, "__name__", repr(func))
+
     if inspect.iscoroutinefunction(func):
+        async_func = cast("Callable[..., Awaitable[Any]]", func)
 
         @wraps(func)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             try:
-                return await func(*args, **kwargs)
+                return await async_func(*args, **kwargs)
             except (HTTPException, jafaal_exceptions.JafaalError, IntegrityError):
                 raise
             except SQLAlchemyError as db_err:
-                _handle_db_error(db_err, func.__name__)
+                _handle_db_error(db_err, func_name)
 
-        return async_wrapper
+        return cast("Callable[P, T]", async_wrapper)
 
     @wraps(func)
-    def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+    def sync_wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
         try:
             return func(*args, **kwargs)
         except (HTTPException, jafaal_exceptions.JafaalError, IntegrityError):
             raise
         except SQLAlchemyError as db_err:
-            _handle_db_error(db_err, func.__name__)
+            _handle_db_error(db_err, func_name)
 
     return sync_wrapper

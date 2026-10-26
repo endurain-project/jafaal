@@ -44,7 +44,10 @@ def get_user_api_keys(
         List of API key objects. Raw keys and hashes
         are never included.
     """
-    return jafaal_api_keys_crud.get_api_keys_by_user_id(token_user_id, db)  # type: ignore[return-value]
+    return [
+        api_keys_schema.UsersApiKeyRead.model_validate(api_key)
+        for api_key in jafaal_api_keys_crud.get_api_keys_by_user_id(token_user_id, db)
+    ]
 
 
 @router.post(

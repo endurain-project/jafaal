@@ -11,17 +11,14 @@ cannot quietly become a permanent one.
 
 Defaults to false, so every credential written before this revision (and every
 one written by the ordinary sign-up and reset flows) is unaffected.
-
-Like the preceding revisions this is idempotent to add: on a fresh database the
-baseline (``0001_initial``) materialises every currently mapped JAFAAL table
-directly from the models — including this column — so this revision inspects the
-live schema and only adds what is missing on databases stamped before it.
 """
 
 from __future__ import annotations
 
 import sqlalchemy as sa
 from alembic import op
+
+from jafaal.migrations._names import table as tb
 
 revision = "0007_credential_must_change"
 down_revision = "0006_oauth_requested_scope"
@@ -33,31 +30,18 @@ _COLUMN = "must_change_password"
 _COMMENT = "Password must be replaced before the account can log in"
 
 
-def _existing_columns(bind: sa.engine.Connection) -> set[str]:
-    inspector = sa.inspect(bind)
-    if _TABLE not in inspector.get_table_names():
-        return set()
-    return {col["name"] for col in inspector.get_columns(_TABLE)}
-
-
 def upgrade() -> None:
-    bind = op.get_bind()
-    present = _existing_columns(bind)
-    if not present or _COLUMN in present:
-        return
     op.add_column(
-        _TABLE,
+        tb(_TABLE),
         sa.Column(
             _COLUMN,
             sa.Boolean(),
             nullable=False,
-            server_default=sa.false(),
+            server_default="0",
             comment=_COMMENT,
         ),
     )
 
 
 def downgrade() -> None:
-    bind = op.get_bind()
-    if _COLUMN in _existing_columns(bind):
-        op.drop_column(_TABLE, _COLUMN)
+    op.drop_column(tb(_TABLE), _COLUMN)

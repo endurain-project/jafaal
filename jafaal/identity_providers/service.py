@@ -9,7 +9,7 @@ import secrets as secrets_module
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import Enum
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 from fastapi import Request
@@ -37,10 +37,15 @@ from jafaal.orm import UserId
 # Single sign-on relies on authlib's OAuth2 client, shipped as the optional
 # ``jafaal[sso]`` extra. Import defensively so ``import jafaal`` works without it;
 # _oauth_client_cls() fails fast (with an install hint) when an SSO flow runs.
-try:
+# Type checkers see only the real import, so a client is never typed as possibly
+# ``None``: every use goes through that fail-fast accessor first.
+if TYPE_CHECKING:
     from authlib.integrations.httpx_client import AsyncOAuth2Client
-except ImportError:  # pragma: no cover - exercised via the missing-dep guard
-    AsyncOAuth2Client = None  # type: ignore[assignment,misc]
+else:
+    try:
+        from authlib.integrations.httpx_client import AsyncOAuth2Client
+    except ImportError:  # pragma: no cover - exercised via the missing-dep guard
+        AsyncOAuth2Client = None
 
 logger = logging.getLogger(__name__)
 

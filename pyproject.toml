@@ -278,7 +278,13 @@ python-version = "3.12"
 
 [tool.ty.src]
 include = ["jafaal"]
-exclude = ["jafaal/migrations/env.py", "jafaal/migrations/versions/"]
+# As for mypy: the Alembic scripts are executed by Alembic, and the ORM model
+# modules bind to a host-owned base resolved at runtime, so neither is checked.
+exclude = ["jafaal/migrations/env.py", "jafaal/migrations/versions/", "jafaal/**/models.py"]
+
+[tool.ty.analysis]
+# The optional extras this job does not install, as mypy's ignore_missing_imports.
+allowed-unresolved-imports = ["pyotp", "user_agents", "redis", "redis.**", "alembic", "alembic.**"]
 
 [tool.ruff]
 target-version = "py312"

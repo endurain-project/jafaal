@@ -55,7 +55,7 @@ class OAuthState(Base):
         users_sessions: Relationship to UsersSessions model.
     """
 
-    __tablename__ = "oauth_states"
+    __tablename__ = "jafaal_oauth_states"
 
     id: Mapped[str] = mapped_column(
         String(64),
@@ -66,7 +66,7 @@ class OAuthState(Base):
 
     idp_id: Mapped[int | None] = mapped_column(
         Integer,
-        ForeignKey("identity_providers.id", ondelete="CASCADE"),
+        ForeignKey("jafaal_identity_providers.id", ondelete="CASCADE"),
         nullable=True,
         index=True,
         comment="Identity provider ID (may be null if mobile logic)",

@@ -364,7 +364,7 @@ def claim_session_for_rotation(
     requests carrying the *same* refresh token both pass the verify step and
     both write, so the outcome depended on which UPDATE landed last — and the
     only thing actually stopping a double rotation was the incidental UNIQUE
-    index on ``rotated_refresh_tokens.hashed_token``, which surfaced as an
+    index on ``jafaal_rotated_refresh_tokens.hashed_token``, which surfaced as an
     unhandled ``IntegrityError`` (a 500) rather than a defined response.
 
     Gated on the *stored digest* rather than a digest recomputed from the

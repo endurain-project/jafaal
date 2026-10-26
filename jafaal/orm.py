@@ -65,6 +65,7 @@ from typing import Any, cast
 
 from fastapi import APIRouter, Request, Response
 from fastapi.routing import APIRoute
+from sqlalchemy import event
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import DeclarativeBase, Mapper, Session, sessionmaker
 
@@ -84,9 +85,11 @@ __all__ = [
     "get_db",
     "get_sessionmaker",
     "get_user_model",
+    "is_legacy_schema",
     "is_models_mapped",
     "is_sessionmaker_configured",
     "jafaal_table_names",
+    "legacy_table_names",
     "map_models",
     "mapper_registry",
     "savepoint",
@@ -234,6 +237,41 @@ def map_models(base: type[DeclarativeBase] | None = None, *, user_model: type | 
         _active_base = None  # let the host fix the problem and retry
         _user_model.reset()
         raise
+    if not event.contains(target.metadata, "before_create", _refuse_create_beside_legacy_schema):
+        event.listen(target.metadata, "before_create", _refuse_create_beside_legacy_schema)
+
+
+def _refuse_create_beside_legacy_schema(metadata: Any, connection: Any, **kw: Any) -> None:
+    """Stop ``metadata.create_all()`` from creating JAFAAL's tables beside a 0.3 schema.
+
+    The tables were renamed to ``jafaal_*`` in 0.4. On a database that still holds
+    the unprefixed ones, ``create_all()`` would see none of the new names and
+    create them empty, and the application would run against those: every
+    session, identity-provider configuration, MFA enrolment, passkey and API key
+    would seem gone while the data sat untouched in the old tables. The
+    migrations rename the old tables in place instead.
+
+    An old schema is recognised by :func:`is_legacy_schema`, as the migrations
+    recognise it, so a host's own tables with generic old names never trigger it.
+
+    Raises:
+        jafaal.migrations.SchemaCompatibilityError: If JAFAAL tables are about to
+            be created beside an unprefixed JAFAAL schema.
+    """
+    creating = {table.name for table in kw.get("tables", ())} & jafaal_table_names()
+    if not creating:
+        return
+    present = set(sa_inspect(connection).get_table_names())
+    if present & jafaal_table_names() or not is_legacy_schema(present):
+        return
+    from jafaal.migrations import SchemaCompatibilityError
+
+    raise SchemaCompatibilityError(
+        "The database holds JAFAAL tables from 0.3 or earlier under their old, unprefixed names; "
+        "create_all() would create empty jafaal_* tables beside them. Migrate them instead: "
+        "jafaal.migrations.adopt_existing_schema(engine) (if they were built with create_all()), "
+        "then jafaal.migrations.upgrade(engine)."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -552,13 +590,74 @@ def user_id_python_type() -> type:
     return _resolve_user_mapper().primary_key[0].type.python_type
 
 
+#: The unprefixed names JAFAAL's tables had up to 0.3. Only the migrations read
+#: them, to rename the tables and to recognise an unversioned pre-0.4 schema; a
+#: table with one of these names is otherwise the host's, never JAFAAL's.
+_LEGACY_TABLE_NAMES: frozenset[str] = frozenset(
+    {
+        "users_local_credentials",
+        "users_sessions",
+        "rotated_refresh_tokens",
+        "users_api_keys",
+        "users_mfa",
+        "mfa_backup_codes",
+        "identity_providers",
+        "users_identity_providers",
+        "idp_link_tokens",
+        "oauth_states",
+        "password_reset_tokens",
+        "sign_up_tokens",
+        "webauthn_credentials",
+    }
+)
+
+
+def legacy_table_names() -> frozenset[str]:
+    """Return the unprefixed table names JAFAAL used before 0.4.
+
+    Not JAFAAL's tables any longer: a database may well hold an unrelated table
+    with one of these names. They exist so the migrations can rename the old
+    tables and adopt an old unversioned schema.
+    """
+    return _LEGACY_TABLE_NAMES
+
+
+#: The old names specific enough to JAFAAL that a host is unlikely to own one.
+#: Generic ones such as ``password_reset_tokens`` or ``identity_providers`` are
+#: left out: a host may well have both, and must still be able to install JAFAAL.
+_LEGACY_MARKER_TABLES: frozenset[str] = frozenset(
+    {
+        "users_local_credentials",
+        "rotated_refresh_tokens",
+        "users_mfa",
+        "mfa_backup_codes",
+        "users_identity_providers",
+        "idp_link_tokens",
+    }
+)
+
+
+def is_legacy_schema(table_names: set[str] | frozenset[str]) -> bool:
+    """Return whether ``table_names`` hold JAFAAL's tables from before 0.4.
+
+    Two of the JAFAAL-specific old names mark such a schema; a complete one has
+    all of them. The migrations and the ``create_all()`` check use this one test,
+    so a host's own tables with generic old names are never taken for JAFAAL's.
+
+    Args:
+        table_names: The tables present in the database.
+    """
+    return len(_LEGACY_MARKER_TABLES & table_names) >= 2
+
+
 def jafaal_table_names() -> frozenset[str]:
     """Return the names of the tables owned by JAFAAL's own models.
 
     Every table mapped by a class defined under the ``jafaal`` package — i.e. all
     of JAFAAL's companion tables, but **not** the host's ``users`` table (whose
     model lives in the host application, outside ``jafaal.*``) nor any other host
-    table sharing the registry.
+    table sharing the registry. Every name carries the ``jafaal_`` prefix, so none
+    can collide with a host's own table.
 
     The migration tooling (:mod:`jafaal.migrations`) uses this to scope its
     operations to JAFAAL's tables and leave the host-owned ``users`` table alone.

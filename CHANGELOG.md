@@ -6,6 +6,43 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 What counts as a breaking change, and what does not, is defined in [API stability](docs/api-stability.md). During the pre-1.0 series, its public surface is a compatibility target rather than a frozen guarantee: breaking changes may ship in a minor release and are documented here. The full major-version guarantee begins with 1.0.0.
 
+## [Unreleased]
+
+### Upgrading from 0.3
+
+The tables are renamed (see below), so the upgrade is a migration, done before the new code serves requests:
+
+1. **Stop every process running 0.3.** It looks the old table names up; a rolling deployment across this release is not possible.
+2. **Migrate**, by whichever way the database was built:
+   - With `jafaal.migrations` (a `jafaal_alembic_version` table exists): `migrations.upgrade(engine)`.
+   - With `Base.metadata.create_all()` (no version table): `migrations.adopt_existing_schema(engine)`, then `migrations.upgrade(engine)`.
+3. **Start 0.4.** `migrations.verify_schema_current(engine)` at startup confirms the upgrade ran.
+
+An application that calls `create_all()` at startup must still migrate first. On a database that holds the old tables, `create_all()` now raises `SchemaCompatibilityError` instead of creating empty `jafaal_*` tables beside them — which would have run the application with no sessions, MFA enrolments, identity-provider configurations, passkeys or API keys while the data sat untouched in the old tables. To go back to 0.3, run `migrations.downgrade(engine, "0007_credential_must_change")` with 0.4 before deploying 0.3. Application SQL that names JAFAAL's tables directly needs the new names.
+
+### Breaking
+
+- **Every JAFAAL table, index and named constraint is prefixed `jafaal_`.** `users_sessions`, `oauth_states`, `identity_providers`, `password_reset_tokens` and the rest become `jafaal_users_sessions`, `jafaal_oauth_states`, …; the named constraints read `uq_jafaal_...` and the backup-code index `idx_jafaal_user_unused_codes`. The tables live in the host's database and registry, and a generic name could collide with the host's own. No column or row changes.
+  - Migration `0008_prefix_table_names` renames each table in place with its indexes and named unique constraints, and on PostgreSQL its primary-key index and `id` sequence. PostgreSQL, MySQL and MariaDB rename in place; SQLite recreates the indexes under the new names. Foreign keys between JAFAAL's tables follow the rename. **Stop every process running 0.3 or earlier before running it**; a rolling deployment across it is not possible. Downgrading restores the old names.
+  - A fresh database is created with the final names directly, so a host that already owns a table called `identity_providers` can install JAFAAL. This holds for `jafaal.migrations.upgrade()` only: a host that runs JAFAAL's revisions from its own Alembic history gets the unprefixed tables from `0001_initial` first, which `0008` then renames.
+  - `jafaal.orm.jafaal_table_names()` returns the new names; `jafaal.orm.legacy_table_names()` returns the old ones, for migration tooling. `jafaal.migrations.jafaal_include_object` no longer includes the unprefixed names, so a host's own table of that name is never diffed or dropped.
+- **`Base.metadata.create_all()` refuses to create JAFAAL's tables beside a 0.3 schema**, raising `jafaal.migrations.SchemaCompatibilityError` that names the migration to run. `jafaal.map_models()` registers the check on the host's metadata. A 0.3 schema is recognised by two or more of the old names specific to JAFAAL (`users_local_credentials`, `idp_link_tokens`, `mfa_backup_codes`, …; `jafaal.orm.is_legacy_schema()`), the same test `upgrade()` and `adopt_existing_schema()` use, so a host's own tables with generic old names such as `password_reset_tokens` and `sign_up_tokens` never trigger it.
+- **`jafaal.migrations.upgrade()` refuses a database that has JAFAAL tables but no recorded revision**, raising `SchemaCompatibilityError` and pointing to `adopt_existing_schema()`. It used to create whatever tables were missing, leave the rest unchecked and record the head revision, which certified schemas that had never been validated, including a host's own table that happened to share a JAFAAL name. It also refuses to start without the host's `users` table.
+
+### Changed
+
+- **The revisions are explicit DDL.** `0001_initial` used to create the tables from the current models, so its meaning changed with every release, and `0002`–`0007` inspected the database and skipped any change they found already made, or whose table was missing, while still recording themselves as applied. `0001_initial` is now the schema as it stood at that revision, every later revision makes its change unconditionally, and a revision that cannot apply fails the migration. The type of `users.id` and the host's naming convention still come from the host, as they do for the models. No published release recorded a revision older than `0007_credential_must_change`, so existing databases are unaffected.
+- **`adopt_existing_schema()` adopts an older revision's schema.** Unversioned tables are matched exactly against the head schema, then against each earlier revision's schema, newest first — including the unprefixed schema of 0.3 and earlier — and the first match is recorded, so the `upgrade()` that follows applies the later revisions. A 0.3 database built with `create_all` is adopted at `0007_credential_must_change` and then renamed. Older schemas are derived from the migrations' own `downgrade` functions, never maintained separately. No match still raises `SchemaCompatibilityError`, now naming the closest revision and listing its differences.
+
+### Fixed
+
+- `adopt_existing_schema()` works on MariaDB, which reflects a `now()` server default as `current_timestamp()`; it rejected every MariaDB schema as incompatible.
+- The advisory `ty` type check passes. `handle_db_errors` has a single generic signature, so a decorated sync CRUD function is no longer typed as returning a coroutine; the optional `webauthn` and `authlib` imports are typed as their modules; `SsrfGuardAsyncTransport.__aexit__` takes the standard exception arguments. `ty` is configured like mypy: it skips the ORM model modules and the optional extras its job does not install. No runtime change.
+
+### Added
+
+- CI runs the suite, migrations included, against MariaDB 11.4 alongside PostgreSQL and MySQL.
+
 ## [0.3.1] - 2026-10-26
 
 ### Changed

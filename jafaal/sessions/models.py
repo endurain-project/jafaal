@@ -1,4 +1,4 @@
-"""Auth-owned session database models (table: ``users_sessions``)."""
+"""Auth-owned session database models (table: ``jafaal_users_sessions``)."""
 
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -52,7 +52,7 @@ class UsersSessions(Base):
             RotatedRefreshToken model.
     """
 
-    __tablename__ = "users_sessions"
+    __tablename__ = "jafaal_users_sessions"
 
     id: Mapped[str] = mapped_column(
         String(36),
@@ -117,7 +117,7 @@ class UsersSessions(Base):
     )
     oauth_state_id: Mapped[str | None] = mapped_column(
         String(64),
-        ForeignKey("oauth_states.id", ondelete="SET NULL"),
+        ForeignKey("jafaal_oauth_states.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
         comment="Link to OAuth state for PKCE validation",

@@ -38,7 +38,7 @@ class UsersApiKeys(Base):
         users: Relationship to Users model.
     """
 
-    __tablename__ = "users_api_keys"
+    __tablename__ = "jafaal_users_api_keys"
 
     id: Mapped[str] = mapped_column(
         String(36),

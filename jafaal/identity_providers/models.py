@@ -51,7 +51,7 @@ class IdentityProvider(Base):
         oauth_states (list[OAuthState]): Relationship to OAuth states.
     """
 
-    __tablename__ = "identity_providers"
+    __tablename__ = "jafaal_identity_providers"
 
     id: Mapped[int] = mapped_column(
         primary_key=True,

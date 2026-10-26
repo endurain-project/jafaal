@@ -14,16 +14,17 @@ Adds the four columns the standards-based authorization-code flow needs:
 * ``authorization_code_hash`` — the keyed digest of the issued code, unique so
   the database itself enforces one-code-one-row.
 
-Like the preceding revisions these are idempotent to add: on a fresh database
-the baseline (``0001_initial``) materialises every currently mapped JAFAAL table
-directly from the models — including these columns — so this revision inspects
-the live schema and only adds what is missing on databases stamped before it.
+The two indexes are named by the host's naming convention, as the model's
+``index=True`` columns are.
 """
 
 from __future__ import annotations
 
 import sqlalchemy as sa
 from alembic import op
+
+from jafaal.migrations._names import index_name
+from jafaal.migrations._names import table as tb
 
 revision = "0004_oauth_authorization_code"
 down_revision = "0003_oauth_state_upstream_pkce"
@@ -32,8 +33,6 @@ depends_on = None
 
 _TABLE = "oauth_states"
 _CODE_HASH = "authorization_code_hash"
-_INDEX = "ix_oauth_states_authorization_code_hash"
-_CLIENT_INDEX = "ix_oauth_states_client_id"
 
 _COLUMNS: tuple[tuple[str, sa.types.TypeEngine, str], ...] = (
     (
@@ -58,52 +57,26 @@ _COLUMNS: tuple[tuple[str, sa.types.TypeEngine, str], ...] = (
     ),
 )
 
-
-def _existing_columns(bind: sa.engine.Connection) -> set[str]:
-    inspector = sa.inspect(bind)
-    if _TABLE not in inspector.get_table_names():
-        return set()
-    return {col["name"] for col in inspector.get_columns(_TABLE)}
-
-
-def _indexes(bind: sa.engine.Connection) -> list[dict]:
-    inspector = sa.inspect(bind)
-    if _TABLE not in inspector.get_table_names():
-        return []
-    return [index for index in inspector.get_indexes(_TABLE) if index.get("name")]
+#: ``(column, unique)`` for each index this revision adds.
+_INDEXES: tuple[tuple[str, bool], ...] = (
+    # Unique so the database, not application code, guarantees an authorization
+    # code maps to at most one state row.
+    (_CODE_HASH, True),
+    ("client_id", False),
+)
 
 
 def upgrade() -> None:
-    bind = op.get_bind()
-    present = _existing_columns(bind)
-    if not present:
-        return
     for name, type_, comment in _COLUMNS:
-        if name in present:
-            continue
-        op.add_column(_TABLE, sa.Column(name, type_, nullable=True, comment=comment))
-
-    existing_index_names = {index["name"] for index in _indexes(bind)}
-    # Unique so the database, not application code, guarantees an authorization
-    # code maps to at most one state row.
-    if _CODE_HASH not in present and _INDEX not in existing_index_names:
-        op.create_index(_INDEX, _TABLE, [_CODE_HASH], unique=True)
-    if "client_id" not in present and _CLIENT_INDEX not in existing_index_names:
-        op.create_index(_CLIENT_INDEX, _TABLE, ["client_id"])
+        op.add_column(tb(_TABLE), sa.Column(name, type_, nullable=True, comment=comment))
+    for column, unique in _INDEXES:
+        op.create_index(index_name(tb(_TABLE), [column], unique=unique), tb(_TABLE), [column], unique=unique)
 
 
 def downgrade() -> None:
-    bind = op.get_bind()
-    present = _existing_columns(bind)
-    if not present:
-        return
-    dropping = {name for name, _type, _comment in _COLUMNS}
     # Indexes must go first: SQLite refuses to drop a column that any index
-    # still references, and leaving an orphaned index behind on other backends
-    # would break the next upgrade.
-    for index in _indexes(bind):
-        if dropping.intersection(index.get("column_names") or ()):
-            op.drop_index(index["name"], table_name=_TABLE)
+    # still references.
+    for column, unique in _INDEXES:
+        op.drop_index(index_name(tb(_TABLE), [column], unique=unique), table_name=tb(_TABLE))
     for name, _type, _comment in reversed(_COLUMNS):
-        if name in present:
-            op.drop_column(_TABLE, name)
+        op.drop_column(tb(_TABLE), name)
