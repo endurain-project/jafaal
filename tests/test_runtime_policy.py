@@ -330,33 +330,29 @@ def test_an_existing_session_honours_a_reduced_idle_timeout(install):
     session_utils.validate_session_timeout(row)
 
 
-def test_the_idle_sweep_follows_the_provider_and_skips_when_it_is_unavailable(install, make_user, db, caplog):
+def test_the_idle_sweep_follows_the_provider_and_skips_when_it_is_unavailable(install, monkeypatch, caplog):
     import jafaal.sessions.crud as sessions_crud
 
     seen = []
-    monkey = sessions_crud.delete_idle_sessions
 
     def spy(cutoff, session):
         seen.append(cutoff)
         return 0
 
-    sessions_crud.delete_idle_sessions = spy
-    try:
-        provider = install(RuntimeProvider(sessions=ports.SessionPolicy(False, 1, 720)))
-        session_utils.cleanup_idle_sessions()
-        assert seen == []
+    monkeypatch.setattr(sessions_crud, "delete_idle_sessions", spy)
+    provider = install(RuntimeProvider(sessions=ports.SessionPolicy(False, 1, 720)))
+    session_utils.cleanup_idle_sessions()
+    assert seen == []
 
-        provider.sessions = ports.SessionPolicy(True, 4, 720)
-        session_utils.cleanup_idle_sessions()
-        assert len(seen) == 1
-        assert timedelta(hours=3, minutes=59) < datetime.now(UTC) - seen[0] < timedelta(hours=4, minutes=1)
+    provider.sessions = ports.SessionPolicy(True, 4, 720)
+    session_utils.cleanup_idle_sessions()
+    assert len(seen) == 1
+    assert timedelta(hours=3, minutes=59) < datetime.now(UTC) - seen[0] < timedelta(hours=4, minutes=1)
 
-        install(_Broken())
-        with caplog.at_level(logging.ERROR):
-            session_utils.cleanup_idle_sessions()
-        assert len(seen) == 1
-    finally:
-        sessions_crud.delete_idle_sessions = monkey
+    install(_Broken())
+    with caplog.at_level(logging.ERROR):
+        session_utils.cleanup_idle_sessions()
+    assert len(seen) == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -401,14 +397,20 @@ def test_revoking_a_refresh_token_denies_the_session_for_the_safe_ttl(
     assert denied[0] >= 60 * 60
 
 
-def test_an_access_token_denylist_entry_uses_the_tokens_own_exp(install):
-    # Already covered by construction (``exp`` of the claims), asserted here so a
-    # regression to the configured lifetime would show up.
-    import inspect
+def test_an_access_token_denylist_entry_uses_the_tokens_own_exp(install, settings_override, monkeypatch):
+    settings_override(denylist_enabled=True)
+    provider = install(RuntimeProvider(lifetimes=ports.TokenLifetimes(45, 7)))
+    exp, token = get_token_manager().create_token("s1", _user(), TokenType.ACCESS)
+    provider.lifetimes = ports.TokenLifetimes(1, 7)  # shortened after issue
 
-    source = inspect.getsource(token_admin_service._revoke_access_token)
-    assert 'claims.get("exp")' in source
-    assert "access_token_expire_minutes" not in source
+    denied = []
+    monkeypatch.setattr(token_denylist, "deny_access_token", lambda jti, ttl: denied.append(ttl))
+    claims = get_token_manager().decode_token(token).claims
+    token_admin_service._revoke_access_token(claims)
+
+    remaining = (exp - datetime.now(UTC)).total_seconds()
+    assert denied
+    assert remaining - 5 <= denied[0] <= remaining + 90  # the token's own exp + buffer, not 1 minute
 
 
 # --------------------------------------------------------------------------- #

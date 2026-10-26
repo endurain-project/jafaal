@@ -174,8 +174,9 @@ MAINTENANCE_TASKS: tuple[MaintenanceTask, ...] = (
         run=cleanup_idle_sessions,
         interval_seconds=3600,
         description=(
-            "Delete sessions idle beyond AuthSettings.session_idle_timeout_hours. A no-op unless "
-            "session_idle_timeout_enabled is set; the per-request timeout check already refuses them, "
+            "Delete sessions idle beyond the session policy's idle_timeout_hours (SettingsProvider, "
+            "else AuthSettings.sessions). A no-op unless idle_timeout_enabled is set, and skipped when the "
+            "provider is unavailable; the per-request timeout check already refuses them, "
             "so this only reclaims the rows."
         ),
     ),
