@@ -345,8 +345,8 @@ def test_mfa_verify_login_flow_with_zero_user_id(client, make_user, engine):
     the resolved pending login carries ``0``, which a truthiness test would
     wrongly treat as "no pending login".
     """
-    if engine.dialect.name == "mysql":
-        pytest.skip("MySQL AUTO_INCREMENT reserves 0 unless NO_AUTO_VALUE_ON_ZERO is enabled")
+    if engine.dialect.name in {"mysql", "mariadb"}:
+        pytest.skip("MySQL/MariaDB AUTO_INCREMENT reserves 0 unless NO_AUTO_VALUE_ON_ZERO is enabled")
 
     user = make_user(username="zerouser", user_id=0, password="Str0ng!Pass")
     assert user.id == 0
