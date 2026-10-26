@@ -14,7 +14,6 @@ import jafaal.ports as jafaal_ports
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.models as jafaal_sessions_models
 import jafaal.sessions.schema as jafaal_sessions_schema
-import jafaal.settings as jafaal_settings
 import jafaal.token_hashing as token_hashing
 from jafaal._core import network, timeutils
 from jafaal.orm import UserId, session_scope
@@ -139,18 +138,25 @@ def verify_refresh_token(candidate: str, stored_hash: str) -> bool:
     return token_hashing.verify_hmac(candidate, token_hashing.KeyPurpose.REFRESH_SESSION, stored_hash)
 
 
-def session_absolute_deadline(created_at: datetime) -> datetime:
+def session_absolute_deadline(created_at: datetime, policy: jafaal_ports.SessionPolicy | None = None) -> datetime:
     """Return the hard deadline a session created at ``created_at`` dies at.
 
     Args:
         created_at: When the session was first created. Preserved across
-            rotations, so the deadline does not move.
+            rotations, so the creation time does not move.
+        policy: The session policy to apply. Defaults to
+            :func:`~jafaal.ports.resolve_session_policy`, read now: the
+            deadline follows the policy in force, so a reduced absolute timeout
+            applies to existing sessions on their next check.
 
     Returns:
         ``created_at + absolute_timeout_hours``.
+
+    Raises:
+        SettingsUnavailableError: If the settings provider fails.
     """
-    settings = jafaal_settings.get_settings()
-    return timeutils.ensure_aware_utc(created_at) + timedelta(hours=settings.sessions.absolute_timeout_hours)
+    policy = policy or jafaal_ports.resolve_session_policy()
+    return timeutils.ensure_aware_utc(created_at) + timedelta(hours=policy.absolute_timeout_hours)
 
 
 def session_expires_at(created_at: datetime, now: datetime) -> datetime:
@@ -172,8 +178,7 @@ def session_expires_at(created_at: datetime, now: datetime) -> datetime:
     Returns:
         The earlier of the refresh-token expiry and the absolute deadline.
     """
-    settings = jafaal_settings.get_settings()
-    refresh_expiry = now + timedelta(days=settings.tokens.refresh_token_expire_days)
+    refresh_expiry = now + timedelta(days=jafaal_ports.resolve_token_lifetimes().refresh_token_days)
     return min(refresh_expiry, session_absolute_deadline(created_at))
 
 
@@ -195,20 +200,18 @@ def validate_session_timeout(
     Raises:
         SessionExpiredError: 401 if the session has timed out.
     """
-    settings = jafaal_settings.get_settings()
+    policy = jafaal_ports.resolve_session_policy()
     now = datetime.now(UTC)
 
     # Absolute timeout — always enforced, measured from creation.
-    if now > session_absolute_deadline(session.created_at):
+    if now > session_absolute_deadline(session.created_at, policy):
         raise jafaal_exceptions.SessionExpiredError("Session expired. Please login again for security.")
 
     # Idle timeout — opt-in.
-    if not settings.sessions.idle_timeout_enabled:
+    if not policy.idle_timeout_enabled:
         return
 
-    idle_limit = timeutils.ensure_aware_utc(session.last_activity_at) + timedelta(
-        hours=settings.sessions.idle_timeout_hours
-    )
+    idle_limit = timeutils.ensure_aware_utc(session.last_activity_at) + timedelta(hours=policy.idle_timeout_hours)
     if now > idle_limit:
         raise jafaal_exceptions.SessionExpiredError("Session expired due to inactivity")
 
@@ -519,13 +522,19 @@ def cleanup_idle_sessions() -> None:
     Raises:
         JafaalError: If database error occurs.
     """
-    settings = jafaal_settings.get_settings()
-    if not settings.sessions.idle_timeout_enabled:
+    try:
+        policy = jafaal_ports.resolve_session_policy()
+    except jafaal_exceptions.SettingsUnavailableError:
+        # Fail closed: without a policy there is no cutoff to sweep against, and
+        # guessing one could delete live sessions. The next run tries again.
+        logger.error("Skipping cleanup_idle_sessions: the session policy is unavailable")
+        return
+    if not policy.idle_timeout_enabled:
         return
 
     with session_scope() as db:
         try:
-            cutoff_time = datetime.now(UTC) - timedelta(hours=settings.sessions.idle_timeout_hours)
+            cutoff_time = datetime.now(UTC) - timedelta(hours=policy.idle_timeout_hours)
 
             # Delete sessions with last_activity_at older than cutoff
             deleted_count = jafaal_sessions_crud.delete_idle_sessions(cutoff_time, db)

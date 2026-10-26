@@ -166,10 +166,13 @@ class SqlUserRepository:
 
 
 class StaticSettingsProvider:
-    """Password policy and sign-up toggles.
+    """Password policy, sign-up toggles and runtime auth policy.
 
     Static here; back it with a settings table if operators change these at
-    runtime.
+    runtime. The three runtime-policy methods at the bottom are optional: leave
+    them out and JAFAAL uses the AuthSettings values. They run on every request
+    that needs them and JAFAAL does not cache, so cache in your own provider if
+    the source is slow.
     """
 
     def get_password_policy(self) -> jafaal.PasswordPolicy:
@@ -186,6 +189,15 @@ class StaticSettingsProvider:
             require_email_verification=False,
             require_admin_approval=False,
         )
+
+    def get_token_lifetimes(self) -> jafaal.TokenLifetimes:
+        return jafaal.TokenLifetimes(access_token_minutes=15, refresh_token_days=7)
+
+    def get_session_policy(self) -> jafaal.SessionPolicy:
+        return jafaal.SessionPolicy(idle_timeout_enabled=False, idle_timeout_hours=1, absolute_timeout_hours=720)
+
+    def get_login_methods(self) -> jafaal.LoginMethods:
+        return jafaal.LoginMethods(password=True, identity_providers=True, passkeys=True)
 
 
 class LoggingEventSink:

@@ -218,7 +218,7 @@ def set_refresh_token_cookie(
     response.set_cookie(
         key=settings.effective_refresh_cookie_name,
         value=refresh_token,
-        expires=datetime.now(UTC) + timedelta(days=settings.tokens.refresh_token_expire_days),
+        expires=datetime.now(UTC) + timedelta(days=jafaal_ports.resolve_token_lifetimes().refresh_token_days),
         httponly=True,
         path=settings.sessions.refresh_cookie_path,
         secure=_is_secure_cookie_environment(),

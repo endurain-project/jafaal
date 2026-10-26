@@ -511,3 +511,75 @@ def test_a_provider_that_omits_iss_still_works(client, make_user, monkeypatch):
     resp = client.get(f"{BASE}/callback/goog?code=abc&state={state_id}", follow_redirects=False)
     assert resp.status_code == 302
     assert _query(resp.headers["location"])["code"]
+
+
+# --------------------------------------------------------------------------- #
+# LoginMethods: identity-provider login can be disabled at runtime
+# --------------------------------------------------------------------------- #
+
+
+class _NoIdpLogin:
+    """A settings provider with identity-provider login switched off."""
+
+    def get_password_policy(self):
+        return jafaal.PasswordPolicy(min_length_regular=8, min_length_admin=12, password_type="strict")
+
+    def get_signup_config(self):
+        return jafaal.SignupConfig(enabled=True, require_email_verification=False, require_admin_approval=False)
+
+    def get_login_methods(self):
+        return jafaal.LoginMethods(identity_providers=False)
+
+
+def _disable_idp_login():
+    previous = jafaal.get_settings_provider()
+    jafaal.configure_settings_provider(_NoIdpLogin())
+    return previous
+
+
+def test_callback_login_is_refused_before_anything_is_provisioned(client, make_user, monkeypatch):
+    user = make_user(username="ssouser")
+    idp = _create_idp(slug="goog")
+    state_id = _create_oauth_state(idp.id, code_challenge=_pkce()[1], client_state="s1")
+    called = []
+
+    async def fake_handle(*args, **kwargs):
+        called.append(True)
+        return {"user": user, "token_data": {}, "userinfo": {}}
+
+    monkeypatch.setattr(idp_service.idp_service, "handle_callback", fake_handle)
+    previous = _disable_idp_login()
+    try:
+        resp = client.get(f"{BASE}/callback/goog?code=abc&state={state_id}", follow_redirects=False)
+    finally:
+        jafaal.configure_settings_provider(previous)
+
+    assert called == []
+    params = _query(resp.headers["location"])
+    assert params["error"] == "access_denied"
+    assert "code" not in params
+
+
+def test_callback_link_and_step_up_are_not_blocked_when_idp_login_is_off(client, make_user, monkeypatch):
+    user = make_user()
+    idp = _create_idp(slug="goog")
+
+    async def fake_handle(*args, **kwargs):
+        return {"user": user, "mode": "link", "token_data": {}, "userinfo": {}}
+
+    monkeypatch.setattr(idp_service.idp_service, "handle_callback", fake_handle)
+    previous = _disable_idp_login()
+    try:
+        link_state = _create_oauth_state(idp.id, user_id=user.id, purpose="link")
+        link = client.get(f"{BASE}/callback/goog?code=abc&state={link_state}", follow_redirects=False)
+        assert _query(link.headers["location"])["idp_link"] == "success"
+
+        async def fake_stepup(*args, **kwargs):
+            return {"user": user, "mode": "stepup", "token_data": {}, "userinfo": {}}
+
+        monkeypatch.setattr(idp_service.idp_service, "handle_callback", fake_stepup)
+        stepup_state = _create_oauth_state(idp.id, user_id=user.id, purpose="stepup")
+        stepup = client.get(f"{BASE}/callback/goog?code=abc&state={stepup_state}", follow_redirects=False)
+        assert _query(stepup.headers["location"])["step_up"] == "success"
+    finally:
+        jafaal.configure_settings_provider(previous)

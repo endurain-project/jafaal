@@ -25,6 +25,7 @@ import jafaal._internal.token_manager as jafaal_token_manager
 import jafaal.audit as jafaal_audit
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.orm as jafaal_orm
+import jafaal.ports as jafaal_ports
 import jafaal.sessions.crud as jafaal_sessions_crud
 import jafaal.sessions.utils as jafaal_sessions_utils
 import jafaal.settings as jafaal_settings
@@ -173,6 +174,24 @@ def revoke_token(
         _revoke_access_token(claims)
 
 
+def _session_denylist_ttl() -> int:
+    """Return how long a session-wide denylist entry must live, in seconds.
+
+    The tokens sharing a ``sid`` carry their own ``exp``, which this cannot see.
+    They were issued under whatever lifetime was in force then, and a runtime
+    policy may since have *shortened* it, so the current lifetime alone could let
+    the entry lapse before a token. The longest of the lifetime now, the
+    deployment default, and the configured ceiling is used instead.
+    """
+    tokens = jafaal_settings.get_settings().tokens
+    minutes = max(
+        jafaal_ports.resolve_token_lifetimes().access_token_minutes,
+        tokens.access_token_expire_minutes,
+        tokens.max_access_token_minutes or 0,
+    )
+    return minutes * 60 + _DENYLIST_TTL_BUFFER_SECONDS
+
+
 def _revoke_refresh_token(
     token: str,
     claims: dict[str, Any],
@@ -195,15 +214,17 @@ def _revoke_refresh_token(
     if not session.refresh_token or not jafaal_sessions_utils.verify_refresh_token(token, session.refresh_token):
         return  # The presented token does not belong to this session; do not revoke.
 
+    # Resolved before the session is deleted: a failing settings provider must
+    # not leave the session gone but its access tokens undenied.
+    denylist_ttl = _session_denylist_ttl() if jafaal_settings.get_settings().tokens.denylist_enabled else None
     jafaal_sessions_crud.delete_session(session.id, user_id, db)
     # RFC 7009 §2.1: revoking a refresh token SHOULD invalidate the access tokens
     # issued from the same grant. Deleting the session does not — access-token
     # validation is stateless — so denylist the session id, which is the only
-    # handle those (unenumerable) tokens share. Bounded by the access-token
-    # lifetime: nothing carrying this sid can outlive it.
-    if jafaal_settings.get_settings().tokens.denylist_enabled:
-        ttl = jafaal_settings.get_settings().tokens.access_token_expire_minutes * 60 + _DENYLIST_TTL_BUFFER_SECONDS
-        token_denylist.deny_session(session.id, ttl)
+    # handle those (unenumerable) tokens share. Bounded by the longest access-token
+    # lifetime that could have been in force (see :func:`_session_denylist_ttl`).
+    if denylist_ttl is not None:
+        token_denylist.deny_session(session.id, denylist_ttl)
     jafaal_audit.record(
         jafaal_audit.Event.TOKEN_REVOKED,
         user_id=user_id,

@@ -461,6 +461,28 @@ class StoreUnavailableError(ServiceUnavailableError):
     default_detail = "A required storage backend is unavailable."
 
 
+class SettingsUnavailableError(ServiceUnavailableError):
+    """The host's :class:`~jafaal.ports.SettingsProvider` failed (503).
+
+    Raised instead of falling back to defaults: a broken settings store must
+    never silently re-enable a disabled login method or lengthen a lifetime.
+    """
+
+    code = "settings_unavailable"
+    default_detail = "The authentication settings are temporarily unavailable."
+
+
+class LoginMethodDisabledError(AuthorizationError):
+    """The requested way of signing in is disabled by the host's policy (403).
+
+    Raised before any credential is checked, so the refusal discloses nothing
+    about the account.
+    """
+
+    code = "login_method_disabled"
+    default_detail = "This sign-in method is disabled."
+
+
 class IdentityProviderError(UpstreamError):
     """An external identity provider returned an error (502)."""
 
@@ -492,6 +514,7 @@ __all__ = [
     "InvalidScopeError",
     "InvalidTokenError",
     "JafaalError",
+    "LoginMethodDisabledError",
     "MissingScopeError",
     "NotFoundError",
     "OAuthError",
@@ -500,6 +523,7 @@ __all__ = [
     "RateLimitedError",
     "ServiceUnavailableError",
     "SessionExpiredError",
+    "SettingsUnavailableError",
     "StaleRefreshTokenError",
     "StepUpReauthRequiredError",
     "StoreUnavailableError",

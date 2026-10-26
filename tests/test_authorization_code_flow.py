@@ -467,6 +467,30 @@ def test_an_unknown_idp_is_reported_by_redirect(client):
     assert query["state"] == ["opaque-state"]
 
 
+def test_authorize_with_an_idp_is_refused_when_idp_login_is_disabled(client):
+    _create_idp()
+    _, challenge = _pkce()
+    previous = jafaal.get_settings_provider()
+
+    class _NoIdp:
+        get_password_policy = previous.get_password_policy
+        get_signup_config = previous.get_signup_config
+
+        def get_login_methods(self):
+            return jafaal.LoginMethods(identity_providers=False)
+
+    jafaal.configure_settings_provider(_NoIdp())
+    try:
+        response = _authorize(client, challenge=challenge)
+    finally:
+        jafaal.configure_settings_provider(previous)
+
+    assert response.status_code == 302
+    query = parse_qs(urlsplit(response.headers["location"]).query)
+    assert query["error"] == ["access_denied"]
+    assert query["state"] == ["opaque-state"]
+
+
 def test_a_scope_outside_the_catalog_is_refused(client):
     _create_idp()
     _, challenge = _pkce()

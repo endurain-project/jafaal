@@ -237,7 +237,8 @@ the settings and invalidates settings-derived caches (e.g. the token manager).
 | `secret_key_fallbacks` | `()` | Extra HMAC keys accepted only when *verifying* JWTs (rotation overlap). |
 | `fernet_key_fallbacks` | `()` | Extra Fernet keys accepted only when *decrypting* at-rest tokens (rotation overlap). |
 | `access_token_expire_minutes` | `15` | Access-token lifetime. |
-| `refresh_token_expire_days` | `7` | Refresh-token lifetime. |
+| `refresh_token_expire_days` | `7` | Refresh-token lifetime. The default for [runtime policy](#runtime-policy). |
+| `max_access_token_minutes` / `max_refresh_token_days` | `None` | Optional ceilings on lifetimes a `SettingsProvider` supplies at runtime (`None` = no cap). Never below the matching default. |
 | `leeway_seconds` | `0` | Clock-skew tolerance (seconds) for JWT `exp`/`nbf`; `0` is strict, keep any value small. |
 | `algorithm` | `"HS256"` | JWT signing algorithm: `HS256` (symmetric) or an asymmetric RSA/EC algorithm (see [below](#asymmetric-signing-jwks)). |
 | `client_id` | `""` | Value of the RFC 9068 `client_id` claim; defaults to the resolved audience. |
@@ -245,6 +246,7 @@ the settings and invalidates settings-derived caches (e.g. the token manager).
 | `private_key_fallbacks` | `()` | Verify-only PEM keys kept in the published JWKS during a signing-key rotation. |
 | `idle_timeout_hours` | `1` | Idle-session timeout (opt-in via `idle_timeout_enabled`). |
 | `absolute_timeout_hours` | `720` | Hard ceiling on session lifetime, measured from creation. **Always enforced**, and `expires_at` is capped at it on every rotation, so refreshing cannot extend a login indefinitely. |
+| `max_absolute_timeout_hours` | `None` | Optional ceiling on the absolute timeout a `SettingsProvider` supplies at runtime (`None` = no cap). Never below `absolute_timeout_hours`. |
 | `base_url` | `""` | Public base URL; default JWT issuer/audience and SSO redirect base. Required as absolute HTTPS in deployed environments. Local HTTP is limited to `127.0.0.1` or `[::1]`. |
 | `issuer` | `""` | Public authorization-server URL and JWT `iss`; defaults to `base_url`. Its path determines the RFC 8414 metadata path. |
 | `login_ui_url` | `""` | Absolute URL of **your** login page. Required to offer local login at `/auth/authorize`; JAFAAL redirects there with an `auth_request` handle. Empty means `idp` is mandatory. |
@@ -311,6 +313,74 @@ the settings and invalidates settings-derived caches (e.g. the token manager).
     served from different origins (for example `https://app.example.com` calling
     `https://api.example.com`), list the **frontend** origin in
     `csrf_trusted_origins` or every refresh will be rejected with a 403.
+
+## Runtime policy
+
+`AuthSettings` is **deployment configuration**, set once: keys, algorithm,
+issuer, OAuth clients, cookie names and paths, trusted proxies, Argon2 cost. The
+token-lifetime, session-timeout and login-method fields in it are the
+**defaults and hard ceilings** for policy an operator may change while the
+process runs.
+
+That runtime policy is read from the [`SettingsProvider`](ports-and-adapters.md#settingsprovider),
+per call, through three optional methods:
+
+| Provider method | Returns | Read by |
+| --- | --- | --- |
+| `get_token_lifetimes()` | `TokenLifetimes(access_token_minutes, refresh_token_days)` | token issue, refresh-cookie expiry, session expiry on rotation |
+| `get_session_policy()` | `SessionPolicy(idle_timeout_enabled, idle_timeout_hours, absolute_timeout_hours)` | session validation, the idle-session sweep |
+| `get_login_methods()` | `LoginMethods(password, identity_providers, passkeys)` | the login routes below |
+
+A provider that implements none of them keeps working: JAFAAL derives each value
+from `AuthSettings`, as it does when no provider is installed, or when you use
+[`StaticSettingsProvider`](ports-and-adapters.md#staticsettingsprovider) without
+overrides. JAFAAL reads them only through `resolve_token_lifetimes()`,
+`resolve_session_policy()` and `resolve_login_methods()`.
+
+!!! warning "Hot path"
+    The methods run on the request path, and JAFAAL does **not** cache. If your
+    source is slow, cache it in the provider. They take no `Session`.
+
+**Ceilings.** A provider value above `max_access_token_minutes`,
+`max_refresh_token_days` or `max_absolute_timeout_hours` is clamped to it and
+logged on `jafaal.ports` with `warning_code` `token_lifetime_clamped` or
+`session_timeout_clamped`. The ceilings default to `None` (no cap), because a
+default would silently shorten a 0.3 deployment already configured above it;
+set them to bound what an operator can configure. Ceilings apply to provider
+values only, never to the `AuthSettings` defaults. A non-positive value is an
+error (the dataclasses validate on construction), not a value to replace.
+
+**Fail closed.** If a provider method raises, or returns the wrong type, JAFAAL
+raises `SettingsUnavailableError` (HTTP **503**, code `settings_unavailable`)
+and does **not** fall back to defaults: a broken settings store must not
+re-enable a disabled login method or lengthen a lifetime. The idle-session sweep
+skips that run instead.
+
+**What a change affects.**
+
+* New tokens, and the refresh cookie, use the new lifetimes at once. Tokens
+  already issued keep the `exp` they were minted with.
+* Existing sessions are judged against the policy in force at the next check, so
+  a reduced absolute or idle timeout applies on the session's next refresh.
+* The session-wide access-token denylist entry written on revoking a refresh
+  token lives for the longest of the current lifetime, the `AuthSettings`
+  default and `max_access_token_minutes`, so shortening the lifetime does not
+  let it lapse before a token issued earlier. To guarantee that for tokens
+  issued under a *longer* runtime value, set the ceiling. A revoked access token
+  is denied for its own remaining `exp`.
+
+### Login methods
+
+`LoginMethods` is enforced by JAFAAL, not only a UI hint. Each refusal is a
+`LoginMethodDisabledError` (HTTP **403**, code `login_method_disabled`) raised
+before any credential is checked, so it is identical for a real and an unknown
+account and records no failed attempt.
+
+| Flag | Refused when `False` | Never blocked |
+| --- | --- | --- |
+| `password` | `POST /auth/login`, which is also the password step of the `/auth/authorize` handoff | |
+| `identity_providers` | `/auth/authorize` with `idp` (a redirect with `error=access_denied`), the login callback under `/public/idp/callback/*`; `GET /public/idp` returns `[]` | linking a provider to an existing account, IdP step-up re-authentication |
+| `passkeys` | `/public/webauthn/authenticate/*` | passkeys as a second factor, passkey credential management |
 
 ## Startup diagnostics
 

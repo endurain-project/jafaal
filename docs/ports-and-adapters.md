@@ -39,7 +39,9 @@ JAFAAL never reads app-specific profile fields — only `id`, `username`, `email
 
 ### `SettingsProvider`
 
-Host-owned dynamic settings: the password policy and the sign-up toggles.
+Host-owned dynamic settings: the password policy and the sign-up toggles, plus
+(optionally) the runtime auth policy: token lifetimes, session timeouts and the
+allowed login methods. See [Runtime policy](configuration.md#runtime-policy).
 
 ```python
 from jafaal import PasswordPolicy, SignupConfig, configure_settings_provider
@@ -55,6 +57,33 @@ class MySettings:
 
 configure_settings_provider(MySettings())
 ```
+
+The runtime-policy methods are optional, and a provider that lacks them keeps
+working; JAFAAL derives those values from `AuthSettings`. Implement the ones an
+operator should be able to change:
+
+```python
+from jafaal import LoginMethods, SessionPolicy, TokenLifetimes
+
+
+class MySettings:
+    # ...the two methods above...
+
+    def get_token_lifetimes(self) -> TokenLifetimes:
+        return TokenLifetimes(access_token_minutes=10, refresh_token_days=3)
+
+    def get_session_policy(self) -> SessionPolicy:
+        return SessionPolicy(idle_timeout_enabled=True, idle_timeout_hours=2, absolute_timeout_hours=168)
+
+    def get_login_methods(self) -> LoginMethods:
+        return LoginMethods(password=True, identity_providers=True, passkeys=False)
+```
+
+They are typed by the optional protocols `TokenLifetimesProvider`,
+`SessionPolicyProvider` and `LoginMethodsProvider`. Every method is on the
+**request hot path**, takes no `Session`, and is never cached by JAFAAL; cache in
+the provider if the source is slow. A method that raises makes JAFAAL answer
+**503** (`SettingsUnavailableError`) rather than fall back to defaults.
 
 ### `AuthEventSink`
 
@@ -159,7 +188,9 @@ default) to map refreshed IdP claims onto your profile columns.
 ### `StaticSettingsProvider`
 
 A `SettingsProvider` backed by in-code constants — the simple, non-DB
-password-policy / sign-up-config mode.
+password-policy / sign-up-config mode. Its optional `token_lifetimes`,
+`session_policy` and `login_methods` arguments default to the `AuthSettings`
+values (all login methods enabled), so it behaves like having no such method.
 
 ```python
 import jafaal

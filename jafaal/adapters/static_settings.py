@@ -7,7 +7,15 @@ default to JAFAAL's recommended baseline and can be overridden per instance.
 
 from __future__ import annotations
 
-from jafaal.ports import PasswordPolicy, SignupConfig
+from jafaal.ports import (
+    LoginMethods,
+    PasswordPolicy,
+    SessionPolicy,
+    SignupConfig,
+    TokenLifetimes,
+    session_policy_from_settings,
+    tokens_from_settings,
+)
 
 __all__ = [
     "DEFAULT_PASSWORD_POLICY",
@@ -49,6 +57,9 @@ class StaticSettingsProvider:
         *,
         password_policy: PasswordPolicy | None = None,
         signup_config: SignupConfig | None = None,
+        token_lifetimes: TokenLifetimes | None = None,
+        session_policy: SessionPolicy | None = None,
+        login_methods: LoginMethods | None = None,
     ) -> None:
         """Create the provider.
 
@@ -57,12 +68,30 @@ class StaticSettingsProvider:
                 :data:`DEFAULT_PASSWORD_POLICY`.
             signup_config: Override for the sign-up configuration. Defaults to
                 :data:`DEFAULT_SIGNUP_CONFIG`.
+            token_lifetimes: Override for the token lifetimes. Defaults to the
+                values in :class:`~jafaal.settings.AuthSettings`.
+            session_policy: Override for the session policy. Defaults to the
+                values in :class:`~jafaal.settings.AuthSettings`.
+            login_methods: Override for the allowed login methods. Defaults to
+                all enabled.
         """
         self._password_policy = password_policy or DEFAULT_PASSWORD_POLICY
         self._signup_config = signup_config or DEFAULT_SIGNUP_CONFIG
+        self._token_lifetimes = token_lifetimes
+        self._session_policy = session_policy
+        self._login_methods = login_methods
 
     def get_password_policy(self) -> PasswordPolicy:
         return self._password_policy
 
     def get_signup_config(self) -> SignupConfig:
         return self._signup_config
+
+    def get_token_lifetimes(self) -> TokenLifetimes:
+        return self._token_lifetimes or tokens_from_settings()
+
+    def get_session_policy(self) -> SessionPolicy:
+        return self._session_policy or session_policy_from_settings()
+
+    def get_login_methods(self) -> LoginMethods:
+        return self._login_methods or LoginMethods()

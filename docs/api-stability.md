@@ -77,7 +77,17 @@ emits a `DeprecationWarning`.
 | Token machinery | `TokenManager`, `TokenType` |
 | Low-level flow helpers | `authenticate_user`, `complete_login`, `create_tokens` |
 | Pending-MFA maintenance | `cleanup_expired_pending_mfa_logins`, `clear_pending_mfa_for_user` |
+| Runtime-policy resolvers | `resolve_login_methods`, `resolve_session_policy`, `resolve_token_lifetimes` |
 | Component accessors mirroring `configure_*` | `get_event_sink`, `get_failed_login_attempts`, `get_password_breach_checker`, `get_password_hasher`, `get_pending_mfa_store`, `get_rate_limiter`, `get_scope_resolver`, `get_settings_provider`, `get_state_store`, `get_step_up_attempts`, `get_token_manager`, `get_user_repository` |
+
+Added in 0.4.0, and part of the public surface: `TokenLifetimes`,
+`SessionPolicy`, `LoginMethods` and the optional provider protocols
+`TokenLifetimesProvider`, `SessionPolicyProvider`, `LoginMethodsProvider`; the
+`TokenSettings.max_access_token_minutes` / `max_refresh_token_days` and
+`SessionSettings.max_absolute_timeout_hours` ceilings; and the error codes
+`settings_unavailable` (503) and `login_method_disabled` (403). The three
+provider methods are **optional**: a `SettingsProvider` written against 0.3 is
+still a valid one, and a future required method would be a breaking change.
 
 Everything else in `__all__` — the settings objects, the ports, the exceptions,
 the router factories, the transaction helpers, the user mixins, the request and

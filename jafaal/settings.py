@@ -210,6 +210,14 @@ class TokenSettings:
             publishes the public key at the JWKS endpoint.
         access_token_expire_minutes: Access-token lifetime, in minutes.
         refresh_token_expire_days: Refresh-token lifetime, in days.
+        max_access_token_minutes: Optional ceiling on an access-token lifetime
+            supplied at runtime by a
+            :class:`~jafaal.ports.SettingsProvider`; a larger value is clamped
+            to it, with a ``token_lifetime_clamped`` warning. ``None`` (default)
+            means no cap. It never applies to ``access_token_expire_minutes``
+            itself, which it must not be smaller than.
+        max_refresh_token_days: The same ceiling for the refresh-token
+            lifetime, in days.
         issuer: Public authorization-server URL and JWT ``iss`` claim. Defaults
             to ``base_url`` when empty (see
             :attr:`AuthSettings.resolved_issuer`). Deployed values require an
@@ -244,6 +252,8 @@ class TokenSettings:
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
+    max_access_token_minutes: int | None = None
+    max_refresh_token_days: int | None = None
     issuer: str = ""
     audience: str = ""
     client_id: str = ""
@@ -260,6 +270,16 @@ class TokenSettings:
             raise ValueError("TokenSettings.access_token_expire_minutes must be positive.")
         if self.refresh_token_expire_days <= 0:
             raise ValueError("TokenSettings.refresh_token_expire_days must be positive.")
+        if (
+            self.max_access_token_minutes is not None
+            and self.max_access_token_minutes < self.access_token_expire_minutes
+        ):
+            raise ValueError(
+                "TokenSettings.max_access_token_minutes must be at least access_token_expire_minutes "
+                "(the default is what a provider-less deployment issues)."
+            )
+        if self.max_refresh_token_days is not None and self.max_refresh_token_days < self.refresh_token_expire_days:
+            raise ValueError("TokenSettings.max_refresh_token_days must be at least refresh_token_expire_days.")
         if self.leeway_seconds < 0:
             raise ValueError("TokenSettings.leeway_seconds must be non-negative.")
 
@@ -292,6 +312,11 @@ class SessionSettings:
             refresh-token lifetime RFC 9700 §4.14.2 warns against. Defaults to
             30 days: long enough not to be user-hostile, finite enough that a
             stolen session eventually dies on its own.
+        max_absolute_timeout_hours: Optional ceiling on the absolute timeout
+            supplied at runtime by a :class:`~jafaal.ports.SettingsProvider`; a
+            larger value is clamped to it, with a ``session_timeout_clamped``
+            warning. ``None`` (default) means no cap. It never applies to
+            ``absolute_timeout_hours`` itself, which it must not be smaller than.
         strict_binding: When ``True``, every access-token-authenticated request
             verifies the token's ``sid`` session still exists and is valid, so
             logout / single-session revocation is immediate instead of bounded
@@ -317,6 +342,7 @@ class SessionSettings:
     idle_timeout_enabled: bool = False
     idle_timeout_hours: int = 1
     absolute_timeout_hours: int = 720
+    max_absolute_timeout_hours: int | None = None
     strict_binding: bool = False
     refresh_cookie_name: str = "jafaal_refresh_token"
     refresh_cookie_path: str = "/api/v1/auth"
@@ -331,6 +357,11 @@ class SessionSettings:
                 "SessionSettings.absolute_timeout_hours must be positive: a session's lifetime is "
                 "always bounded, so there is no value meaning 'never expires'."
             )
+        if (
+            self.max_absolute_timeout_hours is not None
+            and self.max_absolute_timeout_hours < self.absolute_timeout_hours
+        ):
+            raise ValueError("SessionSettings.max_absolute_timeout_hours must be at least absolute_timeout_hours.")
         if self.refresh_cookie_prefix not in ("", "__Secure-", "__Host-"):
             raise ValueError(
                 "SessionSettings.refresh_cookie_prefix must be '', '__Secure-', or '__Host-' "

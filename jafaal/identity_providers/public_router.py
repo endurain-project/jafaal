@@ -21,6 +21,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
+import jafaal._internal.login_methods as login_methods
 import jafaal._internal.password_hasher as jafaal_password_hasher
 import jafaal._internal.services.authorization_code_service as authorization_code_service
 import jafaal._internal.token_manager as jafaal_token_manager
@@ -34,6 +35,7 @@ import jafaal.identity_providers.service as idp_service
 import jafaal.oauth_state.crud as oauth_state_crud
 import jafaal.oauth_state.models as oauth_state_models
 import jafaal.orm as jafaal_orm
+import jafaal.ports as jafaal_ports
 import jafaal.rate_limit as jafaal_rate_limit
 import jafaal.sessions.utils as jafaal_sessions_utils
 import jafaal.settings as jafaal_settings
@@ -372,6 +374,8 @@ def get_enabled_identity_providers(db: Annotated[Session, Depends(jafaal_orm.get
     Returns:
         The enabled providers, each as an ``IdentityProviderPublic``.
     """
+    if not jafaal_ports.resolve_login_methods().identity_providers:
+        return []
     providers = idp_crud.get_enabled_identity_providers(db)
     return [
         idp_schema.IdentityProviderPublic(
@@ -492,6 +496,12 @@ async def handle_callback(
             raise jafaal_exceptions.InvalidRequestError(
                 "The identity provider callback carried neither an authorization code nor an error."
             )
+
+        # Login is refused before the service provisions or links anything. Link
+        # and step-up callbacks belong to an already-authenticated user and are
+        # not login, so they are left alone.
+        if oauth_state.purpose == "login":
+            login_methods.require_identity_provider_login()
 
         # Process the OAuth callback (service will handle both DB and cookie state)
         result = await idp_service.idp_service.handle_callback(

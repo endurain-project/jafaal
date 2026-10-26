@@ -27,6 +27,7 @@ from fastapi import Depends, Request, Response, status
 from sqlalchemy.orm import Session
 
 import jafaal._internal.internal_dependencies as jafaal_internal_dependencies
+import jafaal._internal.login_methods as login_methods
 import jafaal._internal.security_stores as jafaal_security_stores
 import jafaal._internal.services.authorization_code_service as authorization_code_service
 import jafaal._internal.services.step_up_service as step_up_service
@@ -378,6 +379,7 @@ def begin_authentication(
     Returns the ``navigator.credentials.get()`` options plus an opaque
     ``challenge_id`` to echo back to ``/authenticate/complete``.
     """
+    login_methods.require_passkey_login()
     challenge_id, options = webauthn_service.begin_authentication(data.username, db)
     return webauthn_schema.WebAuthnAuthenticationBeginResponse(challenge_id=challenge_id, options=options)
 
@@ -404,6 +406,7 @@ def complete_authentication(
     shortcut for an account that has TOTP enrolled and sends it to the password
     + TOTP flow instead.
     """
+    login_methods.require_passkey_login()
     client = authorization_code_service.resolve_login_client(data.client_id, request)
     user = webauthn_service.complete_authentication(data.challenge_id, data.credential, db)
     jafaal_user_guards.check_user_is_active(user)

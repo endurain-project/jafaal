@@ -214,6 +214,69 @@ class SignupConfig:
     require_admin_approval: bool
 
 
+def _require_positive_int(owner: str, name: str, value: object) -> None:
+    """Raise :class:`ValueError` unless ``value`` is a positive ``int`` (not a ``bool``)."""
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{owner}.{name} must be a positive integer (got {value!r}).")
+
+
+@dataclass(frozen=True)
+class TokenLifetimes:
+    """Runtime token lifetimes, resolved per call.
+
+    Attributes:
+        access_token_minutes: Access-token lifetime, in minutes.
+        refresh_token_days: Refresh-token lifetime, in days.
+    """
+
+    access_token_minutes: int
+    refresh_token_days: int
+
+    def __post_init__(self) -> None:
+        _require_positive_int("TokenLifetimes", "access_token_minutes", self.access_token_minutes)
+        _require_positive_int("TokenLifetimes", "refresh_token_days", self.refresh_token_days)
+
+
+@dataclass(frozen=True)
+class SessionPolicy:
+    """Runtime session-timeout policy, resolved per call.
+
+    Attributes:
+        idle_timeout_enabled: Whether idle-session expiry is enforced.
+        idle_timeout_hours: Idle-session timeout, in hours.
+        absolute_timeout_hours: Hard ceiling on a session's lifetime, in hours,
+            measured from its creation. Always enforced.
+    """
+
+    idle_timeout_enabled: bool
+    idle_timeout_hours: int
+    absolute_timeout_hours: int
+
+    def __post_init__(self) -> None:
+        _require_positive_int("SessionPolicy", "idle_timeout_hours", self.idle_timeout_hours)
+        _require_positive_int("SessionPolicy", "absolute_timeout_hours", self.absolute_timeout_hours)
+
+
+@dataclass(frozen=True)
+class LoginMethods:
+    """Which ways of signing in are currently allowed.
+
+    Enforced by JAFAAL, not only advertised to a UI. Linking an identity
+    provider to an existing account, identity-provider step-up re-authentication,
+    passkeys as a second factor and passkey credential management are never
+    blocked by these flags.
+
+    Attributes:
+        password: Username-and-password login (``/auth/login``).
+        identity_providers: Identity-provider login.
+        passkeys: Passwordless passkey login.
+    """
+
+    password: bool = True
+    identity_providers: bool = True
+    passkeys: bool = True
+
+
 class SettingsProvider(Protocol):
     """Host-owned dynamic settings (password policy + sign-up toggles).
 
@@ -221,6 +284,17 @@ class SettingsProvider(Protocol):
     methods take no session — a DB-backed adapter manages its own read (JAFAAL's
     :func:`jafaal.orm.session_scope` is available) and a static adapter simply
     returns constants.
+
+    A provider may additionally implement any of :class:`TokenLifetimesProvider`,
+    :class:`SessionPolicyProvider` and :class:`LoginMethodsProvider`. They are
+    optional: a provider with only the two methods below keeps working, and
+    JAFAAL derives what a missing method would have returned from
+    :class:`~jafaal.settings.AuthSettings`. JAFAAL reads them through
+    :func:`resolve_token_lifetimes`, :func:`resolve_session_policy` and
+    :func:`resolve_login_methods` only.
+
+    **Hot path.** Every method is called on each request that needs it, and
+    JAFAAL does not cache. A host whose source is slow caches it itself.
     """
 
     def get_password_policy(self) -> PasswordPolicy:
@@ -230,6 +304,165 @@ class SettingsProvider(Protocol):
     def get_signup_config(self) -> SignupConfig:
         """Return the active sign-up configuration."""
         ...
+
+
+class TokenLifetimesProvider(Protocol):
+    """Optional :class:`SettingsProvider` extension: runtime token lifetimes."""
+
+    def get_token_lifetimes(self) -> TokenLifetimes:
+        """Return the active token lifetimes."""
+        ...
+
+
+class SessionPolicyProvider(Protocol):
+    """Optional :class:`SettingsProvider` extension: runtime session timeouts."""
+
+    def get_session_policy(self) -> SessionPolicy:
+        """Return the active session policy."""
+        ...
+
+
+class LoginMethodsProvider(Protocol):
+    """Optional :class:`SettingsProvider` extension: which login methods are allowed."""
+
+    def get_login_methods(self) -> LoginMethods:
+        """Return the allowed login methods."""
+        ...
+
+
+# ---------------------------------------------------------------------------
+# Runtime-policy resolvers
+# ---------------------------------------------------------------------------
+
+
+def tokens_from_settings() -> TokenLifetimes:
+    """Return the lifetimes configured in :class:`~jafaal.settings.AuthSettings`."""
+    import jafaal.settings as jafaal_settings
+
+    tokens = jafaal_settings.get_settings().tokens
+    return TokenLifetimes(tokens.access_token_expire_minutes, tokens.refresh_token_expire_days)
+
+
+def session_policy_from_settings() -> SessionPolicy:
+    """Return the session policy configured in :class:`~jafaal.settings.AuthSettings`."""
+    import jafaal.settings as jafaal_settings
+
+    sessions = jafaal_settings.get_settings().sessions
+    return SessionPolicy(sessions.idle_timeout_enabled, sessions.idle_timeout_hours, sessions.absolute_timeout_hours)
+
+
+def _provider_method(name: str) -> Any | None:
+    """Return the installed provider's ``name`` method, or ``None`` when absent."""
+    if not _settings_provider.is_configured():
+        return None
+    method = getattr(_settings_provider.get(), name, None)
+    return method if callable(method) else None
+
+
+def _call_provider[T](name: str, method: Any, expected: type[T]) -> T:
+    """Call a provider method, failing closed.
+
+    Any exception, and any return value of the wrong type, becomes
+    :class:`~jafaal.exceptions.SettingsUnavailableError`. There is deliberately
+    no fallback to defaults: a broken settings store must never re-enable a
+    disabled login method or lengthen a lifetime.
+    """
+    from jafaal.exceptions import SettingsUnavailableError
+
+    try:
+        value = method()
+    except Exception as err:
+        logger.error("SettingsProvider.%s failed; refusing to fall back to defaults: %s", name, err, exc_info=err)
+        raise SettingsUnavailableError() from err
+    if not isinstance(value, expected):
+        logger.error("SettingsProvider.%s returned %s, expected %s", name, type(value).__name__, expected.__name__)
+        raise SettingsUnavailableError()
+    return value
+
+
+def _clamp(code: str, field_name: str, value: int, ceiling: int | None) -> int:
+    """Return ``value`` capped at ``ceiling`` (``None`` = no cap), warning when it is."""
+    if ceiling is None or value <= ceiling:
+        return value
+    logger.warning(
+        "SettingsProvider value for %s (%d) exceeds the AuthSettings ceiling (%d); using the ceiling.",
+        field_name,
+        value,
+        ceiling,
+        extra={"warning_code": code},
+    )
+    return ceiling
+
+
+def resolve_token_lifetimes() -> TokenLifetimes:
+    """Return the token lifetimes in force for this call.
+
+    Uses the provider's ``get_token_lifetimes()`` when it has one, clamped to
+    :attr:`~jafaal.settings.TokenSettings.max_access_token_minutes` and
+    :attr:`~jafaal.settings.TokenSettings.max_refresh_token_days` (logging a
+    ``token_lifetime_clamped`` warning). Otherwise, or with no provider, the
+    lifetimes come from :class:`~jafaal.settings.AuthSettings`.
+
+    Raises:
+        SettingsUnavailableError: If the provider raises or returns a wrong type.
+    """
+    method = _provider_method("get_token_lifetimes")
+    if method is None:
+        return tokens_from_settings()
+    import jafaal.settings as jafaal_settings
+
+    value = _call_provider("get_token_lifetimes", method, TokenLifetimes)
+    tokens = jafaal_settings.get_settings().tokens
+    minutes = _clamp(
+        "token_lifetime_clamped", "access_token_minutes", value.access_token_minutes, tokens.max_access_token_minutes
+    )
+    days = _clamp(
+        "token_lifetime_clamped", "refresh_token_days", value.refresh_token_days, tokens.max_refresh_token_days
+    )
+    return TokenLifetimes(minutes, days)
+
+
+def resolve_session_policy() -> SessionPolicy:
+    """Return the session policy in force for this call.
+
+    Uses the provider's ``get_session_policy()`` when it has one, with
+    ``absolute_timeout_hours`` clamped to
+    :attr:`~jafaal.settings.SessionSettings.max_absolute_timeout_hours` (logging a
+    ``session_timeout_clamped`` warning). Otherwise, or with no provider, the
+    policy comes from :class:`~jafaal.settings.AuthSettings`.
+
+    Raises:
+        SettingsUnavailableError: If the provider raises or returns a wrong type.
+    """
+    method = _provider_method("get_session_policy")
+    if method is None:
+        return session_policy_from_settings()
+    import jafaal.settings as jafaal_settings
+
+    value = _call_provider("get_session_policy", method, SessionPolicy)
+    sessions = jafaal_settings.get_settings().sessions
+    hours = _clamp(
+        "session_timeout_clamped",
+        "absolute_timeout_hours",
+        value.absolute_timeout_hours,
+        sessions.max_absolute_timeout_hours,
+    )
+    return SessionPolicy(value.idle_timeout_enabled, value.idle_timeout_hours, hours)
+
+
+def resolve_login_methods() -> LoginMethods:
+    """Return the login methods allowed for this call.
+
+    Uses the provider's ``get_login_methods()`` when it has one; otherwise, or
+    with no provider, every method is allowed.
+
+    Raises:
+        SettingsUnavailableError: If the provider raises or returns a wrong type.
+    """
+    method = _provider_method("get_login_methods")
+    if method is None:
+        return LoginMethods()
+    return _call_provider("get_login_methods", method, LoginMethods)
 
 
 # ===========================================================================
@@ -872,6 +1105,8 @@ __all__ = [
     "EmailVerificationRequested",
     "IdpAccountLinked",
     "IdpIdentity",
+    "LoginMethods",
+    "LoginMethodsProvider",
     "NewDeviceLogin",
     "NullAuthEventSink",
     "NullPasswordBreachChecker",
@@ -881,11 +1116,15 @@ __all__ = [
     "PasswordResetRequested",
     "RefreshTokenTheftDetected",
     "ScopeResolver",
+    "SessionPolicy",
+    "SessionPolicyProvider",
     "SettingsProvider",
     "SignupApproved",
     "SignupConfig",
     "SignupPendingAdminApproval",
     "TieredScopeResolver",
+    "TokenLifetimes",
+    "TokenLifetimesProvider",
     "UserProtocol",
     "UserRepository",
     "adispatch_event",
@@ -903,5 +1142,8 @@ __all__ = [
     "is_settings_provider_configured",
     "is_user_repository_configured",
     "reset_ports",
+    "resolve_login_methods",
+    "resolve_session_policy",
+    "resolve_token_lifetimes",
     "wait_for_pending_events",
 ]

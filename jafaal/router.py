@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 import jafaal._internal.internal_dependencies as jafaal_internal_dependencies
+import jafaal._internal.login_methods as login_methods
 import jafaal._internal.oauth_requests as oauth_requests
 import jafaal._internal.password_hasher as jafaal_password_hasher
 import jafaal._internal.security_stores as jafaal_security_stores
@@ -420,6 +421,9 @@ def login_for_access_token(
         JafaalError: If authentication fails, the user is inactive, the account
             is locked, or ``client_id`` is missing or unregistered.
     """
+    # First, before the client or any credential is looked at: a refusal must
+    # disclose nothing about the account.
+    login_methods.require_password_login()
     client = authorization_code_service.resolve_login_client(form_data.client_id, request)
     # RFC 6749 §3.3: the caller may ask for less than it is entitled to. Validated
     # here (catalog membership + the client's ceiling) and carried through to the
@@ -1056,6 +1060,7 @@ async def authorize(
         authorization_code_service.validate_requested_scope(scope, client)
 
         if idp:
+            login_methods.require_identity_provider_login()
             next_url = await idp_utils.begin_idp_authorization(
                 idp_slug=idp,
                 request=request,
@@ -1084,6 +1089,8 @@ async def authorize(
             )
     except jafaal_exceptions.OAuthError as err:
         return _authorize_error_redirect(redirect_uri, err, state)
+    except jafaal_exceptions.LoginMethodDisabledError as err:
+        return _authorize_error_redirect(redirect_uri, jafaal_exceptions.OAuthError("access_denied", err.detail), state)
     except jafaal_exceptions.JafaalError as err:
         # A non-OAuth failure (e.g. an unknown or disabled `idp` slug) still has
         # to reach the client. RFC 6749 §4.1.2.1 has no code for "your idp

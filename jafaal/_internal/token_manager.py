@@ -7,7 +7,7 @@ and mint CSRF tokens) and an accessor used as a FastAPI dependency.
 import logging
 import secrets
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
@@ -188,6 +188,7 @@ class TokenManager:
         private_key_fallbacks: tuple[str, ...] = (),
         leeway_seconds: int = 0,
         client_id: str = "",
+        lifetimes_resolver: Callable[[], jafaal_ports.TokenLifetimes] | None = None,
     ):
         """
         Initializes the TokenManager with the provided secret key and settings.
@@ -201,7 +202,9 @@ class TokenManager:
                 allow-list passed to ``jwt.decode`` cannot drift from the
                 signing algorithm.
             access_token_expire_minutes (int): Access-token lifetime in minutes.
+                Used when no ``lifetimes_resolver`` is given.
             refresh_token_expire_days (int): Refresh-token lifetime in days.
+                Used when no ``lifetimes_resolver`` is given.
             issuer (str): JWT ``iss`` claim value.
             audience (str): JWT ``aud`` claim value.
             secret_key_fallbacks (tuple[str, ...]): Additional keys accepted
@@ -219,6 +222,11 @@ class TokenManager:
                 validating clocks differ slightly.
             client_id (str): Value of the ``client_id`` claim RFC 9068 requires
                 on an access token. Defaults to ``audience`` when empty.
+            lifetimes_resolver: Called at each token issue for the lifetimes to
+                use, so a runtime policy change takes effect without rebuilding
+                the manager. :func:`get_token_manager` passes
+                :func:`jafaal.ports.resolve_token_lifetimes`. ``None`` (direct or
+                isolated use) uses the two constructor lifetimes above.
         """
         if algorithm not in jafaal_settings.ALLOWED_ALGORITHMS:
             raise ValueError(
@@ -228,6 +236,7 @@ class TokenManager:
         self.algorithm = algorithm
         self.access_token_expire_minutes = access_token_expire_minutes
         self.refresh_token_expire_days = refresh_token_expire_days
+        self._lifetimes_resolver = lifetimes_resolver
         self.issuer = issuer
         self.audience = audience
         self.leeway_seconds = leeway_seconds
@@ -562,10 +571,13 @@ class TokenManager:
 
         # Set now
         issued_at = datetime.now(UTC)
+        if self._lifetimes_resolver is not None:
+            lifetimes = self._lifetimes_resolver()
+            access_minutes, refresh_days = lifetimes.access_token_minutes, lifetimes.refresh_token_days
+        else:
+            access_minutes, refresh_days = self.access_token_expire_minutes, self.refresh_token_expire_days
         lifetime = (
-            timedelta(days=self.refresh_token_expire_days)
-            if token_type == TokenType.REFRESH
-            else timedelta(minutes=self.access_token_expire_minutes)
+            timedelta(days=refresh_days) if token_type == TokenType.REFRESH else timedelta(minutes=access_minutes)
         )
         exp = issued_at + lifetime
         now = int(issued_at.timestamp())
@@ -664,6 +676,7 @@ def get_token_manager() -> TokenManager:
             private_key_fallbacks=settings.secrets.private_key_fallbacks,
             leeway_seconds=settings.tokens.leeway_seconds,
             client_id=settings.resolved_client_id,
+            lifetimes_resolver=jafaal_ports.resolve_token_lifetimes,
         )
         _token_manager_generation = generation
     return _token_manager
