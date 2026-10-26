@@ -59,6 +59,39 @@ Do not hard-code endpoint URLs; read them from the metadata document.
 deliberately not the resource-owner password-credentials grant (removed by
 OAuth 2.1) and is not advertised in the discovery document.
 
+### Linking identity providers
+
+A signed-in user manages their own provider links with the `profile` scope
+(listing needs `identity_providers:read`, which a regular token carries). A
+browser navigation cannot send a bearer header, so linking is a handoff:
+
+1. `POST /profile/idp/{idp_id}/link/token` with the bearer and the step-up body
+   (`current_password`, and `mfa_code` when MFA is on). It returns a `token` that
+   lives for about a minute and works once.
+2. Navigate the browser (top-level) to
+   `GET /profile/idp/{idp_id}/link?token=...&client_id=...&redirect_uri=...&state=...`.
+   `client_id` and `redirect_uri` must be registered, exactly as for
+   `/auth/authorize`. JAFAAL claims the token and redirects to the provider.
+3. The provider's callback (`/public/idp/callback/{slug}`) completes the link and
+   returns the browser to `redirect_uri` with `idp_link=success`.
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| `GET` | `/profile/idp` | none | The caller's links: `idp_id`, `idp_name`, `idp_slug`, `linked_at`, `last_login` (never a subject or token) |
+| `POST` | `/profile/idp/{idp_id}/link/token` | step-up | `{"token", "expires_at"}` |
+| `POST` | `/profile/idp/{idp_id}/unlink` | step-up | `204`. Refuses with `400 last_sign_in_method` when the account has no password, no passkey and no other link |
+
+On unlink, JAFAAL revokes the provider's tokens held on the link (best-effort)
+and emits `on_idp_account_unlinked`; a completed link emits
+`on_idp_account_linked`. An administrator uses
+`GET /users/{user_id}/identity-providers` and
+`DELETE /users/{user_id}/identity-providers/{idp_id}` (scope
+`identity_providers:write`; the caller must be that user or a superuser, and no
+step-up is asked of them). `?force=true` removes the link even if it is the
+account's last sign-in method, which can leave the account unable to sign in
+until a password is set: use it when the link itself is the problem, not as a
+shortcut.
+
 ### Managing MFA
 
 The authenticated self-service endpoints use the `profile` scope:

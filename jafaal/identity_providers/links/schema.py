@@ -142,3 +142,24 @@ class UsersIdentityProviderTokenUpdate(BaseModel):
         extra="forbid",
         validate_assignment=True,
     )
+
+
+class IdentityProviderLinkRead(BaseModel):
+    """One of an account's identity-provider links, as the link routes return it.
+
+    Deliberately narrow: which provider and when, never the provider's subject
+    or any token held on the link.
+
+    Attributes:
+        idp_id: Identity provider ID.
+        idp_name: Identity provider name.
+        idp_slug: Identity provider slug.
+        linked_at: When the provider was linked.
+        last_login: Last login using this provider.
+    """
+
+    idp_id: StrictInt = Field(..., description="Identity provider ID")
+    idp_name: StrictStr = Field(..., description="Identity provider name")
+    idp_slug: StrictStr = Field(..., description="Identity provider slug")
+    linked_at: datetime = Field(..., description="When linked")
+    last_login: datetime | None = Field(default=None, description="Last login using this provider")

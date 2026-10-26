@@ -564,12 +564,13 @@ class RefreshTokenTheftDetected:
 
 @dataclass(frozen=True)
 class IdpAccountLinked:
-    """An identity provider was linked to an existing account by matching email.
+    """An identity provider was linked to an existing account.
 
-    Emitted when an SSO login adopts a pre-existing local account rather than
-    creating one — a new way to sign in that the owner did not initiate from a
-    session they already held. Tell them out of band, so a link they did not
-    expect is visible rather than silent.
+    Emitted when an SSO login adopts a pre-existing local account by matching
+    email rather than creating one — a new way to sign in that the owner did not
+    initiate from a session they already held — and when the owner links a
+    provider themselves. Tell them out of band, so a link they did not expect is
+    visible rather than silent.
     """
 
     user_id: Any
@@ -577,6 +578,22 @@ class IdpAccountLinked:
     idp_name: str
     idp_slug: str
     email: str
+
+
+@dataclass(frozen=True)
+class IdpAccountUnlinked:
+    """An identity provider was unlinked from an account.
+
+    Emitted when the owner removes a link and when an administrator does. The
+    upstream provider's tokens held on the link are revoked best-effort first.
+    ``by_admin`` tells the owner whether they did it themselves.
+    """
+
+    user_id: Any
+    username: str
+    idp_name: str
+    idp_slug: str
+    by_admin: bool
 
 
 @dataclass(frozen=True)
@@ -648,6 +665,9 @@ class AuthEventSink(Protocol):
 
     async def on_idp_account_linked(self, event: IdpAccountLinked) -> None: ...
 
+    # Optional, like the other security events: a sink that lacks it is skipped.
+    async def on_idp_account_unlinked(self, event: IdpAccountUnlinked) -> None: ...
+
     async def on_authenticator_changed(self, event: AuthenticatorChanged) -> None: ...
 
     async def on_password_changed(self, event: PasswordChanged) -> None: ...
@@ -678,6 +698,9 @@ class NullAuthEventSink:
         return None
 
     async def on_idp_account_linked(self, event: IdpAccountLinked) -> None:
+        return None
+
+    async def on_idp_account_unlinked(self, event: IdpAccountUnlinked) -> None:
         return None
 
     async def on_authenticator_changed(self, event: AuthenticatorChanged) -> None:
@@ -889,6 +912,7 @@ CRITICAL_EVENT_METHODS: frozenset[str] = frozenset(
         "on_account_locked",
         "on_refresh_token_theft_detected",
         "on_idp_account_linked",
+        "on_idp_account_unlinked",
         "on_authenticator_changed",
         "on_password_changed",
     }
@@ -1104,6 +1128,7 @@ __all__ = [
     "AuthenticatorChanged",
     "EmailVerificationRequested",
     "IdpAccountLinked",
+    "IdpAccountUnlinked",
     "IdpIdentity",
     "LoginMethods",
     "LoginMethodsProvider",

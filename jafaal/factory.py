@@ -66,6 +66,7 @@ class RouterPrefixes:
     webauthn: str = "/auth/webauthn"
     webauthn_public: str = "/public/webauthn"
     profile: str = "/profile"
+    users: str = "/users"
 
 
 def _warn_on_insecure_defaults() -> None:
@@ -395,6 +396,8 @@ def create_auth_router(
     # when it is reconfigured), so this import order is no longer load-bearing —
     # it is kept only for clarity.
     from jafaal.api_keys.router import router as api_keys_router
+    from jafaal.identity_providers.links.router import admin_router as idp_links_admin_router
+    from jafaal.identity_providers.links.router import router as idp_links_router
     from jafaal.identity_providers.public_router import router as idp_public_router
     from jafaal.identity_providers.router import router as idp_router
     from jafaal.jwks import router as jwks_router
@@ -420,6 +423,8 @@ def create_auth_router(
     aggregate.include_router(password_reset_router, prefix=prefixes.password_reset, tags=["password_reset"])
     aggregate.include_router(sign_up_router, prefix=prefixes.sign_up, tags=["sign_up"])
     aggregate.include_router(mfa_router, prefix=prefixes.profile, tags=["mfa"])
+    aggregate.include_router(idp_links_router, prefix=prefixes.profile, tags=["identity_provider_links"])
+    aggregate.include_router(idp_links_admin_router, prefix=prefixes.users, tags=["identity_provider_links"])
     aggregate.include_router(webauthn_router, prefix=prefixes.webauthn, tags=["webauthn"])
     aggregate.include_router(webauthn_public_router, prefix=prefixes.webauthn_public, tags=["webauthn"])
     # Keep the aggregate metadata location for compatibility and mount the RFC

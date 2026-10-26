@@ -23,6 +23,7 @@ if TYPE_CHECKING:
         AuthEventSink,
         EmailVerificationRequested,
         IdpAccountLinked,
+        IdpAccountUnlinked,
         NewDeviceLogin,
         PasswordResetRequested,
         RefreshTokenTheftDetected,
@@ -122,6 +123,15 @@ class LoggingAuthEventSink:
             event.idp_slug,
         )
 
+    async def on_idp_account_unlinked(self, event: IdpAccountUnlinked) -> None:
+        self._logger.log(
+            self._level,
+            "identity provider unlinked: user=%s idp=%s by_admin=%s",
+            event.user_id,
+            event.idp_slug,
+            event.by_admin,
+        )
+
     async def on_authenticator_changed(self, event: AuthenticatorChanged) -> None:
         self._logger.log(
             self._level,
@@ -151,8 +161,12 @@ class CompositeAuthEventSink:
 
     async def _dispatch(self, method_name: str, event: object) -> None:
         for sink in self._sinks:
+            # A sink written before an event existed simply lacks the method.
+            handler = getattr(sink, method_name, None)
+            if handler is None:
+                continue
             try:
-                await getattr(sink, method_name)(event)
+                await handler(event)
             except Exception:
                 _LOGGER.exception("AuthEventSink %r failed handling %s", sink, method_name)
 
@@ -179,6 +193,9 @@ class CompositeAuthEventSink:
 
     async def on_idp_account_linked(self, event: IdpAccountLinked) -> None:
         await self._dispatch("on_idp_account_linked", event)
+
+    async def on_idp_account_unlinked(self, event: IdpAccountUnlinked) -> None:
+        await self._dispatch("on_idp_account_unlinked", event)
 
     async def on_authenticator_changed(self, event: AuthenticatorChanged) -> None:
         await self._dispatch("on_authenticator_changed", event)

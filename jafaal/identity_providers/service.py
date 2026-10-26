@@ -886,6 +886,16 @@ class IdentityProviderService:
         self._store_idp_tokens(link_user_id, idp.id, identity.token_response, db)
 
         logger.info(f"User {user.username} (id={link_user_id}) linked IdP {idp.name} (subject={identity.subject})")
+        jafaal_ports.dispatch_event(
+            "on_idp_account_linked",
+            jafaal_ports.IdpAccountLinked(
+                user_id=link_user_id,
+                username=user.username,
+                idp_name=idp.name,
+                idp_slug=idp.slug,
+                email=user.email,
+            ),
+        )
 
         return {
             "user": user,

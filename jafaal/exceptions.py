@@ -483,6 +483,17 @@ class LoginMethodDisabledError(AuthorizationError):
     default_detail = "This sign-in method is disabled."
 
 
+class LastSignInMethodError(InvalidRequestError):
+    """Unlinking would remove the account's last way to sign in (400).
+
+    The account has no local password, no passkey, and the identity provider
+    being unlinked is its only link.
+    """
+
+    code = "last_sign_in_method"
+    default_detail = "Cannot remove the last sign-in method of this account."
+
+
 class IdentityProviderError(UpstreamError):
     """An external identity provider returned an error (502)."""
 
@@ -514,6 +525,7 @@ __all__ = [
     "InvalidScopeError",
     "InvalidTokenError",
     "JafaalError",
+    "LastSignInMethodError",
     "LoginMethodDisabledError",
     "MissingScopeError",
     "NotFoundError",

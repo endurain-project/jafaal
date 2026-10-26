@@ -102,8 +102,12 @@ the plaintext `token` for you to build and send the link. Security events includ
 [`NewDeviceLogin`][jafaal.NewDeviceLogin],
 [`AccountLocked`][jafaal.AccountLocked],
 [`RefreshTokenTheftDetected`][jafaal.RefreshTokenTheftDetected],
-[`IdpAccountLinked`][jafaal.IdpAccountLinked], and
-[`AuthenticatorChanged`][jafaal.AuthenticatorChanged].
+[`IdpAccountLinked`][jafaal.IdpAccountLinked],
+[`IdpAccountUnlinked`][jafaal.IdpAccountUnlinked], and
+[`AuthenticatorChanged`][jafaal.AuthenticatorChanged]. `IdpAccountLinked` fires
+when a login adopts an existing account by matching email and when the owner
+links a provider; `IdpAccountUnlinked` (with `by_admin`) fires when a link is
+removed. A sink written before an event existed need not implement it.
 
 `PasswordChanged.change_kind` is `self_service`, `forced_renewal`,
 `password_reset`, or `administrator_reset`. It also reports the number of
