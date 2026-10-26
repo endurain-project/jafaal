@@ -41,7 +41,7 @@ class MFABackupCode(Base):
           efficient lookups of available backup codes per user.
     """
 
-    __tablename__ = "mfa_backup_codes"
+    __tablename__ = "jafaal_mfa_backup_codes"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     user_id: Mapped[UserId] = mapped_column(
@@ -84,4 +84,4 @@ class MFABackupCode(Base):
     users: Mapped[Any] = relationship(host_user_model, back_populates="mfa_backup_codes")
 
     # Composite index for fast unused code lookups
-    __table_args__ = (Index("idx_user_unused_codes", "user_id", "used"),)
+    __table_args__ = (Index("idx_jafaal_user_unused_codes", "user_id", "used"),)

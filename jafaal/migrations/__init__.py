@@ -22,15 +22,22 @@ carry foreign keys to ``users.id``), so run the host's own migrations first.
 Hosts that prefer a single, unified Alembic history can instead point their own
 ``env.py`` at their ``Base.metadata`` (the base passed to :func:`jafaal.map_models`)
 and add this package's ``versions`` directory to their ``version_locations`` — but
-the self-contained runner here needs no host wiring.
+the self-contained runner here needs no host wiring. Only :func:`upgrade` creates
+a fresh database with the ``jafaal_`` names directly; from a host's own history
+``0001_initial`` first creates the unprefixed names and
+``0008_prefix_table_names`` renames them.
 """
 
 from __future__ import annotations
 
+from collections.abc import Generator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 from jafaal._core import optional_deps
+from jafaal.migrations import _names
 
 try:
     import alembic as _alembic
@@ -66,6 +73,29 @@ VERSION_TABLE = "jafaal_alembic_version"
 MAX_REVISION_LENGTH = 32
 
 _MIGRATIONS_DIR = Path(__file__).resolve().parent
+
+#: The first revision after which every table carries the ``jafaal_`` prefix.
+_PREFIXED_FROM = "0008_prefix_table_names"
+
+#: An unversioned pre-0.4 schema holds every one of these. Several of the names
+#: are generic enough to be the host's own, so two of them together mark one - a
+#: lone ``identity_providers`` is taken to be the host's and left alone.
+_LEGACY_BASELINE_TABLES = frozenset(
+    {
+        "users_local_credentials",
+        "users_sessions",
+        "rotated_refresh_tokens",
+        "users_api_keys",
+        "users_mfa",
+        "mfa_backup_codes",
+        "identity_providers",
+        "users_identity_providers",
+        "idp_link_tokens",
+        "oauth_states",
+        "password_reset_tokens",
+        "sign_up_tokens",
+    }
+)
 
 
 class SchemaCompatibilityError(RuntimeError):
@@ -120,13 +150,81 @@ def _run(engine: Engine, command_name: str, *args: Any) -> None:
         _run_on_connection(connection, command_name, *args)
 
 
+def _fresh_install_prefix(connection: Any, revision: str) -> str:
+    """Return the table prefix a run to ``revision`` should create tables with.
+
+    ``jafaal_`` for a fresh database heading to :data:`_PREFIXED_FROM` or later, so
+    JAFAAL never creates an unprefixed table that a host's own could already
+    occupy; empty everywhere else (see :mod:`jafaal.migrations._names`). Fresh
+    means no recorded revision and no JAFAAL table. A single unprefixed table of
+    the same name proves nothing, since it may be the host's; two of the baseline
+    tables together are an unversioned old schema, which is refused.
+
+    Raises:
+        SchemaCompatibilityError: If the database holds unversioned JAFAAL
+            tables, which :func:`adopt_existing_schema` must validate first, or
+            lacks the host's ``users`` table the new tables reference.
+    """
+    from alembic.runtime.migration import MigrationContext
+    from alembic.script import ScriptDirectory
+    from sqlalchemy import inspect
+
+    from jafaal.orm import jafaal_table_names
+
+    context = MigrationContext.configure(connection, opts={"version_table": VERSION_TABLE})
+    if context.get_current_revision() is not None:
+        return ""
+    present = set(inspect(connection).get_table_names())
+    if present & jafaal_table_names():
+        # Running the revisions over existing tables would either fail half-way
+        # or record a revision the tables were never checked against.
+        raise SchemaCompatibilityError(
+            "The database holds unversioned JAFAAL tables; call adopt_existing_schema(engine) before upgrade(engine)"
+        )
+    if len(_LEGACY_BASELINE_TABLES & present) >= 2:
+        # An unversioned pre-0.4 schema: creating the prefixed tables beside it
+        # would leave its data behind.
+        raise SchemaCompatibilityError(
+            "The database holds unversioned, unprefixed JAFAAL tables from 0.3 or earlier; "
+            "call adopt_existing_schema(engine) before upgrade(engine)"
+        )
+    if "users" not in present:
+        raise SchemaCompatibilityError(
+            "JAFAAL's tables reference the host-owned 'users' table, which does not exist; "
+            "run the host's own migrations before jafaal.migrations.upgrade(engine)"
+        )
+    steps = {script.revision for script in ScriptDirectory.from_config(_config()).iterate_revisions(revision, "base")}
+    return _names.PREFIX if _PREFIXED_FROM in steps else ""
+
+
 def upgrade(engine: Engine, revision: str = "head") -> None:
-    """Create or upgrade JAFAAL's tables to ``revision`` (default ``head``)."""
-    _run(engine, "upgrade", revision)
+    """Create or upgrade JAFAAL's tables to ``revision`` (default ``head``).
+
+    On a fresh database the tables are created with their final ``jafaal_`` names
+    directly. A 0.3 database (unprefixed names) is renamed in place by
+    ``0008_prefix_table_names``, so **stop every process running 0.3 or earlier
+    before running this**.
+
+    Raises:
+        SchemaCompatibilityError: If the database has JAFAAL tables but no
+            recorded revision (call :func:`adopt_existing_schema` first), or no
+            host ``users`` table to reference.
+    """
+    _require_alembic()
+    # On its own connection: inspecting begins a transaction, and Alembic only
+    # commits one it began itself.
+    with engine.connect() as connection:
+        prefix = _fresh_install_prefix(connection, revision)
+    with _names.use_prefix(prefix):
+        _run(engine, "upgrade", revision)
 
 
 def downgrade(engine: Engine, revision: str) -> None:
-    """Downgrade JAFAAL's tables to ``revision`` (e.g. ``"base"`` drops them all)."""
+    """Downgrade JAFAAL's tables to ``revision`` (``"base"`` drops them all).
+
+    Downgrading past ``0008_prefix_table_names`` restores the unprefixed names,
+    and fails if a table of the host's has since taken one.
+    """
     _run(engine, "downgrade", revision)
 
 
@@ -190,17 +288,61 @@ def _format_difference(difference: Any) -> str:
             return (
                 f"{table_name}.{difference[3]}: expected nullable={difference[6]!r}, found nullable={difference[5]!r}"
             )
+        if operation == "modify_comment" and len(difference) > 6:
+            return f"{table_name}.{difference[3]}: expected comment {difference[6]!r}, found {difference[5]!r}"
         if operation == "modify_default" and len(difference) > 6:
             return f"{table_name}.{difference[3]}: expected server default {difference[6]}, found {difference[5]}"
         return f"{table_name}: incompatible schema operation {operation!r}"
     return f"incompatible schema operation {operation!r}: {difference!r}"
 
 
-def _adoption_include_object(obj: Any, name: str | None, type_: str, reflected: bool, compare_to: Any) -> bool:
-    if type_ == "index" and reflected and compare_to is None and not getattr(obj, "unique", False):
+def _adoption_include_object(tables: frozenset[str]) -> Any:
+    """Build the ``include_object`` hook for comparing one candidate schema.
+
+    Only the candidate's own tables are compared: under the unprefixed naming a
+    host's unrelated ``identity_providers`` can sit in the same database, and the
+    host's ``users`` table is never JAFAAL's to judge.
+    """
+
+    def include_object(obj: Any, name: str | None, type_: str, reflected: bool, compare_to: Any) -> bool:
+        if type_ == "table":
+            return name in tables
         # Host-created lookup indexes do not change JAFAAL's write contract.
+        return not (type_ == "index" and reflected and compare_to is None and not getattr(obj, "unique", False))
+
+    return include_object
+
+
+#: Spellings of "the current time" as a server default. MariaDB reflects
+#: ``func.now()`` as ``current_timestamp()``, which Alembic does not equate with
+#: the ``now()`` the models render.
+_CURRENT_TIME_DEFAULTS = frozenset({"now", "current_timestamp", "localtimestamp"})
+
+
+def _compare_server_default(
+    context: Any,
+    inspected_column: Any,
+    metadata_column: Any,
+    inspected_default: str | None,
+    metadata_default: Any,
+    rendered_metadata_default: str | None,
+) -> bool | None:
+    """Treat every spelling of "the current time" as one default; defer the rest to Alembic."""
+
+    def normalised(value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip().strip("'\"").lower()
+        while value.startswith("(") and value.endswith(")"):
+            value = value[1:-1].strip()
+        return value.removesuffix("()")
+
+    if (
+        normalised(inspected_default) in _CURRENT_TIME_DEFAULTS
+        and normalised(rendered_metadata_default) in _CURRENT_TIME_DEFAULTS
+    ):
         return False
-    return jafaal_include_object(obj, name, type_, reflected, compare_to)
+    return None
 
 
 def _primary_key_differences(inspector: Any, metadata: Any, table_names: frozenset[str]) -> list[str]:
@@ -242,23 +384,265 @@ def _unexpected_uniqueness_differences(inspector: Any, metadata: Any, table_name
     return differences
 
 
+class _MetadataOps:
+    """Stand-in for ``alembic.op`` that applies a downgrade to a ``MetaData``.
+
+    Lets an older revision's schema be derived from the migration that removes
+    it, so nothing is maintained twice. Only the operations JAFAAL's downgrades
+    use are supported; anything else raises, so a new kind of operation cannot
+    silently yield a wrong schema.
+
+    Each operation does to the metadata what it does to a database: a renamed
+    table keeps its index names (the downgrade renames them itself), and the
+    foreign keys of other tables follow it.
+    """
+
+    def __init__(self, metadata: Any) -> None:
+        self._metadata = metadata
+
+    def _table(self, table_name: str) -> Any:
+        try:
+            return self._metadata.tables[table_name]
+        except KeyError:
+            raise RuntimeError(f"downgrade refers to unknown table {table_name!r}") from None
+
+    def drop_index(self, index_name: str, table_name: str | None = None, **kwargs: Any) -> None:
+        tables = [self._table(table_name)] if table_name else list(self._metadata.tables.values())
+        for table in tables:
+            for index in list(table.indexes):
+                if index.name == index_name:
+                    table.indexes.discard(index)
+                    if index._column_flag:
+                        # An ``index=True`` column would bring the index back on
+                        # the next copy of the table.
+                        for column in index.columns:
+                            column.index = None
+                            if index.unique:
+                                column.unique = None
+                    return
+        raise RuntimeError(f"downgrade drops unknown index {index_name!r}")
+
+    def create_index(self, index_name: str, table_name: str, columns: Sequence[str], **kwargs: Any) -> None:
+        from sqlalchemy import Index
+
+        table = self._table(table_name)
+        Index(index_name, *(table.c[column] for column in columns), unique=bool(kwargs.get("unique")))
+
+    def rename_table(self, old_table_name: str, new_table_name: str, **kwargs: Any) -> None:
+        from sqlalchemy import ForeignKeyConstraint
+
+        table = self._table(old_table_name)
+        old_names = {tuple(column.name for column in index.columns): index.name for index in table.indexes}
+        self._metadata.remove(table)
+        renamed = table.to_metadata(self._metadata, name=new_table_name)
+        for index in renamed.indexes:
+            # A database keeps an index's name through a table rename; the copy
+            # would otherwise rename an ``index=True`` index by the convention.
+            index.name = old_names.get(tuple(column.name for column in index.columns), index.name)
+
+        for other in list(self._metadata.tables.values()):
+            for constraint in list(other.foreign_key_constraints):
+                targets = [element.target_fullname.rsplit(".", 1) for element in constraint.elements]
+                if all(target_table != old_table_name for target_table, _ in targets):
+                    continue
+                columns = [column.name for column in constraint.columns]
+                other.constraints.discard(constraint)
+                for element in constraint.elements:
+                    element.parent.foreign_keys.discard(element)
+                    other.foreign_keys.discard(element)
+                other.append_constraint(
+                    ForeignKeyConstraint(
+                        columns,
+                        [
+                            f"{new_table_name if target_table == old_table_name else target_table}.{target_column}"
+                            for target_table, target_column in targets
+                        ],
+                        name=constraint.name,
+                        ondelete=constraint.ondelete,
+                        onupdate=constraint.onupdate,
+                    )
+                )
+
+    def drop_constraint(self, constraint_name: str, table_name: str, type_: str | None = None, **kwargs: Any) -> None:
+        table = self._table(table_name)
+        for constraint in list(table.constraints):
+            if constraint.name == constraint_name:
+                table.constraints.discard(constraint)
+                if getattr(constraint, "_column_flag", False):
+                    for column in constraint.columns:
+                        column.unique = None
+                return
+        raise RuntimeError(f"downgrade drops unknown constraint {constraint_name!r}")
+
+    def create_unique_constraint(
+        self, constraint_name: str, table_name: str, columns: Sequence[str], **kwargs: Any
+    ) -> None:
+        from sqlalchemy import UniqueConstraint
+
+        table = self._table(table_name)
+        table.append_constraint(UniqueConstraint(*columns, name=constraint_name))
+
+    @contextmanager
+    def batch_alter_table(self, table_name: str, **kwargs: Any) -> Generator[_MetadataBatchOps]:
+        yield _MetadataBatchOps(self, table_name)
+
+    def get_bind(self) -> Any:
+        """Report a dialect no migration branches on, so the portable path is taken."""
+        return SimpleNamespace(dialect=SimpleNamespace(name="metadata"))
+
+    def drop_table(self, table_name: str, **kwargs: Any) -> None:
+        self._metadata.remove(self._table(table_name))
+
+    def add_column(self, table_name: str, column: Any, **kwargs: Any) -> None:
+        self._table(table_name).append_column(column)
+
+    def drop_column(self, table_name: str, column_name: str, **kwargs: Any) -> None:
+        table = self._table(table_name)
+        table._columns.remove(table.c[column_name])
+
+    def __getattr__(self, name: str) -> Any:
+        raise NotImplementedError(
+            f"adoption cannot derive an older schema through op.{name}(); teach jafaal.migrations._MetadataOps"
+        )
+
+
+class _MetadataBatchOps:
+    """The table-scoped operations of ``op.batch_alter_table`` for :class:`_MetadataOps`."""
+
+    def __init__(self, ops: _MetadataOps, table_name: str) -> None:
+        self._ops = ops
+        self._table_name = table_name
+
+    def drop_constraint(self, constraint_name: str, type_: str | None = None, **kwargs: Any) -> None:
+        self._ops.drop_constraint(constraint_name, self._table_name, type_=type_)
+
+    def create_unique_constraint(self, constraint_name: str, columns: Sequence[str], **kwargs: Any) -> None:
+        self._ops.create_unique_constraint(constraint_name, self._table_name, columns)
+
+
+def _copy_jafaal_metadata(metadata: Any) -> Any:
+    """Copy JAFAAL's tables (prefixed or not) and the host's ``users`` table they reference."""
+    from sqlalchemy import MetaData
+
+    from jafaal.orm import get_active_base, jafaal_table_names, legacy_table_names
+
+    copied = MetaData(naming_convention=get_active_base().metadata.naming_convention)
+    known = jafaal_table_names() | legacy_table_names() | {"users"}
+    for table_name in sorted(known & set(metadata.tables)):
+        metadata.tables[table_name].to_metadata(copied)
+    return copied
+
+
+def _revision_schemas() -> list[tuple[str, Any]]:
+    """Return ``(revision, metadata)`` for every revision, newest first.
+
+    The head entry is a copy of the active metadata. Each older entry is derived
+    by running the newer revision's ``downgrade`` against a copy of the one
+    before it. The base state (no tables) is not a candidate.
+    """
+    from alembic.script import ScriptDirectory
+
+    from jafaal.orm import get_active_base
+
+    current = _copy_jafaal_metadata(get_active_base().metadata)
+    schemas: list[tuple[str, Any]] = []
+    for script in ScriptDirectory.from_config(_config()).walk_revisions():
+        schemas.append((script.revision, current))
+        if script.down_revision is None:
+            break
+        current = _copy_jafaal_metadata(current)
+        module: Any = script.module
+        original_op = module.op
+        module.op = _MetadataOps(current)
+        try:
+            with _names.use_prefix(""):
+                module.downgrade()
+        finally:
+            module.op = original_op
+    return schemas
+
+
+def _jafaal_tables_of(metadata: Any) -> frozenset[str]:
+    from jafaal.orm import jafaal_table_names, legacy_table_names
+
+    return frozenset(metadata.tables) & (jafaal_table_names() | legacy_table_names())
+
+
+def _schema_differences(connection: Any, inspector: Any, metadata: Any) -> tuple[list[str], int]:
+    """Describe how the unversioned JAFAAL tables differ from ``metadata``.
+
+    Returns the readable differences and a count of individual discrepancies,
+    used to rank which revision came closest.
+    """
+    from alembic.autogenerate import compare_metadata
+    from alembic.runtime.migration import MigrationContext
+
+    from jafaal.orm import jafaal_table_names, legacy_table_names
+
+    expected_tables = _jafaal_tables_of(metadata)
+    # The names this candidate's scheme can use: a host's unrelated
+    # ``identity_providers`` is not "unexpected" when the candidate is prefixed.
+    universe = legacy_table_names() if expected_tables & legacy_table_names() else jafaal_table_names()
+    present_tables = frozenset(inspector.get_table_names()) & universe
+    missing = sorted(expected_tables - present_tables)
+    unexpected = sorted(present_tables - expected_tables)
+    differences = []
+    if missing:
+        differences.append("missing tables: " + ", ".join(missing))
+    if unexpected:
+        differences.append("unexpected tables: " + ", ".join(unexpected))
+    count = len(missing) + len(unexpected)
+
+    # Compare column-level detail only where both sides have the table.
+    common = expected_tables & present_tables
+    comparison_context = MigrationContext.configure(
+        connection,
+        opts={
+            "compare_type": True,
+            "compare_server_default": _compare_server_default,
+            "include_object": _adoption_include_object(common),
+        },
+    )
+    detailed = [
+        _format_difference(difference)
+        for difference in compare_metadata(comparison_context, metadata)
+        if not (isinstance(difference, tuple) and difference[0] in {"add_table", "remove_table"})
+    ]
+    detailed.extend(_primary_key_differences(inspector, metadata, common))
+    detailed.extend(_unexpected_uniqueness_differences(inspector, metadata, common))
+    return differences + detailed, count + len(detailed)
+
+
 def adopt_existing_schema(engine: Engine) -> bool:
     """Validate and adopt complete, compatible, unversioned JAFAAL tables.
 
-    Returns ``True`` only when this call records the installed head. An empty
-    database or one that already has a JAFAAL revision is left unchanged and
-    returns ``False``.
+    The tables are matched exactly against the head schema, then against each
+    earlier revision's schema, newest first - including the unprefixed schemas of
+    0.3 and earlier. The first exact match is recorded as the database's revision,
+    so a following :func:`upgrade` applies whatever revisions come after it. If
+    two revisions describe the same schema, the newest is recorded. An older
+    revision's schema is derived from the migrations' own ``downgrade``
+    functions, never maintained separately.
+
+    Columns, types, nullability, server defaults, primary keys, unique
+    constraints, foreign keys and indexes are all compared. Additional
+    non-unique indexes a host created are accepted; anything else is not.
+
+    Returns ``True`` only when this call records a revision. An empty database
+    or one that already has a JAFAAL revision is left unchanged and returns
+    ``False``.
 
     Raises:
-        SchemaCompatibilityError: If the host ``users`` table is absent, only
-            some JAFAAL tables exist, or their physical schema is incompatible.
+        SchemaCompatibilityError: If the host ``users`` table is absent, or no
+            revision matches exactly; the message names the closest revision and
+            lists its differences.
     """
     _require_alembic()
-    from alembic.autogenerate import compare_metadata
+    from alembic import command
     from alembic.runtime.migration import MigrationContext
     from sqlalchemy import inspect
 
-    from jafaal.orm import get_active_base, jafaal_table_names
+    from jafaal.orm import jafaal_table_names, legacy_table_names
 
     with engine.connect() as connection:
         context = MigrationContext.configure(connection, opts={"version_table": VERSION_TABLE})
@@ -266,41 +650,35 @@ def adopt_existing_schema(engine: Engine) -> bool:
             return False
 
         inspector = inspect(connection)
-        physical_tables = set(inspector.get_table_names())
-        expected_tables = jafaal_table_names()
-        present_tables = physical_tables & expected_tables
-        if not present_tables:
+        present = set(inspector.get_table_names())
+        if present & jafaal_table_names():
+            candidate_names = jafaal_table_names()
+        elif len(_LEGACY_BASELINE_TABLES & present) >= 2:
+            # Unprefixed tables from before 0.4. Two baseline tables are needed:
+            # one alone is the host's own.
+            candidate_names = legacy_table_names()
+        else:
             return False
-        if present_tables != expected_tables:
-            missing = sorted(expected_tables - present_tables)
-            raise SchemaCompatibilityError(
-                "Cannot adopt a partial JAFAAL schema; missing tables: " + ", ".join(missing)
-            )
-        if "users" not in physical_tables:
+        if "users" not in present:
             raise SchemaCompatibilityError("Cannot adopt JAFAAL schema without the host-owned 'users' table")
 
-        metadata = get_active_base().metadata
-        comparison_context = MigrationContext.configure(
-            connection,
-            opts={
-                "compare_type": True,
-                "compare_server_default": True,
-                "include_object": _adoption_include_object,
-            },
-        )
-        raw_differences = compare_metadata(comparison_context, metadata)
-        differences = [_format_difference(difference) for difference in raw_differences]
-        differences.extend(_primary_key_differences(inspector, metadata, expected_tables))
-        differences.extend(_unexpected_uniqueness_differences(inspector, metadata, expected_tables))
-        if differences:
-            raise SchemaCompatibilityError("Cannot adopt an incompatible JAFAAL schema: " + "; ".join(differences))
+        closest: tuple[str, list[str], int] | None = None
+        for revision, metadata in _revision_schemas():
+            if not _jafaal_tables_of(metadata) <= candidate_names:
+                continue
+            differences, weight = _schema_differences(connection, inspector, metadata)
+            if not differences:
+                command.stamp(_config(connection), revision)
+                connection.commit()
+                return True
+            if closest is None or weight < closest[2]:
+                closest = (revision, differences, weight)
 
-        head = head_revision()
-        if head is None:
+        if closest is None:
             raise RuntimeError("JAFAAL has no packaged migration head")
-        _run_on_connection(connection, "stamp", head)
-        connection.commit()
-        return True
+        raise SchemaCompatibilityError(
+            f"Cannot adopt an incompatible JAFAAL schema (closest revision {closest[0]}): " + "; ".join(closest[1])
+        )
 
 
 def verify_schema_current(engine: Engine) -> None:
@@ -318,6 +696,6 @@ def verify_schema_current(engine: Engine) -> None:
         raise RuntimeError(
             "JAFAAL database schema is out of date "
             f"(database revision={current!r}, expected head={head!r}). "
-            "Run jafaal.migrations.adopt_existing_schema(engine) for complete legacy unversioned tables, "
+            "Run jafaal.migrations.adopt_existing_schema(engine) for legacy unversioned tables, "
             "then jafaal.migrations.upgrade(engine) at deploy time."
         )

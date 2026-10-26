@@ -1,6 +1,6 @@
 """CRUD operations for WebAuthn (passkey) credentials.
 
-Pure persistence for the ``webauthn_credentials`` table — no ``py_webauthn``
+Pure persistence for the ``jafaal_webauthn_credentials`` table — no ``py_webauthn``
 import here, so this module (and :func:`user_has_credentials` in particular) is
 safe to call from the always-loaded auth router without the optional
 ``jafaal[webauthn]`` extra installed.

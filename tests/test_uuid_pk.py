@@ -145,16 +145,16 @@ _UUID_E2E = textwrap.dedent(
 
     # 1. Every companion FK follows the UUID primary key.
     fk_tables = [
-        "users_sessions",
-        "users_api_keys",
-        "users_local_credentials",
-        "idp_link_tokens",
-        "users_identity_providers",
-        "mfa_backup_codes",
-        "users_mfa",
-        "oauth_states",
-        "password_reset_tokens",
-        "sign_up_tokens",
+        "jafaal_users_sessions",
+        "jafaal_users_api_keys",
+        "jafaal_users_local_credentials",
+        "jafaal_idp_link_tokens",
+        "jafaal_users_identity_providers",
+        "jafaal_mfa_backup_codes",
+        "jafaal_users_mfa",
+        "jafaal_oauth_states",
+        "jafaal_password_reset_tokens",
+        "jafaal_sign_up_tokens",
     ]
     for name in fk_tables:
         col = Base.metadata.tables[name].c.user_id

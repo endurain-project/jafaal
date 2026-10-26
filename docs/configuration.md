@@ -664,8 +664,8 @@ jafaal.configure(
 
 `rp_id` and `origins` default to the host and origin of
 `base_url`; the endpoints return **503** if neither an explicit value nor a
-usable `base_url` is configured. The companion table `webauthn_credentials` is
-created by `jafaal.map_models` + the packaged migrations (revision
+usable `base_url` is configured. The companion table `jafaal_webauthn_credentials`
+is created by `jafaal.map_models` + the packaged migrations (revision
 `0002_webauthn_credentials`).
 
 ### Endpoints
@@ -772,25 +772,64 @@ rather than an accident. Use whichever backend your host app already uses (e.g.
 JAFAAL ships its schema as **Alembic** migrations (the `jafaal[migrations]`
 extra) so its companion tables can evolve across releases. They run on a
 dedicated version table (`jafaal_alembic_version`) and touch only JAFAAL's own
-tables — your `users` table and your Alembic history are left alone.
+tables — your `users` table and your Alembic history are left alone. Every
+JAFAAL table, and every index and named constraint on one, starts with
+`jafaal_` (`jafaal_users_sessions`, `jafaal_oauth_states`, …), so none can
+collide with a table of yours.
 
 ```python
 from jafaal import migrations
 
-migrations.adopt_existing_schema(engine)  # validate/stamp complete legacy tables, if any
+migrations.adopt_existing_schema(engine)  # validate/record unversioned tables, if any
 migrations.upgrade(engine)  # create/upgrade JAFAAL's tables
 migrations.verify_schema_current(engine)  # fail fast at startup if not migrated
 ```
 
 Your `users` table must exist first (JAFAAL's tables reference `users.id`), so
-run your own migrations before JAFAAL's. `adopt_existing_schema()` is only for
-legacy deployments with a complete, unversioned JAFAAL schema: it validates the
-owned tables against the active metadata before recording the packaged head and
-never repairs an incompatible schema. Normal deployments should run `upgrade()`.
+run your own migrations before JAFAAL's; `upgrade()` refuses to start without it.
 
-Prefer a single, unified Alembic history? Point your `env.py` at
-`jafaal.orm.Base.metadata` and add the package's `versions` directory to your
-`version_locations` instead.
+Each revision is explicit DDL, so a revision means the same schema in every
+release, and each one fails the migration rather than skipping a change it
+cannot make. The two things a revision takes from your application are the type
+of `users.id` (integer or UUID) and your declarative base's naming convention,
+which names JAFAAL's indexes exactly as it does for the models.
+
+`upgrade()` creates a fresh database outright. A database that has JAFAAL tables
+but no recorded revision — built with `create_all`, or with the version table
+lost — is refused, because running the revisions over unchecked tables could
+record a revision they were never validated against. Call
+`adopt_existing_schema()` first: it compares the tables against the head schema
+and then each earlier revision's (columns, types, nullability, server defaults,
+keys, unique constraints, foreign keys and indexes), records the first exact
+match, and leaves `upgrade()` to apply the rest. It never repairs a schema; when
+nothing matches it raises `SchemaCompatibilityError` naming the closest revision
+and its differences. Indexes you added yourself are accepted as long as they are
+not unique.
+
+#### Upgrading from 0.3: the `jafaal_` prefix
+
+Up to 0.3 the tables had unprefixed names (`users_sessions`, `oauth_states`, …).
+Revision `0008_prefix_table_names` renames each table with its indexes and named
+constraints in place — no data is copied, and foreign keys between JAFAAL's
+tables follow. **Stop every process running 0.3 or earlier before running it**:
+the old code looks the old names up, so a rolling deployment across it is not
+possible.
+
+- Migrated with `jafaal.migrations`: run `upgrade()` as usual.
+- Built with `create_all` (no `jafaal_alembic_version` table): run
+  `adopt_existing_schema()`, which recognises the unprefixed schema, then
+  `upgrade()`.
+
+A single table of yours that happens to carry one of the old names (say your own
+`identity_providers`) is not mistaken for JAFAAL's: an unversioned schema is only
+recognised by two or more of them.
+
+Prefer a single, unified Alembic history? Point your `env.py` at your
+`Base.metadata` and add the package's `versions` directory to your
+`version_locations` instead. Only `migrations.upgrade()` creates the prefixed
+names directly; from your own history `0001_initial` creates the unprefixed
+names and `0008_prefix_table_names` renames them, so a table of yours with an
+old name still collides there.
 
 ## Scopes
 

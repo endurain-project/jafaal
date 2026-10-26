@@ -33,7 +33,7 @@ class RotatedRefreshToken(Base):
         user_session: Relationship to UsersSessions model.
     """
 
-    __tablename__ = "rotated_refresh_tokens"
+    __tablename__ = "jafaal_rotated_refresh_tokens"
 
     id: Mapped[int] = mapped_column(
         primary_key=True,
@@ -41,7 +41,7 @@ class RotatedRefreshToken(Base):
     )
     token_family_id: Mapped[str] = mapped_column(
         String(36),
-        ForeignKey("users_sessions.token_family_id", ondelete="CASCADE"),
+        ForeignKey("jafaal_users_sessions.token_family_id", ondelete="CASCADE"),
         nullable=False,
         index=True,
         comment="UUID of the token family",

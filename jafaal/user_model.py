@@ -60,7 +60,7 @@ implements :class:`~jafaal.ports.ScopeResolver` and can ignore the column
 entirely.
 
 Password hashes are **not** stored on the user model. They live in the
-auth-owned ``users_local_credentials`` table (see :mod:`jafaal.credentials`),
+auth-owned ``jafaal_users_local_credentials`` table (see :mod:`jafaal.credentials`),
 so SSO-only accounts simply have no credential row.
 """
 

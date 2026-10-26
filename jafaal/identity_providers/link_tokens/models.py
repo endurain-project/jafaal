@@ -37,7 +37,7 @@ class IdpLinkToken(Base):
         identity_provider: Relationship to IdentityProvider model.
     """
 
-    __tablename__ = "idp_link_tokens"
+    __tablename__ = "jafaal_idp_link_tokens"
 
     id: Mapped[str] = mapped_column(
         String(36),
@@ -62,7 +62,7 @@ class IdpLinkToken(Base):
     )
 
     idp_id: Mapped[int] = mapped_column(
-        ForeignKey("identity_providers.id", ondelete="CASCADE"),
+        ForeignKey("jafaal_identity_providers.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
         comment="Identity provider ID being linked",

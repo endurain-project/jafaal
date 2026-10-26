@@ -14,7 +14,7 @@ protections and the deployment steps you are responsible for.
   every additional verifier is another way to get a password comparison wrong.
 - A **timing-equalising dummy verify** on the "user not found" login branch, so
   response time cannot be used to enumerate valid usernames.
-- Password hashes live in JAFAAL's own `users_local_credentials` table, never on
+- Password hashes live in JAFAAL's own `jafaal_users_local_credentials` table, never on
   your user row — so SSO-only accounts simply have no credential.
 
 ### Tokens & sessions

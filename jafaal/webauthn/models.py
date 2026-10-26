@@ -1,4 +1,4 @@
-"""Auth-owned WebAuthn / passkey credential model (table: ``webauthn_credentials``).
+"""Auth-owned WebAuthn / passkey credential model (table: ``jafaal_webauthn_credentials``).
 
 Stores each registered public-key credential. ``credential_id`` and
 ``public_key`` are kept as base64url/base64 text (not raw ``BLOB``) so the unique
@@ -40,7 +40,7 @@ class WebAuthnCredential(Base):
         last_used_at: Last successful authentication timestamp.
     """
 
-    __tablename__ = "webauthn_credentials"
+    __tablename__ = "jafaal_webauthn_credentials"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     user_id: Mapped[UserId] = mapped_column(

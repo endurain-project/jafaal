@@ -34,10 +34,10 @@ class IdentityLink(Base):
         identity_providers: Relationship to IdentityProvider model.
     """
 
-    __tablename__ = "users_identity_providers"
+    __tablename__ = "jafaal_users_identity_providers"
     __table_args__ = (
-        UniqueConstraint("user_id", "idp_id", name="uq_identity_links_user_idp"),
-        UniqueConstraint("idp_id", "idp_subject", name="uq_identity_links_idp_subject"),
+        UniqueConstraint("user_id", "idp_id", name="uq_jafaal_identity_links_user_idp"),
+        UniqueConstraint("idp_id", "idp_subject", name="uq_jafaal_identity_links_idp_subject"),
     )
     id: Mapped[int] = mapped_column(
         primary_key=True,
@@ -51,7 +51,7 @@ class IdentityLink(Base):
         comment="User ID",
     )
     idp_id: Mapped[int] = mapped_column(
-        ForeignKey("identity_providers.id", ondelete="CASCADE"),
+        ForeignKey("jafaal_identity_providers.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
         comment="Identity Provider ID",

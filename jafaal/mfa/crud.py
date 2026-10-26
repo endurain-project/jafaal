@@ -1,4 +1,4 @@
-"""CRUD helpers for the ``users_mfa`` 1:1 companion table."""
+"""CRUD helpers for the ``jafaal_users_mfa`` 1:1 companion table."""
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -11,7 +11,7 @@ from jafaal.orm import UserId
 @db_errors.handle_db_errors
 def get_user_mfa_row(user_id: UserId, db: Session) -> jafaal_mfa_models.UsersMFA | None:
     """
-    Retrieve the ``users_mfa`` row for a user.
+    Retrieve the ``jafaal_users_mfa`` row for a user.
 
     Args:
         user_id: ID of the user to fetch the MFA row for.
@@ -30,7 +30,7 @@ def get_user_mfa_row(user_id: UserId, db: Session) -> jafaal_mfa_models.UsersMFA
 @db_errors.handle_db_errors
 def update_user_mfa(user_id: UserId, db: Session, encrypted_secret: str | None = None) -> None:
     """
-    Update a user's MFA settings in the ``users_mfa`` table.
+    Update a user's MFA settings in the ``jafaal_users_mfa`` table.
 
     Args:
         user_id: ID of user to update MFA for.

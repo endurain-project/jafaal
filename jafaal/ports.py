@@ -138,7 +138,7 @@ class UserRepository(Protocol):
         """Create a user row for a local sign-up and return it.
 
         JAFAAL validates the password and persists the credential separately in
-        its own ``users_local_credentials`` table; the host only creates the
+        its own ``jafaal_users_local_credentials`` table; the host only creates the
         user/profile row here (with the given active/verified state and any
         host-specific defaults). ``username``/``email`` are passed as supplied;
         the host applies its own normalization and uniqueness checks.

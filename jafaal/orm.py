@@ -87,6 +87,7 @@ __all__ = [
     "is_models_mapped",
     "is_sessionmaker_configured",
     "jafaal_table_names",
+    "legacy_table_names",
     "map_models",
     "mapper_registry",
     "savepoint",
@@ -552,13 +553,46 @@ def user_id_python_type() -> type:
     return _resolve_user_mapper().primary_key[0].type.python_type
 
 
+#: The unprefixed names JAFAAL's tables had up to 0.3. Only the migrations read
+#: them, to rename the tables and to recognise an unversioned pre-0.4 schema; a
+#: table with one of these names is otherwise the host's, never JAFAAL's.
+_LEGACY_TABLE_NAMES: frozenset[str] = frozenset(
+    {
+        "users_local_credentials",
+        "users_sessions",
+        "rotated_refresh_tokens",
+        "users_api_keys",
+        "users_mfa",
+        "mfa_backup_codes",
+        "identity_providers",
+        "users_identity_providers",
+        "idp_link_tokens",
+        "oauth_states",
+        "password_reset_tokens",
+        "sign_up_tokens",
+        "webauthn_credentials",
+    }
+)
+
+
+def legacy_table_names() -> frozenset[str]:
+    """Return the unprefixed table names JAFAAL used before 0.4.
+
+    Not JAFAAL's tables any longer: a database may well hold an unrelated table
+    with one of these names. They exist so the migrations can rename the old
+    tables and adopt an old unversioned schema.
+    """
+    return _LEGACY_TABLE_NAMES
+
+
 def jafaal_table_names() -> frozenset[str]:
     """Return the names of the tables owned by JAFAAL's own models.
 
     Every table mapped by a class defined under the ``jafaal`` package — i.e. all
     of JAFAAL's companion tables, but **not** the host's ``users`` table (whose
     model lives in the host application, outside ``jafaal.*``) nor any other host
-    table sharing the registry.
+    table sharing the registry. Every name carries the ``jafaal_`` prefix, so none
+    can collide with a host's own table.
 
     The migration tooling (:mod:`jafaal.migrations`) uses this to scope its
     operations to JAFAAL's tables and leave the host-owned ``users`` table alone.

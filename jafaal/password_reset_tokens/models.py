@@ -29,7 +29,7 @@ class PasswordResetToken(Base):
         users: Relationship to the Users model.
     """
 
-    __tablename__ = "password_reset_tokens"
+    __tablename__ = "jafaal_password_reset_tokens"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[UserId] = mapped_column(
