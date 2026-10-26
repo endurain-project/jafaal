@@ -65,6 +65,7 @@ from typing import Any, cast
 
 from fastapi import APIRouter, Request, Response
 from fastapi.routing import APIRoute
+from sqlalchemy import event
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import DeclarativeBase, Mapper, Session, sessionmaker
 
@@ -235,6 +236,41 @@ def map_models(base: type[DeclarativeBase] | None = None, *, user_model: type | 
         _active_base = None  # let the host fix the problem and retry
         _user_model.reset()
         raise
+    if not event.contains(target.metadata, "before_create", _refuse_create_beside_legacy_schema):
+        event.listen(target.metadata, "before_create", _refuse_create_beside_legacy_schema)
+
+
+def _refuse_create_beside_legacy_schema(metadata: Any, connection: Any, **kw: Any) -> None:
+    """Stop ``metadata.create_all()`` from creating JAFAAL's tables beside a 0.3 schema.
+
+    The tables were renamed to ``jafaal_*`` in 0.4. On a database that still holds
+    the unprefixed ones, ``create_all()`` would see none of the new names and
+    create them empty, and the application would run against those: every
+    session, identity-provider configuration, MFA enrolment, passkey and API key
+    would seem gone while the data sat untouched in the old tables. The
+    migrations rename the old tables in place instead.
+
+    Two or more of the old names mark an old schema; a single one is taken to be
+    the host's own table, as :func:`jafaal.migrations.adopt_existing_schema` does.
+
+    Raises:
+        jafaal.migrations.SchemaCompatibilityError: If JAFAAL tables are about to
+            be created beside an unprefixed JAFAAL schema.
+    """
+    creating = {table.name for table in kw.get("tables", ())} & jafaal_table_names()
+    if not creating:
+        return
+    present = set(sa_inspect(connection).get_table_names())
+    if present & jafaal_table_names() or len(present & legacy_table_names()) < 2:
+        return
+    from jafaal.migrations import SchemaCompatibilityError
+
+    raise SchemaCompatibilityError(
+        "The database holds JAFAAL tables from 0.3 or earlier under their old, unprefixed names; "
+        "create_all() would create empty jafaal_* tables beside them. Migrate them instead: "
+        "jafaal.migrations.adopt_existing_schema(engine) (if they were built with create_all()), "
+        "then jafaal.migrations.upgrade(engine)."
+    )
 
 
 # ---------------------------------------------------------------------------

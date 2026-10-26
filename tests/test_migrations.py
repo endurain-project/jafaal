@@ -432,6 +432,45 @@ def test_a_hosts_own_same_named_table_is_never_touched(migration_engine):
         assert connection.execute(text("SELECT note FROM password_reset_tokens")).scalar_one() == "mine"
 
 
+@pytest.mark.parametrize("versioned", [True, False], ids=["migrated", "create_all"])
+def test_create_all_refuses_to_create_empty_tables_beside_a_0_3_schema(migration_engine, versioned):
+    """The 0.3 -> 0.4 trap: an app calling ``create_all()`` at startup would get
+    empty ``jafaal_*`` tables (no sessions, no MFA enrolments, no IdP configs)
+    while its data sat in the old tables."""
+    engine = migration_engine
+    _create_host_users(engine)
+    migrations.upgrade(engine, LEGACY_HEAD)
+    if not versioned:
+        _drop_version_table(engine)
+
+    with pytest.raises(migrations.SchemaCompatibilityError, match=r"adopt_existing_schema.*upgrade"):
+        Base.metadata.create_all(engine)
+
+    assert not _tables(engine) & jafaal_orm.jafaal_table_names()
+
+
+def test_create_all_works_beside_a_hosts_own_same_named_table(migration_engine):
+    engine = migration_engine
+    _create_host_users(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql("CREATE TABLE identity_providers (host_id INTEGER PRIMARY KEY)")
+
+    Base.metadata.create_all(engine)
+
+    assert jafaal_orm.jafaal_table_names() <= _tables(engine)
+
+
+def test_create_all_after_the_rename_is_a_no_op(migration_engine):
+    engine = migration_engine
+    _create_host_users(engine)
+    migrations.upgrade(engine, LEGACY_HEAD)
+    migrations.upgrade(engine)
+
+    Base.metadata.create_all(engine)
+
+    assert _differences(engine, _copied_metadata()) == []
+
+
 def test_a_hosts_own_same_named_table_does_not_break_adopting_the_prefixed_schema(migration_engine):
     engine = migration_engine
     _create_host_users(engine)

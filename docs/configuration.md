@@ -820,6 +820,10 @@ possible.
   `adopt_existing_schema()`, which recognises the unprefixed schema, then
   `upgrade()`.
 
+Migrate before calling `create_all()` with 0.4: on a database that still holds
+the old tables it raises `SchemaCompatibilityError` rather than creating empty
+`jafaal_*` tables beside them.
+
 A single table of yours that happens to carry one of the old names (say your own
 `identity_providers`) is not mistaken for JAFAAL's: an unversioned schema is only
 recognised by two or more of them.
