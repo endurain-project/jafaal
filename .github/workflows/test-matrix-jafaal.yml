@@ -2,8 +2,8 @@ name: Test matrix jafaal
 
 # Portability matrix on top of the fast default `test-jafaal` job:
 #   * every supported Python (3.12, 3.13, 3.14) on the default SQLite backend;
-#   * the suite against real Postgres and MySQL servers (proving the ORM models
-#     and queries stay database-agnostic); and
+#   * the suite against real Postgres, MySQL and MariaDB servers (proving the ORM
+#     models, queries and migrations stay database-agnostic); and
 #   * a bare `import jafaal` with only the base dependencies installed (no
 #     mfa / sso / redis / webauthn extras, no dev groups), proving the
 #     optional-feature modules import defensively.
@@ -147,7 +147,58 @@ jobs:
       - name: Run tests
         run: uv run --no-sync pytest
 
-  # 4. Bare import with only the base dependencies (no extras, no dev groups):
+  # 4. The suite against a real MariaDB server. MariaDB is not MySQL: it reflects
+  #    server defaults differently and has its own SQLAlchemy dialect, which the
+  #    migrations' schema adoption and table renames must both handle.
+  test-mariadb:
+    name: jafaal (mariadb)
+    runs-on: ubuntu-latest
+    # Higher than the other database jobs: MariaDB is markedly slower at the
+    # per-test DDL the suite does than either PostgreSQL or MySQL.
+    timeout-minutes: 30
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_USER: jafaal
+          MARIADB_PASSWORD: jafaal
+          MARIADB_DATABASE: jafaal
+          MARIADB_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    env:
+      JAFAAL_TEST_DATABASE_URL: mariadb+pymysql://jafaal:jafaal@localhost:3306/jafaal
+      # A second, disposable database for the migration tests: they drop every
+      # table between cases, so they must not share the one the suite is using.
+      JAFAAL_TEST_MIGRATIONS_DATABASE_URL: mariadb+pymysql://jafaal:jafaal@localhost:3306/jafaal_migrations
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version-file: pyproject.toml
+
+      - name: Create the migrations database
+        run: |
+          mysql -h 127.0.0.1 -P 3306 -u root -proot \
+            -e "CREATE DATABASE jafaal_migrations; GRANT ALL ON jafaal_migrations.* TO 'jafaal'@'%';"
+
+      - name: Sync dependencies (with database drivers)
+        run: uv sync --frozen --no-dev --group test --group test-db --no-install-project
+
+      - name: Run tests
+        run: uv run --no-sync pytest
+
+  # 5. Bare import with only the base dependencies (no extras, no dev groups):
   #    proves `import jafaal` and router assembly work without mfa/sso/redis.
   import-base-deps:
     name: jafaal (bare import, no extras)
