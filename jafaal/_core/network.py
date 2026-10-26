@@ -22,6 +22,7 @@ import logging
 import socket
 import threading
 import time
+from types import TracebackType
 from typing import Any
 from urllib.parse import urlparse
 
@@ -701,8 +702,13 @@ class SsrfGuardAsyncTransport(httpx.AsyncBaseTransport):
         await self._inner.__aenter__()
         return self
 
-    async def __aexit__(self, *exc_info: object) -> None:
-        await self._inner.__aexit__(*exc_info)  # type: ignore[arg-type]
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None = None,
+        exc_value: BaseException | None = None,
+        traceback: TracebackType | None = None,
+    ) -> None:
+        await self._inner.__aexit__(exc_type, exc_value, traceback)
 
     async def aclose(self) -> None:
         await self._inner.aclose()

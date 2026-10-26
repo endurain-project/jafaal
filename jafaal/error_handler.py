@@ -15,6 +15,7 @@ from jafaal.exceptions import JafaalError, OAuthError
 
 if TYPE_CHECKING:
     from fastapi import FastAPI, Request
+    from starlette.responses import Response
 
 
 def _body(exc: JafaalError) -> dict[str, str]:
@@ -71,7 +72,15 @@ def register_exception_handlers(app: FastAPI) -> None:
     Call once at startup, before serving requests. Safe to install up-front: it
     is a no-op until the core raises a :class:`JafaalError`.
     """
-    # Starlette types handlers as ``Callable[[Request, Exception], ...]``; ours
-    # narrows ``exc`` to ``JafaalError`` (safe — it is only dispatched for that
-    # exception type), which Starlette's broad signature cannot express.
-    app.add_exception_handler(JafaalError, jafaal_exception_handler)  # type: ignore[arg-type]
+    app.add_exception_handler(JafaalError, _dispatch_jafaal_error)
+
+
+async def _dispatch_jafaal_error(request: Request, exc: Exception) -> Response:
+    """Adapt :func:`jafaal_exception_handler` to Starlette's handler signature.
+
+    Starlette types handlers as taking any ``Exception``; it only dispatches a
+    :class:`JafaalError` here, which its broad signature cannot express.
+    """
+    if not isinstance(exc, JafaalError):  # pragma: no cover - Starlette dispatches by type
+        raise exc
+    return await jafaal_exception_handler(request, exc)
