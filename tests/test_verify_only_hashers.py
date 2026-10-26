@@ -40,7 +40,10 @@ def _store_hash(user, password_hash, db):
 
 
 def _stored(user, db):
-    db.expire_all()
+    # End the transaction, not just expire the objects: on MySQL and MariaDB
+    # (REPEATABLE READ) an open transaction keeps its snapshot and would not see
+    # the login's commit.
+    db.rollback()
     return credentials_crud.get_credential(user.id, db).password_hash
 
 
