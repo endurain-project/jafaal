@@ -4,8 +4,8 @@ Provides the ``handle_db_errors`` decorator applied across JAFAAL's CRUD
 helpers. It converts an unexpected :class:`~sqlalchemy.exc.SQLAlchemyError` into
 a 500 :class:`~jafaal.exceptions.InternalError`, logging only the error class
 name (never the SQL text, to avoid leaking PII or credentials — OWASP A09).
-``JafaalError``, ``HTTPException``, and ``IntegrityError`` are allowed to
-propagate for caller-specific handling.
+``IntegrityError`` is re-raised for caller-specific handling; every other
+exception, ``JafaalError`` included, propagates untouched.
 
 **It does not roll back.** JAFAAL's CRUD layer runs inside the *caller's*
 transaction (see :func:`jafaal.orm.unit_of_work`), so rolling back here would
@@ -26,7 +26,6 @@ from collections.abc import Awaitable, Callable
 from functools import wraps
 from typing import Any, NoReturn, cast
 
-from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 import jafaal.exceptions as jafaal_exceptions
@@ -56,8 +55,8 @@ def handle_db_errors[T, **P](func: Callable[P, T]) -> Callable[P, T]:
     """Decorator to handle SQLAlchemy database errors consistently.
 
     Catches ``SQLAlchemyError``, logs it, and converts it to a 500
-    ``InternalError``. Allows ``JafaalError``, ``HTTPException``, and
-    ``IntegrityError`` to pass through for caller-specific handling.
+    ``InternalError``. ``IntegrityError`` is re-raised for caller-specific handling;
+    any non-SQLAlchemy exception, ``JafaalError`` included, propagates untouched.
 
     Does **not** roll back: the transaction belongs to the caller (see the module
     docstring).
@@ -83,7 +82,7 @@ def handle_db_errors[T, **P](func: Callable[P, T]) -> Callable[P, T]:
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             try:
                 return await async_func(*args, **kwargs)
-            except (HTTPException, jafaal_exceptions.JafaalError, IntegrityError):
+            except IntegrityError:
                 raise
             except SQLAlchemyError as db_err:
                 _handle_db_error(db_err, func_name)
@@ -94,7 +93,7 @@ def handle_db_errors[T, **P](func: Callable[P, T]) -> Callable[P, T]:
     def sync_wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
         try:
             return func(*args, **kwargs)
-        except (HTTPException, jafaal_exceptions.JafaalError, IntegrityError):
+        except IntegrityError:
             raise
         except SQLAlchemyError as db_err:
             _handle_db_error(db_err, func_name)
