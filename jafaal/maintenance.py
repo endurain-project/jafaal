@@ -36,7 +36,6 @@ from typing import TYPE_CHECKING
 
 import jafaal._internal.security_stores as jafaal_security_stores
 import jafaal.credentials.crud as jafaal_credentials_crud
-from jafaal.identity_providers.link_tokens.utils import delete_idp_link_expired_tokens_from_db
 from jafaal.oauth_state.utils import delete_expired_oauth_states_from_db
 from jafaal.password_reset_tokens.utils import (
     delete_invalid_tokens_from_db as delete_invalid_password_reset_tokens_from_db,
@@ -79,7 +78,6 @@ __all__ = [
     "cleanup_idle_sessions",
     "count_non_argon2_password_hashes",
     "delete_expired_oauth_states_from_db",
-    "delete_idp_link_expired_tokens_from_db",
     "delete_invalid_password_reset_tokens_from_db",
     "delete_invalid_sign_up_tokens_from_db",
     "is_scheduler_running",
@@ -162,12 +160,6 @@ MAINTENANCE_TASKS: tuple[MaintenanceTask, ...] = (
         run=delete_invalid_sign_up_tokens_from_db,
         interval_seconds=3600,
         description="Delete used and expired sign-up / email-verification tokens.",
-    ),
-    MaintenanceTask(
-        name="idp_link_tokens",
-        run=delete_idp_link_expired_tokens_from_db,
-        interval_seconds=3600,
-        description="Delete expired identity-provider account-link tokens.",
     ),
     MaintenanceTask(
         name="idle_sessions",

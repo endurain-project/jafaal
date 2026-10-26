@@ -158,7 +158,6 @@ _MODEL_MODULES: tuple[str, ...] = (
     "jafaal.mfa.backup_codes.models",
     "jafaal.identity_providers.models",
     "jafaal.identity_providers.links.models",
-    "jafaal.identity_providers.link_tokens.models",
     "jafaal.oauth_state.models",
     "jafaal.password_reset_tokens.models",
     "jafaal.sign_up_tokens.models",

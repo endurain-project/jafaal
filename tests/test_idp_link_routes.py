@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -10,11 +9,11 @@ from conftest import LIMITED_CLIENT_ID, NATIVE_CLIENT_ID, NATIVE_REDIRECT_URI, R
 
 import jafaal
 import jafaal.identity_providers.crud as idp_crud
-import jafaal.identity_providers.link_tokens.models as link_token_models
 import jafaal.identity_providers.links.crud as links_crud
 import jafaal.identity_providers.schema as idp_schema
 import jafaal.identity_providers.service as idp_service
 import jafaal.oauth_state.crud as oauth_state_crud
+import jafaal.oauth_state.models as oauth_state_models
 import jafaal.orm as jafaal_orm
 import jafaal.ports as jafaal_ports
 from jafaal._internal.security_stores import grant_step_up_reauth
@@ -91,14 +90,17 @@ def _bearer(client, username, *, client_id=NATIVE_CLIENT_ID, password=PASSWORD):
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
-def _mint(client, headers, idp_id, **body):
-    return client.post(f"{PROFILE}/idp/{idp_id}/link/token", json=body, headers=headers)
+def _start(client, headers, idp_id, *, client_id=NATIVE_CLIENT_ID, redirect_uri=NATIVE_REDIRECT_URI, **body):
+    body = {"client_id": client_id, "redirect_uri": redirect_uri, "state": "s1", **body}
+    return client.post(f"{PROFILE}/idp/{idp_id}/link", json=body, headers=headers)
 
 
-def _claim(client, token, idp_id, **overrides):
-    params = {"token": token, "client_id": NATIVE_CLIENT_ID, "redirect_uri": NATIVE_REDIRECT_URI, "state": "s1"}
-    params.update(overrides)
-    return client.get(f"{PROFILE}/idp/{idp_id}/link", params=params, follow_redirects=False)
+def _state_id(response):
+    return parse_qs(urlsplit(response.json()["authorization_url"]).query)["state"][0]
+
+
+def _callback(client, state_id):
+    return client.get(f"{PUBLIC_IDP}/callback/oidc?code=abc&state={state_id}", follow_redirects=False)
 
 
 # --------------------------------------------------------------------------- #
@@ -126,51 +128,49 @@ def test_listing_needs_a_token_and_the_read_scope(client, make_user):
 
 
 # --------------------------------------------------------------------------- #
-# Link token handoff
+# Starting a link
 # --------------------------------------------------------------------------- #
 
 
-def test_minting_a_link_token_requires_step_up(client, make_user):
+def test_starting_a_link_requires_step_up(client, make_user):
     make_user(username="alice")
     idp = _create_idp()
     headers = _bearer(client, "alice")
 
-    assert _mint(client, headers, idp).status_code == 401
-    assert _mint(client, headers, idp, current_password="wrong-password").status_code == 401
-    ok = _mint(client, headers, idp, current_password=PASSWORD)
+    assert _start(client, headers, idp).status_code == 401
+    assert _start(client, headers, idp, current_password="wrong-password").status_code == 401
+    ok = _start(client, headers, idp, current_password=PASSWORD)
     assert ok.status_code == 200
-    assert ok.json()["token"]
+    assert set(ok.json()) == {"authorization_url"}
     assert "no-store" in ok.headers["cache-control"]
 
 
-def test_minting_refuses_a_missing_disabled_or_already_linked_provider(client, make_user):
+def test_starting_a_link_needs_a_bearer(client):
+    assert client.post(f"{PROFILE}/idp/1/link", json={}).status_code == 401
+
+
+def test_starting_refuses_a_missing_disabled_or_already_linked_provider(client, make_user):
     alice = make_user(username="alice")
     headers = _bearer(client, "alice")
     disabled, linked = _create_idp("off", enabled=False), _create_idp("on")
     _link(alice.id, linked)
 
-    assert _mint(client, headers, 9999, current_password=PASSWORD).status_code == 404
-    assert _mint(client, headers, disabled, current_password=PASSWORD).status_code == 404
-    assert _mint(client, headers, linked, current_password=PASSWORD).status_code == 409
+    assert _start(client, headers, 9999, current_password=PASSWORD).status_code == 404
+    assert _start(client, headers, disabled, current_password=PASSWORD).status_code == 404
+    assert _start(client, headers, linked, current_password=PASSWORD).status_code == 409
 
 
-def test_a_link_token_redirects_to_the_provider_and_binds_the_user(client, make_user):
+def test_starting_a_link_returns_the_provider_url_and_binds_the_user(client, make_user):
     alice = make_user(username="alice")
     idp = _create_idp()
-    token = _mint(client, _bearer(client, "alice"), idp, current_password=PASSWORD).json()["token"]
 
-    # The browser navigation carries no bearer at all: the token is the credential.
-    response = _claim(client, token, idp)
+    response = _start(client, _bearer(client, "alice"), idp, current_password=PASSWORD)
 
-    assert response.status_code == 302
-    assert response.headers["cache-control"] == "no-store"
-    assert response.headers["referrer-policy"] == "no-referrer"
-    location = urlsplit(response.headers["location"])
+    location = urlsplit(response.json()["authorization_url"])
     assert f"{location.scheme}://{location.netloc}{location.path}" == "https://oidc.example/authorize"
-    state_id = parse_qs(location.query)["state"][0]
     session = _session()
     try:
-        state = oauth_state_crud.get_oauth_state_by_id(state_id, session)
+        state = oauth_state_crud.get_oauth_state_by_id(_state_id(response), session)
         assert (state.purpose, state.user_id, state.idp_id) == ("link", alice.id, idp)
         assert (state.client_id, state.redirect_uri, state.client_state) == (
             NATIVE_CLIENT_ID,
@@ -181,87 +181,33 @@ def test_a_link_token_redirects_to_the_provider_and_binds_the_user(client, make_
         session.close()
 
 
-def test_a_link_token_is_single_use(client, make_user):
+def test_an_unregistered_redirect_is_refused_before_any_state_is_parked(client, make_user):
     make_user(username="alice")
     idp = _create_idp()
-    token = _mint(client, _bearer(client, "alice"), idp, current_password=PASSWORD).json()["token"]
 
-    assert _claim(client, token, idp).status_code == 302
-    assert _claim(client, token, idp).status_code in (400, 401)
-
-
-def test_an_expired_link_token_is_refused(client, make_user):
-    make_user(username="alice")
-    idp = _create_idp()
-    token = _mint(client, _bearer(client, "alice"), idp, current_password=PASSWORD).json()["token"]
-    session = _session()
-    try:
-        with jafaal_orm.unit_of_work(session):
-            for row in session.query(link_token_models.IdpLinkToken).all():
-                row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
-    finally:
-        session.close()
-
-    assert _claim(client, token, idp).status_code == 401
-
-
-def test_a_link_token_is_only_good_for_the_provider_it_was_minted_for(client, make_user):
-    make_user(username="alice")
-    first, second = _create_idp("one"), _create_idp("two")
-    token = _mint(client, _bearer(client, "alice"), first, current_password=PASSWORD).json()["token"]
-
-    assert _claim(client, token, second).status_code == 401
-    assert _claim(client, token, first).status_code == 302  # the refusal did not burn it
-
-
-def test_a_guessed_token_is_refused(client, make_user):
-    make_user(username="alice")
-    assert _claim(client, "not-a-real-token", _create_idp()).status_code == 401
-
-
-def test_an_unregistered_redirect_is_refused_before_the_token_is_spent(client, make_user):
-    make_user(username="alice")
-    idp = _create_idp()
-    token = _mint(client, _bearer(client, "alice"), idp, current_password=PASSWORD).json()["token"]
-
-    assert _claim(client, token, idp, redirect_uri="https://attacker.example/cb").status_code in (400, 401)
-    assert _claim(client, token, idp).status_code == 302
-
-
-def test_a_token_minted_by_one_user_links_that_user_whoever_navigates(client, make_user):
-    alice, bob = make_user(username="alice"), make_user(username="bob")
-    idp = _create_idp()
-    token = _mint(client, _bearer(client, "alice"), idp, current_password=PASSWORD).json()["token"]
-
-    # Even carrying bob's bearer, the navigation links the token's owner.
-    response = client.get(
-        f"{PROFILE}/idp/{idp}/link",
-        params={"token": token, "client_id": NATIVE_CLIENT_ID, "redirect_uri": NATIVE_REDIRECT_URI},
-        headers=_bearer(client, "bob"),
-        follow_redirects=False,
+    refused = _start(
+        client,
+        _bearer(client, "alice"),
+        idp,
+        redirect_uri="https://attacker.example/cb",
+        current_password=PASSWORD,
     )
-    state_id = parse_qs(urlsplit(response.headers["location"]).query)["state"][0]
+
+    assert refused.status_code in (400, 401)
     session = _session()
     try:
-        assert oauth_state_crud.get_oauth_state_by_id(state_id, session).user_id == alice.id
+        assert session.query(oauth_state_models.OAuthState).count() == 0
     finally:
         session.close()
-    assert bob.id != alice.id
 
 
 def test_the_link_round_trip_completes_through_the_callback_and_notifies(client, make_user, monkeypatch, sink):
     alice = make_user(username="alice")
     idp = _create_idp()
-    token = _mint(client, _bearer(client, "alice"), idp, current_password=PASSWORD).json()["token"]
-    location = _claim(client, token, idp).headers["location"]
-    state_id = parse_qs(urlsplit(location).query)["state"][0]
+    state_id = _state_id(_start(client, _bearer(client, "alice"), idp, current_password=PASSWORD))
+    _complete_link_in_callback(monkeypatch)
 
-    async def complete(idp_row, code, state, request, password_hasher, db, oauth_state):
-        identity = idp_service._CallbackIdentity(subject="provider-subject", userinfo={}, token_response={})
-        return idp_service.idp_service._complete_link_callback(idp_row, oauth_state.user_id, identity, db)
-
-    monkeypatch.setattr(idp_service.idp_service, "handle_callback", complete)
-    callback = client.get(f"{PUBLIC_IDP}/callback/oidc?code=abc&state={state_id}", follow_redirects=False)
+    callback = _callback(client, state_id)
 
     assert callback.status_code == 302
     assert parse_qs(urlsplit(callback.headers["location"]).query)["idp_link"] == ["success"]
@@ -269,6 +215,16 @@ def test_the_link_round_trip_completes_through_the_callback_and_notifies(client,
     jafaal_ports.wait_for_pending_events(5.0)
     linked = [e for e in sink.events if isinstance(e, jafaal.IdpAccountLinked)]
     assert [(e.user_id, e.idp_slug) for e in linked] == [(alice.id, "oidc")]
+
+
+def _complete_link_in_callback(monkeypatch):
+    """Stand in for the provider round trip: the callback links ``provider-subject``."""
+
+    async def complete(idp_row, code, state, request, password_hasher, db, oauth_state):
+        identity = idp_service._CallbackIdentity(subject="provider-subject", userinfo={}, token_response={})
+        return idp_service.idp_service._complete_link_callback(idp_row, oauth_state.user_id, identity, db)
+
+    monkeypatch.setattr(idp_service.idp_service, "handle_callback", complete)
 
 
 # --------------------------------------------------------------------------- #
@@ -478,53 +434,86 @@ def _fresh_client():
     return TestClient(app)
 
 
-def test_a_victims_browser_cannot_redeem_an_attackers_link_token(client, make_user):
-    make_user(username="attacker")
+def test_a_victims_browser_cannot_finish_an_attackers_link(client, make_user, monkeypatch):
+    attacker = make_user(username="attacker")
     idp = _create_idp()
-    token = _mint(client, _bearer(client, "attacker"), idp, current_password=PASSWORD).json()["token"]
+    state_id = _state_id(_start(client, _bearer(client, "attacker"), idp, current_password=PASSWORD))
+    _complete_link_in_callback(monkeypatch)
 
-    victim_browser = _fresh_client()
-    assert _claim(victim_browser, token, idp).status_code == 401
+    refused = _callback(_fresh_client(), state_id)
 
-    # Refusing did not spend the token: the attacker's own browser still can.
-    assert _claim(client, token, idp).status_code == 302
+    assert refused.status_code == 400
+    assert not _is_linked(attacker.id, idp)
+    # Refusing did not spend the state: the attacker's own browser still finishes it.
+    assert _callback(client, state_id).status_code == 302
+    assert _is_linked(attacker.id, idp)
 
 
-def test_a_cookie_for_another_token_does_not_bind(client, make_user):
+def test_a_cookie_for_another_state_does_not_bind(client, make_user, monkeypatch):
     make_user(username="alice")
     idp = _create_idp()
-    first = _mint(client, _bearer(client, "alice"), idp, current_password=PASSWORD).json()["token"]
-    second = _mint(client, _bearer(client, "alice"), idp, current_password=PASSWORD).json()["token"]
+    headers = _bearer(client, "alice")
+    first = _state_id(_start(client, headers, idp, current_password=PASSWORD))
+    second = _state_id(_start(client, headers, idp, current_password=PASSWORD))
+    _complete_link_in_callback(monkeypatch)
 
-    # The jar now holds the second token's cookie.
-    assert _claim(client, first, idp).status_code == 401
-    assert _claim(client, second, idp).status_code == 302
+    # The jar now holds the second state's cookie.
+    assert _callback(client, first).status_code == 400
+    assert _callback(client, second).status_code == 302
 
 
-def test_the_binding_cookie_is_strict_http_only_and_cleared_when_spent(client, make_user):
+def test_the_binding_cookie_is_lax_and_http_only(client, make_user):
     make_user(username="alice")
     idp = _create_idp()
-    minted = _mint(client, _bearer(client, "alice"), idp, current_password=PASSWORD)
-    cookie = minted.headers["set-cookie"].lower()
+
+    cookie = _start(client, _bearer(client, "alice"), idp, current_password=PASSWORD).headers["set-cookie"].lower()
+
     assert "httponly" in cookie
-    assert "samesite=strict" in cookie
-    assert "max-age=60" in cookie
-
-    claimed = _claim(client, minted.json()["token"], idp)
-    assert claimed.status_code == 302
-    assert "max-age=0" in claimed.headers["set-cookie"].lower()
+    # The provider's redirect is a cross-site navigation, which a Strict cookie would not survive.
+    assert "samesite=lax" in cookie
+    assert "max-age=600" in cookie
 
 
-def test_binding_can_be_switched_off_for_clients_that_cannot_hold_a_cookie(client, make_user):
+def test_login_states_are_not_bound_to_a_cookie(client, make_user, monkeypatch):
     make_user(username="alice")
+    idp = _create_idp()
+    session = _session()
+    try:
+        with jafaal_orm.unit_of_work(session):
+            oauth_state_crud.create_oauth_state(
+                db=session,
+                state_id="login-state",
+                idp_id=idp,
+                nonce="n",
+                ip_address=None,
+                client_id=NATIVE_CLIENT_ID,
+                redirect_uri=NATIVE_REDIRECT_URI,
+            )
+    finally:
+        session.close()
+
+    async def refuse(*args, **kwargs):
+        raise jafaal.InvalidRequestError("reached the service")
+
+    monkeypatch.setattr(idp_service.idp_service, "handle_callback", refuse)
+
+    # Past the binding check, so the failure comes from the service rather than the state gate.
+    location = _callback(_fresh_client(), "login-state").headers["location"]
+    assert parse_qs(urlsplit(location).query)["error_description"] == ["reached the service"]
+
+
+def test_binding_can_be_switched_off_for_clients_that_cannot_hold_a_cookie(client, make_user, monkeypatch):
+    alice = make_user(username="alice")
     idp = _create_idp()
     original = jafaal.get_settings()
     from conftest import replace_settings
 
     jafaal.configure(replace_settings(original, idp_link_browser_binding=False))
     try:
-        minted = _mint(client, _bearer(client, "alice"), idp, current_password=PASSWORD)
-        assert "set-cookie" not in minted.headers or "_idp_link" not in minted.headers["set-cookie"]
-        assert _claim(_fresh_client(), minted.json()["token"], idp).status_code == 302
+        started = _start(client, _bearer(client, "alice"), idp, current_password=PASSWORD)
+        assert "set-cookie" not in started.headers
+        _complete_link_in_callback(monkeypatch)
+        assert _callback(_fresh_client(), _state_id(started)).status_code == 302
+        assert _is_linked(alice.id, idp)
     finally:
         jafaal.configure(original)

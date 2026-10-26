@@ -11,6 +11,7 @@ from pydantic import (
 )
 
 from jafaal.orm import UserId
+from jafaal.schema import StepUpVerification
 
 
 class UsersIdentityProviderBase(BaseModel):
@@ -163,3 +164,36 @@ class IdentityProviderLinkRead(BaseModel):
     idp_slug: StrictStr = Field(..., description="Identity provider slug")
     linked_at: datetime = Field(..., description="When linked")
     last_login: datetime | None = Field(default=None, description="Last login using this provider")
+
+
+class IdpLinkRequest(StepUpVerification):
+    """Request body for starting the link of an identity provider.
+
+    Linking gives the account a new way to sign in, so the caller must pass
+    step-up verification (``current_password`` and, when MFA is enabled,
+    ``mfa_code``). The client and redirect URI pass the same registration gate as
+    ``/auth/authorize``: the flow ends in a browser redirect, so it gets the same
+    open-redirect protection a login does.
+
+    Attributes:
+        client_id: A client registered via ``AuthSettings.oauth_clients``.
+        redirect_uri: Where to return the browser once the provider answers. Must
+            match one of the client's registered URIs exactly.
+        state: Opaque client value, echoed back on return.
+    """
+
+    client_id: StrictStr = Field(..., max_length=256, description="Registered client id")
+    redirect_uri: StrictStr = Field(..., max_length=2048, description="Exactly-registered redirect URI")
+    state: StrictStr | None = Field(default=None, max_length=512, description="Opaque value echoed back")
+
+
+class IdpLinkResponse(BaseModel):
+    """The provider URL the client navigates to in order to finish the link.
+
+    Attributes:
+        authorization_url: The provider's authorization endpoint with the request
+            parameters. The browser that received the response must be the one
+            that navigates to it.
+    """
+
+    authorization_url: StrictStr = Field(..., description="Provider authorization URL to navigate to")

@@ -77,7 +77,6 @@ from sqlalchemy.sql import func
 if TYPE_CHECKING:
     from jafaal.api_keys.models import UsersApiKeys
     from jafaal.credentials.models import LocalCredential
-    from jafaal.identity_providers.link_tokens.models import IdpLinkToken
     from jafaal.identity_providers.links.models import IdentityLink
     from jafaal.mfa.backup_codes.models import MFABackupCode
     from jafaal.mfa.models import UsersMFA
@@ -176,10 +175,6 @@ class UserMixin:
     @declared_attr
     def user_identity_providers(cls) -> Mapped[list[IdentityLink]]:
         return relationship("IdentityLink", back_populates="users", cascade="all, delete-orphan")
-
-    @declared_attr
-    def idp_link_tokens(cls) -> Mapped[list[IdpLinkToken]]:
-        return relationship("IdpLinkToken", back_populates="users", cascade="all, delete-orphan")
 
     @declared_attr
     def oauth_states(cls) -> Mapped[list[OAuthState]]:

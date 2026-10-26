@@ -267,7 +267,6 @@ module = [
     "jafaal.api_keys.models",
     "jafaal.credentials.models",
     "jafaal.identity_providers.models",
-    "jafaal.identity_providers.link_tokens.models",
     "jafaal.identity_providers.links.models",
     "jafaal.mfa.backup_codes.models",
     "jafaal.mfa.models",

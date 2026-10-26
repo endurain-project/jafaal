@@ -148,7 +148,6 @@ _UUID_E2E = textwrap.dedent(
         "jafaal_users_sessions",
         "jafaal_users_api_keys",
         "jafaal_users_local_credentials",
-        "jafaal_idp_link_tokens",
         "jafaal_users_identity_providers",
         "jafaal_mfa_backup_codes",
         "jafaal_users_mfa",

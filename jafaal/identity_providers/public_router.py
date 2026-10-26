@@ -34,6 +34,7 @@ import jafaal.identity_providers.schema as idp_schema
 import jafaal.identity_providers.service as idp_service
 import jafaal.oauth_state.crud as oauth_state_crud
 import jafaal.oauth_state.models as oauth_state_models
+import jafaal.oauth_state.utils as oauth_state_utils
 import jafaal.orm as jafaal_orm
 import jafaal.ports as jafaal_ports
 import jafaal.rate_limit as jafaal_rate_limit
@@ -216,6 +217,7 @@ def _resolve_callback_target(
     idp_slug: str,
     state: str,
     iss: str | None,
+    request: Request,
     db: Session,
 ) -> tuple[idp_models.IdentityProvider, oauth_state_models.OAuthState]:
     """Resolve the provider and the unused OAuth state a callback names.
@@ -227,6 +229,7 @@ def _resolve_callback_target(
         idp_slug: Provider slug from the callback URL.
         state: The opaque state parameter.
         iss: The provider's ``iss`` parameter, if it sent one.
+        request: The incoming request, for the link flow's browser binding.
         db: Active database session.
 
     Returns:
@@ -234,8 +237,9 @@ def _resolve_callback_target(
 
     Raises:
         NotFoundError: If the provider is unknown or disabled.
-        InvalidRequestError: If the issuer does not match, or the state is
-            unknown, expired, or already used.
+        InvalidRequestError: If the issuer does not match, the state is unknown,
+            expired, or already used, or it is a link flow finished from another
+            browser than the one that started it.
     """
     idp = idp_crud.get_identity_provider_by_slug(idp_slug, db)
     if not idp or not idp.enabled:
@@ -248,6 +252,9 @@ def _resolve_callback_target(
     if not oauth_state:
         logger.warning(f"OAuth state not found in database: {state[:8]}...")
         raise jafaal_exceptions.InvalidRequestError("Invalid or expired OAuth state")
+
+    if oauth_state.purpose == "link":
+        oauth_state_utils.require_browser_binding(request, state)
 
     return idp, oauth_state
 
@@ -464,7 +471,7 @@ async def handle_callback(
         # is reported *at* the client's redirect URI (RFC 6749 §4.1.2.1).
         # Both halves are pure database work and this endpoint must stay async
         # for the provider round trips below, so each runs in a worker thread.
-        idp, oauth_state = await run_in_threadpool(_resolve_callback_target, idp_slug, state, iss, db)
+        idp, oauth_state = await run_in_threadpool(_resolve_callback_target, idp_slug, state, iss, request, db)
         await run_in_threadpool(_claim_callback_state, idp, oauth_state, state, request)
 
         logger.debug(f"OAuth callback received for state {state[:8]}... (purpose={oauth_state.purpose})")

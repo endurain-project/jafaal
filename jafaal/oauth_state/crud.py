@@ -16,6 +16,9 @@ from jafaal.orm import UserId
 
 logger = logging.getLogger(__name__)
 
+#: How long an OAuth state stays redeemable. The browser-binding cookie lives as long.
+STATE_LIFETIME = timedelta(minutes=10)
+
 
 @db_errors.handle_db_errors
 def get_oauth_state_by_id_and_not_used(state_id: str, db: Session) -> oauth_state_models.OAuthState | None:
@@ -165,7 +168,7 @@ def create_oauth_state(
     Raises:
         JafaalError: 500 error if database operation fails.
     """
-    expires_at = datetime.now(UTC) + timedelta(minutes=10)
+    expires_at = datetime.now(UTC) + STATE_LIFETIME
 
     oauth_state = oauth_state_models.OAuthState(
         id=state_id,

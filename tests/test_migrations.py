@@ -44,6 +44,9 @@ MIGRATIONS_DATABASE_URL = os.environ.get("JAFAAL_TEST_MIGRATIONS_DATABASE_URL")
 #: The last revision with unprefixed table names.
 LEGACY_HEAD = "0007_credential_must_change"
 
+#: The table ``0009_drop_idp_link_tokens`` removes.
+DROPPED_LINK_TOKENS = f"{_names.PREFIX}idp_link_tokens"
+
 
 def _fresh_engine():
     if MIGRATIONS_DATABASE_URL:
@@ -178,7 +181,7 @@ def test_upgrading_through_every_revision_matches_models_exactly(migration_engin
     engine = migration_engine
     _create_host_users(engine)
     revisions = [script.revision for script in ScriptDirectory.from_config(migrations._config()).walk_revisions()]
-    for revision in reversed(revisions[1:]):
+    for revision in reversed(revisions[revisions.index(LEGACY_HEAD) :]):
         migrations.upgrade(engine, revision)
         assert migrations.db_revision(engine) == revision
     assert jafaal_orm.legacy_table_names() <= _tables(engine)
@@ -314,11 +317,14 @@ def test_the_rename_revision_knows_every_index_and_constraint(migration_engine):
     )
     rename = script.module
 
-    listed_tables = {f"{_names.PREFIX}{table}" for table, _ in rename._TABLES}
+    # ``0009`` drops the link-token table, so no model maps it any more.
+    listed_tables = {f"{_names.PREFIX}{table}" for table, _ in rename._TABLES} - {DROPPED_LINK_TOKENS}
     assert listed_tables == jafaal_orm.jafaal_table_names()
     assert {table for table, _ in rename._TABLES} == jafaal_orm.legacy_table_names()
 
     for table, indexes in rename._TABLES:
+        if f"{_names.PREFIX}{table}" == DROPPED_LINK_TOKENS:
+            continue
         model = Base.metadata.tables[f"{_names.PREFIX}{table}"]
         flagged = {
             (tuple(column.name for column in index.columns), bool(index.unique))
@@ -855,8 +861,9 @@ def test_an_unprefixed_name_is_the_hosts():
 
 
 def test_legacy_names_are_the_prefixed_names_without_the_prefix():
-    assert {
-        name.removeprefix(_names.PREFIX) for name in jafaal_orm.jafaal_table_names()
+    # The link-token table is gone from the models but still names a 0.3 schema.
+    assert {name.removeprefix(_names.PREFIX) for name in jafaal_orm.jafaal_table_names()} | {
+        "idp_link_tokens"
     } == jafaal_orm.legacy_table_names()
 
 
@@ -962,3 +969,25 @@ def test_a_uuid_host_with_its_own_naming_convention_migrates_without_drift():
     )
     assert result.returncode == 0, f"subprocess failed:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
     assert "CONVENTION_HOST_OK" in result.stdout, result.stdout
+
+
+# --------------------------------------------------------------------------- #
+# Dropping the link-token table (0009)
+# --------------------------------------------------------------------------- #
+
+
+def test_the_link_token_table_is_dropped_and_restored_by_0009(migration_engine):
+    engine = migration_engine
+    _create_host_users(engine)
+    migrations.upgrade(engine, "0008_prefix_table_names")
+    assert DROPPED_LINK_TOKENS in _tables(engine)
+
+    migrations.upgrade(engine)
+    assert DROPPED_LINK_TOKENS not in _tables(engine)
+    assert _differences(engine, _copied_metadata()) == []
+
+    migrations.downgrade(engine, "0008_prefix_table_names")
+    assert DROPPED_LINK_TOKENS in _tables(engine)
+    columns = {column["name"] for column in inspect(engine).get_columns(DROPPED_LINK_TOKENS)}
+    assert columns == {"id", "token_hash", "user_id", "idp_id", "created_at", "expires_at", "used", "ip_address"}
+    assert migrations.db_revision(engine) == "0008_prefix_table_names"

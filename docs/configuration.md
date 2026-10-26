@@ -279,7 +279,7 @@ the settings and invalidates settings-derived caches (e.g. the token manager).
 | `polling` | `"30/minute"` | Budget hint for read-only status polling, including sign-up confirmation. |
 | `trusted_proxies` | `()` | Peers **and forwarding hops** whose `X-Forwarded-For`/`X-Real-IP` are honoured (empty = trust only the direct peer). |
 | `ssrf_allowed_hosts` | `()` | Hosts/CIDRs exempted from the SSRF private-address guard. |
-| `idp_link_browser_binding` | `True` | Bind the identity-provider link-token handoff to the browser that minted the token (a `SameSite=Strict` cookie), so an attacker cannot get a victim to link the victim's provider identity to the attacker's account. A native app that opens a separate system browser has no shared cookie jar and needs this `False`, accepting that attack for every client. |
+| `idp_link_browser_binding` | `True` | Bind an identity-provider link to the browser that started it (an `HttpOnly`, `SameSite=Lax` cookie the callback requires), so an attacker cannot get a victim to finish a link that attaches the victim's provider identity to the attacker's account. A native app that opens a separate system browser has no shared cookie jar and needs this `False`, accepting that attack for every client. |
 | `idp_require_https` | `True` | Require `https` for identity-provider endpoints (authorization, token, userinfo, JWKS, discovery, revocation); set `False` to allow `http://` for local or self-hosted development. |
 | `include_pii` | `True` | Include direct identifiers (username/IP/email) in `jafaal.audit` records; set `False` for PII-minimal retention. |
 

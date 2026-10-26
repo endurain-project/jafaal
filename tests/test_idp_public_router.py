@@ -108,6 +108,11 @@ def _create_oauth_state(
         session.close()
 
 
+def _bind_browser(client, state_id):
+    """Give ``client`` the cookie the request that started a link flow would have set."""
+    client.cookies.set(oauth_state_utils.binding_cookie_name(), state_id)
+
+
 def _create_session_linked(user, state_id, session_id="sess-1"):
     session = _session()
     try:
@@ -187,6 +192,7 @@ def test_callback_link_mode_returns_to_the_registered_uri(client, make_user, mon
     user = make_user()
     idp = _create_idp(slug="goog")
     state_id = _create_oauth_state(idp.id, user_id=user.id, purpose="link")
+    _bind_browser(client, state_id)
 
     async def fake_handle(*args, **kwargs):
         return {"user": user, "mode": "link", "token_data": {}, "userinfo": {}}
@@ -571,6 +577,7 @@ def test_callback_link_and_step_up_are_not_blocked_when_idp_login_is_off(client,
     previous = _disable_idp_login()
     try:
         link_state = _create_oauth_state(idp.id, user_id=user.id, purpose="link")
+        _bind_browser(client, link_state)
         link = client.get(f"{BASE}/callback/goog?code=abc&state={link_state}", follow_redirects=False)
         assert _query(link.headers["location"])["idp_link"] == "success"
 

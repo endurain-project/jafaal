@@ -161,7 +161,6 @@ one subkey per purpose) into the key that MACs every **stored token digest**:
 | API key | key creation |
 | Password-reset token | reset requested |
 | Sign-up / email-verification token | sign-up |
-| IdP account-link token | link initiated |
 
 Those digests are covered by the same `secret_key_fallbacks` overlap: the read
 side computes the digest under the primary subkey **and** each fallback subkey,

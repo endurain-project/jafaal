@@ -70,7 +70,7 @@ protections and the deployment steps you are responsible for.
   environments, with an optional `__Secure-`/`__Host-` name prefix.
 - **Per-purpose key derivation.** `secret_key` is never used directly as a MAC
   key. Each job (session refresh-token digest, rotated-token lookup, CSRF, API
-  keys, password-reset / sign-up / IdP-link tokens, the WebAuthn user handle)
+  keys, password-reset / sign-up tokens, the WebAuthn user handle)
   gets its own HKDF-SHA256 subkey with a distinct label, so a digest computed
   for one purpose can never be replayed as another.
 - **Zero-downtime key rotation.** Both the JWT signing key and the Fernet at-rest

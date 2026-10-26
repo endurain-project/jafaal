@@ -471,6 +471,11 @@ class _MetadataOps:
         """Report a dialect no migration branches on, so the portable path is taken."""
         return SimpleNamespace(dialect=SimpleNamespace(name="metadata"))
 
+    def create_table(self, table_name: str, *columns: Any, **kwargs: Any) -> None:
+        from sqlalchemy import Table
+
+        Table(table_name, self._metadata, *columns)
+
     def drop_table(self, table_name: str, **kwargs: Any) -> None:
         self._metadata.remove(self._table(table_name))
 
@@ -508,7 +513,10 @@ def _copy_jafaal_metadata(metadata: Any) -> Any:
     from jafaal.orm import get_active_base, jafaal_table_names, legacy_table_names
 
     copied = MetaData(naming_convention=get_active_base().metadata.naming_convention)
-    known = jafaal_table_names() | legacy_table_names() | {"users"}
+    # A table an older revision has and the models no longer map (the link-token
+    # table) is only known by its name, so both spellings of every old name count.
+    old_names = legacy_table_names() | {f"{_names.PREFIX}{name}" for name in legacy_table_names()}
+    known = jafaal_table_names() | old_names | {"users"}
     for table_name in sorted(known & set(metadata.tables)):
         metadata.tables[table_name].to_metadata(copied)
     return copied

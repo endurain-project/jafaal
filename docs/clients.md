@@ -62,33 +62,37 @@ OAuth 2.1) and is not advertised in the discovery document.
 ### Linking identity providers
 
 A signed-in user manages their own provider links with the `profile` scope
-(listing needs `identity_providers:read`, which a regular token carries). A
-browser navigation cannot send a bearer header, so linking is a handoff:
+(listing needs `identity_providers:read`, which a regular token carries). Linking
+is two steps:
 
-1. `POST /profile/idp/{idp_id}/link/token` with the bearer and the step-up body
-   (`current_password`, and `mfa_code` when MFA is on). It returns a `token` that
-   lives for about a minute and works once.
-2. Navigate the browser (top-level) to
-   `GET /profile/idp/{idp_id}/link?token=...&client_id=...&redirect_uri=...&state=...`.
-   `client_id` and `redirect_uri` must be registered, exactly as for
-   `/auth/authorize`. JAFAAL claims the token and redirects to the provider.
-3. The provider's callback (`/public/idp/callback/{slug}`) completes the link and
-   returns the browser to `redirect_uri` with `idp_link=success`.
+1. `POST /profile/idp/{idp_id}/link` with the bearer, the step-up body
+   (`current_password`, and `mfa_code` when MFA is on) and the `client_id`,
+   `redirect_uri` and `state` of an authorization request. `client_id` and
+   `redirect_uri` must be registered, exactly as for `/auth/authorize`. It returns
+   `{"authorization_url": ...}`.
+2. Navigate the browser (top-level) to `authorization_url`. The provider's
+   callback (`/public/idp/callback/{slug}`) completes the link and returns the
+   browser to `redirect_uri` with `idp_link=success`.
 
-Step 1 also sets a short-lived `SameSite=Strict`, `HttpOnly` cookie, and step 2
-is refused without it. That binds the token to the browser that minted it: the
-link URL carries the token, so without the cookie an attacker could mint a token
-for their own account and have a victim open the URL, linking the *victim's*
-provider identity to the *attacker's* account. It means the SPA and the API must
-be same-site, and that a native app which hands the URL to a separate system
-browser cannot use this handoff. A deployment that must serve such clients can
-set `SsoSettings.idp_link_browser_binding=False`, which accepts that attack for
-every client (the client is named on the navigation, which the attacker controls).
+Step 1 also sets a short-lived `HttpOnly`, `SameSite=Lax` cookie that holds the
+OAuth state id, and the callback refuses a link without it. That binds the flow
+to the browser that started it: without the cookie an attacker could start a link
+for their own account and have a victim finish it, linking the *victim's*
+provider identity to the *attacker's* account. A browser SPA must send step 1
+with credentials (`fetch(..., {credentials: "include"})`) and be same-site with
+the API. A native app that does step 1 itself and opens `authorization_url` in a
+separate system browser has no shared cookie jar and cannot satisfy the binding;
+a deployment that must serve such clients can set
+`SsoSettings.idp_link_browser_binding=False`, which accepts that attack for every
+client.
+
+A browser holds one binding at a time: starting a second link replaces the first's
+cookie, and the first then fails at the callback. Finish or restart one link at a time.
 
 | Method | Path | Body | Returns |
 |---|---|---|---|
 | `GET` | `/profile/idp` | none | The caller's links: `idp_id`, `idp_name`, `idp_slug`, `linked_at`, `last_login` (never a subject or token) |
-| `POST` | `/profile/idp/{idp_id}/link/token` | step-up | `{"token", "expires_at"}` |
+| `POST` | `/profile/idp/{idp_id}/link` | step-up, `client_id`, `redirect_uri`, `state` | `{"authorization_url"}` |
 | `POST` | `/profile/idp/{idp_id}/unlink` | step-up | `204`. Refuses with `400 last_sign_in_method` when the account has no password, no passkey and no other link |
 
 On unlink, JAFAAL revokes the provider's tokens held on the link (best-effort)

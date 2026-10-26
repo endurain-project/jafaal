@@ -27,7 +27,7 @@ flowchart LR
 | Threat | Defence |
 | --- | --- |
 | Password brute-force / credential stuffing | Argon2 hashing, per-account **and** per-source-IP progressive lockout, host rate limiter (required when deployed). |
-| Forced identity-provider linking | The link-token handoff is bound to the minting browser by a `SameSite=Strict` cookie (`SsoSettings.idp_link_browser_binding`), so a victim opening an attacker's link URL cannot complete it. |
+| Forced identity-provider linking | A link is started by an authenticated `POST` and bound to the starting browser by an `HttpOnly`, `SameSite=Lax` cookie that the callback requires (`SsoSettings.idp_link_browser_binding`), so a victim sent to an attacker's provider URL cannot finish it. No JAFAAL-issued credential travels in a URL: only the OAuth `state`, which the protocol puts there. |
 | Username enumeration | Timing-equalised dummy Argon2 verify on the "user not found" and "SSO-only" branches; generic error messages. |
 | JWT forgery / `alg=none` / algorithm confusion | HS256 pinned; the decode allow-list is mandatory and cannot drift from the signing algorithm. |
 | OIDC ID-token forgery | Signature verified against the IdP JWKS with an asymmetric-only allow-list (blocks RS256→HS256 confusion); `iss`/`aud`/`exp`/`iat`, `nonce`, `azp`, and (when present) `at_hash` are validated. |
@@ -38,7 +38,7 @@ flowchart LR
 | OAuth authorization-code replay / mix-up | Single-use, atomically-consumed `state`; `state`→IdP binding; PKCE (S256) on both the mobile client flow and the upstream authorization-code exchange to the IdP. |
 | SSRF via OIDC URLs | Scheme allow-list (`https` required for IdP endpoints by default), every resolved address must be public, pinned-IP connection (DNS-rebinding defence), guard re-runs on each redirect hop. |
 | Source-IP spoofing | Proxy headers honoured only from configured `trusted_proxies`. |
-| Secret disclosure at rest | IdP secrets, MFA secrets, rotated refresh tokens, and upstream PKCE verifiers are Fernet-encrypted; every stored token digest (session refresh token, rotated refresh token, CSRF, API keys, password-reset / sign-up / IdP-link tokens) is a keyed HMAC under a **per-purpose HKDF subkey**, so one job's digest can never be replayed as another's. `AuthSettings` redacts all key material from its `repr`. |
+| Secret disclosure at rest | IdP secrets, MFA secrets, rotated refresh tokens, and upstream PKCE verifiers are Fernet-encrypted; every stored token digest (session refresh token, rotated refresh token, CSRF, API keys, password-reset / sign-up tokens) is a keyed HMAC under a **per-purpose HKDF subkey**, so one job's digest can never be replayed as another's. `AuthSettings` redacts all key material from its `repr`. |
 
 ## What JAFAAL does NOT do (host responsibilities)
 

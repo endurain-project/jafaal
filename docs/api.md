@@ -50,8 +50,7 @@ Relying Party. They are not OpenID Provider endpoints.
 | `POST` | `/profile/mfa/disable`, `/profile/mfa/verify` | Disable MFA after step-up or verify a current MFA code |
 | `GET`, `POST` | `/profile/mfa/backup-codes` | Read backup-code status or replace codes after step-up |
 | `GET` | `/profile/idp` | List the caller's linked identity providers |
-| `POST` | `/profile/idp/{idp_id}/link/token` | Trade a bearer (plus step-up) for a short-lived, single-use link token |
-| `GET` | `/profile/idp/{idp_id}/link?token=...` | Browser navigation: claim the token, redirect to the provider |
+| `POST` | `/profile/idp/{idp_id}/link` | Start linking a provider after step-up; returns the provider's `authorization_url` to navigate to |
 | `POST` | `/profile/idp/{idp_id}/unlink` | Unlink a provider after step-up; refuses the last sign-in method |
 | `GET` | `/users/{user_id}/identity-providers` | List a user's linked providers (that user or a superuser) |
 | `DELETE` | `/users/{user_id}/identity-providers/{idp_id}` | Unlink a provider as an administrator; `?force=true` overrides the last-method rule |

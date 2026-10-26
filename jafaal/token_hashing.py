@@ -67,8 +67,6 @@ class KeyPurpose(StrEnum):
     SIGN_UP = "jafaal/v1/sign-up"
     #: Digest of a caller-held sign-up status polling handle.
     SIGN_UP_STATUS = "jafaal/v1/sign-up-status"
-    #: Digest of an identity-provider account-link token.
-    IDP_LINK = "jafaal/v1/idp-link"
     #: Digest of an RFC 6749 authorization code.
     AUTHORIZATION_CODE = "jafaal/v1/authorization-code"
     #: Opaque WebAuthn user handle.
