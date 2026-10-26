@@ -37,6 +37,15 @@
 - Mount through `create_auth_router`; the core never imports HTTP concerns, so route code is the only place for `Request`, `Response` and cookies.
 - Response models on every JSON route; status 200 (read), 201 (create), 204 (delete).
 
+## Pagination
+- A new list route that returns data growing with use is paginated; never return an unbounded list.
+- Offset lists take `page` and `num_records` and return the items with `total`, `page`, `num_records` and a server-derived `next`.
+- Defaults: 25 per page, maximum 200; reject a larger `num_records` instead of clamping silently.
+- `total` carries the same filters and access scoping as `items`, so it never leaks rows the caller cannot see.
+- Lists that grow at the head (feeds, audit trails) use keyset (cursor) pagination, so concurrent inserts cannot duplicate or skip rows.
+- Batch sizes for maintenance and external I/O have their own constants; do not reuse the page size.
+- Small per-user collections that already return a plain list (such as API keys) stay as they are; changing a released response shape is breaking.
+
 ## Errors
 - Raise `JafaalError` subclasses (`jafaal/exceptions.py`); the edge handler (`jafaal.error_handler`) renders them.
 - Authentication failures answer identically for "no such user" and "wrong credential" (anti-enumeration).
