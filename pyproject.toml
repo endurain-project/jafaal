@@ -153,6 +153,10 @@ exclude-newer = "30 days"
 cryptography = "0 days"
 # pyOpenSSL -- 26.4.0 lifts the <50 cap on cryptography required by WebAuthn.
 pyopenssl = "0 days"
+# pillow -- 38 advisories (CVE-2026-96636 et al.), fixed in 13.0.0.
+pillow = "0 days"
+# certifi -- PYSEC-2026-4320, fixed in 2026.10.19.
+certifi = "0 days"
 
 [[tool.uv.index]]
 name = "pypi"
