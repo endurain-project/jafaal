@@ -1,6 +1,6 @@
 [project]
 name = "jafaal"
-version = "0.3.0"
+version = "0.3.1"
 description = "Just Another FastAPI Authentication Library"
 authors = [{name = "João Vitória Silva", email = "joao@endurain.com"}]
 license = {text = "MIT"}
@@ -21,15 +21,15 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "fastapi>=0.136.0",
-    "starlette>=0.46.0",
-    "sqlalchemy>=2.0.49",
-    "pydantic[email]>=2.12.5",
-    "joserfc>=1.6.4",
-    "cryptography>=50.0.0",
-    "pwdlib[argon2]>=0.3.0",
+    "fastapi>=0.141.1",
+    "starlette>=1.7.0",
+    "sqlalchemy>=2.1.1",
+    "pydantic[email]>=2.13.5",
+    "joserfc>=1.7.5",
+    "cryptography>=50.0.2",
+    "pwdlib[argon2]>=0.3.1",
     "httpx>=0.28.1",
-    "python-multipart>=0.0.9",
+    "python-multipart>=0.0.32",
     "user-agents>=2.2.0",
 ]
 
@@ -47,86 +47,87 @@ Security = "https://github.com/endurain-project/jafaal/blob/main/SECURITY.md"
 [project.optional-dependencies]
 # Multi-factor authentication (TOTP verification + QR-code provisioning).
 mfa = [
-    "pyotp>=2.9.0",
+    "pyotp>=2.10.0",
     "qrcode[pil]>=8.2",
 ]
 # Single sign-on / OpenID Connect identity providers.
 sso = [
-    "authlib>=1.6.11",
+    "authlib>=1.8.0",
 ]
 # WebAuthn / passkeys (registration + authentication ceremonies).
 webauthn = [
-    "webauthn>=2.2.0",
+    "webauthn>=3.0.1",
 ]
 # Distributed state store (shared lockout / MFA-replay across workers) via the
 # jafaal.adapters.RedisStateStore adapter.
 redis = [
-    "redis>=5.0.0",
+    "redis>=8.1.0",
 ]
 # Alembic migrations for JAFAAL's companion tables (jafaal.migrations).
 migrations = [
-    "alembic>=1.13",
+    "alembic>=1.20.0",
 ]
 # Convenience: every optional feature at once.
 all = [
-    "pyotp>=2.9.0",
+    "pyotp>=2.10.0",
     "qrcode[pil]>=8.2",
-    "authlib>=1.6.11",
-    "redis>=5.0.0",
-    "alembic>=1.13",
-    "webauthn>=2.2.0",
+    "authlib>=1.8.0",
+    "redis>=8.1.0",
+    "alembic>=1.20.0",
+    "webauthn>=3.0.1",
 ]
 
 [dependency-groups]
 typecheck = [
-    "mypy>=1.20.2",
+    "mypy>=2.3.1",
+    "ty",
     "types-qrcode",
     "types-Authlib",
 ]
 lint = [
-    "ruff>=0.15.12",
-    "import-linter>=2.5",
+    "ruff>=0.16.9",
+    "import-linter>=2.15",
 ]
 test = [
     "httpx>=0.28.1",
-    "faker>=40.15.0",
-    "hypothesis>=6.150.0",
-    "pytest>=9.0.3",
-    "pytest-asyncio>=1.3.0",
+    "faker>=40.39.0",
+    "hypothesis>=6.168.1",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
     # The MFA/SSO suites exercise the optional features, so their deps are
     # required to run the full test matrix.
-    "pyotp>=2.9.0",
+    "pyotp>=2.10.0",
     "qrcode[pil]>=8.2",
-    "authlib>=1.6.11",
+    "authlib>=1.8.0",
     # The Redis state-store adapter is tested hermetically against fakeredis.
-    "redis>=5.0.0",
-    "fakeredis>=2.21.0",
+    "redis>=8.1.0",
+    "fakeredis>=2.38.0",
     # The migrations suite drives the packaged Alembic revisions.
-    "alembic>=1.13",
+    "alembic>=1.20.0",
     # The WebAuthn/passkey suite exercises the registration/authentication ceremonies.
-    "webauthn>=2.2.0",
+    "webauthn>=3.0.1",
     # The real-crypto passkey tests build COSE public keys for the software
     # authenticator. Transitively a py_webauthn dependency; declared explicitly
     # so the test build never relies on it implicitly.
-    "cbor2>=5.6",
+    "cbor2>=6.1.4",
 ]
 # Real database drivers for the CI database matrix (Postgres + MySQL). The
 # default test run uses in-memory SQLite (built into Python) and needs neither;
 # set JAFAAL_TEST_DATABASE_URL to run the suite against another backend.
 test-db = [
-    "psycopg[binary]>=3.2",
-    "pymysql>=1.1",
+    "psycopg[binary]>=3.3.6",
+    "pymysql>=1.2.3",
 ]
 dev = [
-    "hatch>=1.16.5",
+    "hatch>=1.18.1",
     {include-group = "lint"},
     {include-group = "test"},
     {include-group = "typecheck"},
 ]
 docs = [
-    "mkdocs-material>=9.6.0",
-    "mkdocstrings[python]>=0.29.0",
+    "mkdocs-material>=9.7.7",
+    "mkdocstrings[python]>=1.0.6",
 ]
 
 [tool.uv]
@@ -134,7 +135,7 @@ docs = [
 # ``==`` match makes every uv patch release a hard build failure (locally and on
 # the CI runner) for no reproducibility gain — the lockfile is what pins the
 # dependency set.
-required-version = ">=0.12.5,<0.13"
+required-version = ">=0.13.5,<0.14"
 # Supply-chain cooldown: refuse dependency versions published in the last 30
 # days, so a compromised release has time to be caught before it can enter a
 # build.
@@ -188,6 +189,7 @@ format-check = "ruff format --check ."
 lint-imports = "lint-imports"
 test = "pytest"
 typecheck = "mypy"
+typecheck-ty = "ty check"
 validate = ["lint", "format", "test", "typecheck"]
 check = ["lint-check", "format-check", "lint-imports", "test", "typecheck"]
 
@@ -265,6 +267,14 @@ module = [
     "jafaal.webauthn.models",
 ]
 follow_imports = "skip"
+
+# ty runs next to mypy as a non-blocking, advisory checker (mypy is the gate).
+[tool.ty.environment]
+python-version = "3.12"
+
+[tool.ty.src]
+include = ["jafaal"]
+exclude = ["jafaal/migrations/env.py", "jafaal/migrations/versions/"]
 
 [tool.ruff]
 target-version = "py312"
