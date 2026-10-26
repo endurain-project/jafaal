@@ -508,3 +508,73 @@ def test_passkeys_enabled_does_not_raise_the_policy_error(install, client):
     install(RuntimeProvider(methods=ports.LoginMethods(password=False)))
     response = client.post("/api/v1/public/webauthn/authenticate/begin", json={"username": "alice"})
     assert response.json().get("code") != "login_method_disabled"
+
+
+# --------------------------------------------------------------------------- #
+# Password-flow completion steps, log volume, provider load
+# --------------------------------------------------------------------------- #
+
+
+def test_disabling_passwords_also_refuses_the_mfa_completion_of_a_password_login(install, client):
+    install(RuntimeProvider(methods=ports.LoginMethods(password=False)))
+    verify = client.post(
+        "/api/v1/auth/mfa/verify",
+        json={"mfa_token": "t", "mfa_code": "123456", "client_id": NATIVE_CLIENT_ID},
+    )
+    assert verify.status_code == 403
+    assert verify.json()["code"] == "login_method_disabled"
+
+    passkey = client.post(
+        "/api/v1/auth/webauthn/mfa/complete",
+        json={"mfa_token": "t", "credential": {}, "client_id": NATIVE_CLIENT_ID},
+    )
+    assert passkey.status_code == 403
+    assert passkey.json()["code"] == "login_method_disabled"
+
+
+def test_clamp_warnings_are_throttled_then_repeat(install, settings_override, caplog, monkeypatch):
+    settings_override(max_access_token_minutes=30)
+    install(RuntimeProvider(lifetimes=ports.TokenLifetimes(600, 7)))
+    ports._log_last_emitted.clear()
+    clock = [1000.0]
+    monkeypatch.setattr(ports.time, "monotonic", lambda: clock[0])
+
+    with caplog.at_level(logging.WARNING, logger="jafaal.ports"):
+        for _ in range(5):
+            ports.resolve_token_lifetimes()
+        assert len(caplog.records) == 1
+        clock[0] += ports._LOG_THROTTLE_SECONDS + 1
+        ports.resolve_token_lifetimes()
+    assert len(caplog.records) == 2
+
+
+def test_a_failing_provider_logs_once_per_interval_but_always_refuses(install, caplog):
+    install(_Broken())
+    ports._log_last_emitted.clear()
+    with caplog.at_level(logging.ERROR, logger="jafaal.ports"):
+        for _ in range(4):
+            with pytest.raises(exc.SettingsUnavailableError):
+                ports.resolve_login_methods()
+    assert len(caplog.records) == 1
+
+
+def test_a_login_reads_each_provider_method_a_bounded_number_of_times(install, make_user, client):
+    make_user(username="alice", password="Str0ng!Pass")
+
+    class Counting(RuntimeProvider):
+        def __init__(self):
+            super().__init__()
+            self.calls: dict[str, int] = {}
+
+        def get_token_lifetimes(self):
+            self.calls["lifetimes"] = self.calls.get("lifetimes", 0) + 1
+            return super().get_token_lifetimes()
+
+    provider = install(Counting())
+    response = client.post(
+        "/api/v1/auth/login",
+        data={"username": "alice", "password": "Str0ng!Pass", "client_id": NATIVE_CLIENT_ID},
+    )
+    assert response.status_code == 200
+    # One read to issue both tokens, one for the session's expiry.
+    assert provider.calls["lifetimes"] <= 2

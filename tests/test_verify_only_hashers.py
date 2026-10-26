@@ -221,3 +221,75 @@ def test_no_startup_warning_without_verify_only_hashers(configure_passwords, cap
     with caplog.at_level(logging.WARNING, logger="jafaal.factory"):
         jafaal.create_auth_router()
     assert all(getattr(r, "warning_code", None) != "verify_only_hashers_configured" for r in caplog.records)
+
+
+# --------------------------------------------------------------------------- #
+# Scheme-independent failure cost, and bcrypt's input cap
+# --------------------------------------------------------------------------- #
+
+
+def _multi_scheme_hasher(**kwargs) -> PasswordHasher:
+    from pwdlib import PasswordHash
+
+    return PasswordHasher(hasher=PasswordHash([Argon2Hasher(), BCRYPT]), **kwargs)
+
+
+def _count_by_scheme(hasher: PasswordHasher, monkeypatch) -> dict[str, int]:
+    counts = {"argon2": 0, "bcrypt": 0}
+    for scheme, inner in zip(("argon2", "bcrypt"), hasher._password_hash.hashers, strict=True):
+        real = inner.verify
+
+        def counted(*args, _scheme=scheme, _real=real, **kwargs):
+            counts[_scheme] += 1
+            return _real(*args, **kwargs)
+
+        monkeypatch.setattr(inner, "verify", counted)
+    return counts
+
+
+@pytest.mark.parametrize("flag", [False, True])
+def test_a_failed_check_costs_the_same_whichever_scheme_holds_the_hash(flag, monkeypatch):
+    hasher = _multi_scheme_hasher(verify_unnormalized_input=flag)
+    stored = {"argon2": hasher.hash_password("right-password-1"), "bcrypt": BCRYPT.hash("right-password-1")}
+    counts = _count_by_scheme(hasher, monkeypatch)
+
+    observed = {}
+    for scheme, hashed in stored.items():
+        counts.update(argon2=0, bcrypt=0)
+        assert hasher.verify_and_update("wrong-password", hashed) == (False, None)
+        observed[scheme] = dict(counts)
+    counts.update(argon2=0, bcrypt=0)
+    hasher.dummy_verify()
+    observed["unknown user"] = dict(counts)
+
+    # An account's scheme, or its absence, cannot be read off the work done.
+    assert observed["argon2"] == observed["bcrypt"] == observed["unknown user"]
+    assert all(n >= 1 for n in observed["argon2"].values())
+
+
+def test_a_password_over_bcrypts_limit_verifies_the_truncated_input_and_rehashes_in_full(
+    configure_passwords, make_user, client, db
+):
+    configure_passwords(verify_only_hashers=(BCRYPT,))
+    user = make_user(username="alice", password=None)
+    long_password = "p" * 100
+    # An older system silently hashed only the first 72 bytes.
+    _store_hash(user, BCRYPT.hash(long_password[:72]), db)
+
+    assert _login(client, "alice", long_password).status_code == 200
+    upgraded = _stored(user, db)
+    assert upgraded.startswith("$argon2id$")
+    hasher = get_password_hasher()
+    assert hasher.verify_password(long_password, upgraded)
+    # The Argon2id replacement is the whole password, not its 72-byte prefix.
+    assert not hasher.verify_password(long_password[:72], upgraded)
+
+
+def test_a_wrong_long_password_against_a_bcrypt_hash_is_a_401_not_an_error(configure_passwords, make_user, client, db):
+    configure_passwords(verify_only_hashers=(BCRYPT,))
+    user = make_user(username="alice", password=None)
+    original = BCRYPT.hash("q" * 72)
+    _store_hash(user, original, db)
+
+    assert _login(client, "alice", "r" * 100).status_code == 401
+    assert _stored(user, db) == original

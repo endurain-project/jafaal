@@ -75,6 +75,16 @@ browser navigation cannot send a bearer header, so linking is a handoff:
 3. The provider's callback (`/public/idp/callback/{slug}`) completes the link and
    returns the browser to `redirect_uri` with `idp_link=success`.
 
+Step 1 also sets a short-lived `SameSite=Strict`, `HttpOnly` cookie, and step 2
+is refused without it. That binds the token to the browser that minted it: the
+link URL carries the token, so without the cookie an attacker could mint a token
+for their own account and have a victim open the URL, linking the *victim's*
+provider identity to the *attacker's* account. It means the SPA and the API must
+be same-site, and that a native app which hands the URL to a separate system
+browser cannot use this handoff. A deployment that must serve such clients can
+set `SsoSettings.idp_link_browser_binding=False`, which accepts that attack for
+every client (the client is named on the navigation, which the attacker controls).
+
 | Method | Path | Body | Returns |
 |---|---|---|---|
 | `GET` | `/profile/idp` | none | The caller's links: `idp_id`, `idp_name`, `idp_slug`, `linked_at`, `last_login` (never a subject or token) |

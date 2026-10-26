@@ -27,6 +27,7 @@ flowchart LR
 | Threat | Defence |
 | --- | --- |
 | Password brute-force / credential stuffing | Argon2 hashing, per-account **and** per-source-IP progressive lockout, host rate limiter (required when deployed). |
+| Forced identity-provider linking | The link-token handoff is bound to the minting browser by a `SameSite=Strict` cookie (`SsoSettings.idp_link_browser_binding`), so a victim opening an attacker's link URL cannot complete it. |
 | Username enumeration | Timing-equalised dummy Argon2 verify on the "user not found" and "SSO-only" branches; generic error messages. |
 | JWT forgery / `alg=none` / algorithm confusion | HS256 pinned; the decode allow-list is mandatory and cannot drift from the signing algorithm. |
 | OIDC ID-token forgery | Signature verified against the IdP JWKS with an asymmetric-only allow-list (blocks RS256→HS256 confusion); `iss`/`aud`/`exp`/`iat`, `nonce`, `azp`, and (when present) `at_hash` are validated. |

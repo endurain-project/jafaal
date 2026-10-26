@@ -139,13 +139,15 @@ def create_tokens(
         # Generate a unique session ID
         session_id = str(uuid4())
 
-    # Create the access, refresh tokens and csrf token
+    # Create the access, refresh tokens and csrf token. The lifetimes are resolved
+    # once so a settings provider is read once per issue, not once per token.
+    lifetimes = token_manager.resolve_lifetimes()
     access_token_exp, access_token = token_manager.create_token(
-        session_id, user, jafaal_token_manager.TokenType.ACCESS, client, requested_scope
+        session_id, user, jafaal_token_manager.TokenType.ACCESS, client, requested_scope, lifetimes
     )
 
     refresh_token_exp, refresh_token = token_manager.create_token(
-        session_id, user, jafaal_token_manager.TokenType.REFRESH, client, requested_scope
+        session_id, user, jafaal_token_manager.TokenType.REFRESH, client, requested_scope, lifetimes
     )
 
     csrf_token = token_manager.create_csrf_token()
@@ -205,6 +207,8 @@ def _is_secure_cookie_environment() -> bool:
 def set_refresh_token_cookie(
     response: Response,
     refresh_token: str,
+    *,
+    expires: datetime | None = None,
 ) -> None:
     """Set the canonical refresh-token cookie with consistent attributes.
 
@@ -212,13 +216,21 @@ def set_refresh_token_cookie(
     SSO token exchange) must go through this helper so that
     ``HttpOnly``, ``SameSite=Strict``, ``Path``, expiry, and the
     ``Secure`` flag stay in lockstep.
+
+    Args:
+        response: The response that receives the cookie.
+        refresh_token: The refresh token to store.
+        expires: When the cookie expires. Pass the token's own ``exp`` so the two
+            agree and the settings provider is not read again; ``None`` resolves
+            the refresh lifetime now.
     """
     settings = jafaal_settings.get_settings()
     clear_refresh_token_cookies(response)
     response.set_cookie(
         key=settings.effective_refresh_cookie_name,
         value=refresh_token,
-        expires=datetime.now(UTC) + timedelta(days=jafaal_ports.resolve_token_lifetimes().refresh_token_days),
+        expires=expires
+        or datetime.now(UTC) + timedelta(days=jafaal_ports.resolve_token_lifetimes().refresh_token_days),
         httponly=True,
         path=settings.sessions.refresh_cookie_path,
         secure=_is_secure_cookie_environment(),
@@ -332,7 +344,7 @@ def build_token_response(
         # for in-memory storage. Cookie attributes are centralised in
         # set_refresh_token_cookie so login, /refresh, and the code exchange
         # stay in lockstep.
-        set_refresh_token_cookie(response, refresh_token)
+        set_refresh_token_cookie(response, refresh_token, expires=refresh_token_exp)
         body["csrf_token"] = csrf_token
     else:
         # All tokens in the JSON body for secure platform storage.

@@ -12,6 +12,7 @@ claims the token atomically and redirects to the provider; the provider's
 callback completes the link through the shared callback route.
 """
 
+import hmac
 from typing import Annotated
 
 from fastapi import Depends, Query, Request, Response, Security, status
@@ -26,6 +27,7 @@ import jafaal._internal.user_guards as jafaal_user_guards
 import jafaal.dependencies as jafaal_dependencies
 import jafaal.exceptions as jafaal_exceptions
 import jafaal.identity_providers.link_tokens.schema as idp_link_token_schema
+import jafaal.identity_providers.link_tokens.utils as jafaal_link_tokens
 import jafaal.identity_providers.links.schema as links_schema
 import jafaal.identity_providers.service as idp_service
 import jafaal.identity_service as jafaal_identity_service
@@ -34,6 +36,7 @@ import jafaal.orm as jafaal_orm
 import jafaal.principal as jafaal_principal
 import jafaal.rate_limit as jafaal_rate_limit
 import jafaal.schema as jafaal_schema
+import jafaal.settings as jafaal_settings
 import jafaal.utils as jafaal_utils
 from jafaal._core import network
 from jafaal.orm import UserId
@@ -44,6 +47,27 @@ admin_router = jafaal_orm.auth_router()
 _PROFILE = Security(jafaal_dependencies.check_scopes, scopes=["profile"])
 _READ = Security(jafaal_dependencies.check_scopes, scopes=["identity_providers:read"])
 _WRITE = Security(jafaal_dependencies.check_scopes, scopes=["identity_providers:write"])
+
+
+def _link_cookie_name() -> str:
+    """Return the name of the cookie that binds a link token to its browser."""
+    return f"{jafaal_settings.get_settings().effective_refresh_cookie_name}_idp_link"
+
+
+def _require_browser_binding(request: Request, token: str) -> None:
+    """Refuse a link navigation from a browser that did not mint the token.
+
+    Protects against forced linking: an attacker mints a token for their own
+    account and lures a victim to the ``link`` URL, so that the victim's provider
+    identity is attached to the attacker's account. The cookie set at mint time
+    lives only in the minting browser, so the victim's navigation lacks it.
+    Checked before the token is claimed, so a refusal does not spend it.
+    """
+    if not jafaal_settings.get_settings().sso.idp_link_browser_binding:
+        return
+    bound = request.cookies.get(_link_cookie_name())
+    if bound is None or not hmac.compare_digest(bound.encode(), token.encode()):
+        raise jafaal_exceptions.InvalidTokenError("Invalid or expired link token")
 
 
 def _read_links(user_id: UserId, db: Session) -> list[links_schema.IdentityProviderLinkRead]:
@@ -111,9 +135,20 @@ def create_identity_provider_link_token(
             409 if it is already linked.
     """
     jafaal_utils.apply_no_store(response)
-    return link_service.generate_link_token(
+    link_token = link_service.generate_link_token(
         idp_id, body, request, principal.user_id, identity_service, step_up_store, db
     )
+    if jafaal_settings.get_settings().sso.idp_link_browser_binding:
+        response.set_cookie(
+            key=_link_cookie_name(),
+            value=link_token.token,
+            max_age=jafaal_link_tokens.TOKEN_EXPIRY_SECONDS,
+            httponly=True,
+            secure=jafaal_utils._is_secure_cookie_environment(),
+            samesite="strict",
+            path="/",
+        )
+    return link_token
 
 
 @router.get("/idp/{idp_id}/link", status_code=status.HTTP_302_FOUND)
@@ -145,6 +180,7 @@ async def link_identity_provider(
             404 if the provider is missing or disabled; 409 if already linked.
     """
     authorization_code_service.validate_client_and_redirect_uri(client_id, redirect_uri)
+    _require_browser_binding(request, token)
     client_ip = network.get_ip_address(request)
     state_id, nonce = oauth_state_utils.create_state_id_and_nonce()
 
@@ -174,11 +210,13 @@ async def link_identity_provider(
     authorization_url = await idp_service.idp_service.initiate_link(idp, request, user_id, db, oauth_state_id=state_id)
     # The URL the browser arrived on carries the token: keep it out of caches and
     # out of any Referer sent from the provider's page.
-    return RedirectResponse(
+    redirect = RedirectResponse(
         url=authorization_url,
         status_code=status.HTTP_302_FOUND,
         headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
     )
+    redirect.delete_cookie(_link_cookie_name(), path="/")  # the token is spent
+    return redirect
 
 
 @router.post("/idp/{idp_id}/unlink", status_code=status.HTTP_204_NO_CONTENT)

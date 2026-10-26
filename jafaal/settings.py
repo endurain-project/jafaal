@@ -599,6 +599,19 @@ class SsoSettings:
             provider (discovery, JWKS, userinfo). Timeouts bound how long JAFAAL
             waits, not how much it accepts, and the JWKS is cached — so without
             a cap one hostile response is a persistent memory cost.
+        idp_link_browser_binding: When ``True`` (default), the link-token
+            handoff is bound to the browser that minted the token: minting sets a
+            short-lived ``HttpOnly``, ``SameSite=Strict`` cookie and the
+            ``link`` navigation is refused without it. Without that binding an
+            attacker can mint a token for their own account and get a victim to
+            open the URL, which links the *victim's* provider identity to the
+            attacker's account. The cookie needs the app and the API to be
+            same-site and a browser that holds it between the two requests; a
+            native app that hands the URL to a separate system browser has no
+            shared cookie jar and cannot use the handoff with this on. Set
+            ``False`` only if you accept that attack for such clients: it
+            applies to every client, because the client is named on the
+            attacker-controlled navigation.
     """
 
     idp_require_https: bool = True
@@ -607,6 +620,7 @@ class SsoSettings:
     step_up_grant_ttl_seconds: int = 120
     id_token_leeway_seconds: int = 60
     max_response_bytes: int = 1024 * 1024
+    idp_link_browser_binding: bool = True
 
     def __post_init__(self) -> None:
         if self.step_up_reauth_max_age_seconds <= 0:

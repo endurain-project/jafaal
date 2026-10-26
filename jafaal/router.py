@@ -572,6 +572,9 @@ def verify_mfa_and_login(
         JafaalError: If the ticket is unknown/expired, the MFA code is invalid,
             the user is not found, or ``client_id`` is unregistered.
     """
+    # The second step of a password login. A ticket minted before password login
+    # was switched off must not complete it afterwards.
+    login_methods.require_password_login()
     client = authorization_code_service.resolve_login_client(mfa_request.client_id, request)
 
     # Resolve the pending login from the opaque ticket. Because the ticket is a

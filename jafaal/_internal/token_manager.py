@@ -521,6 +521,13 @@ class TokenManager:
             )
             raise
 
+    def resolve_lifetimes(self) -> jafaal_ports.TokenLifetimes | None:
+        """Return the runtime lifetimes, or ``None`` when this manager has no resolver.
+
+        ``None`` means the constructor lifetimes apply (direct or isolated use).
+        """
+        return self._lifetimes_resolver() if self._lifetimes_resolver is not None else None
+
     def create_token(
         self,
         session_id: str,
@@ -528,6 +535,7 @@ class TokenManager:
         token_type: TokenType,
         client: jafaal_settings.OAuthClient | None = None,
         requested_scope: Sequence[str] | None = None,
+        lifetimes: jafaal_ports.TokenLifetimes | None = None,
     ) -> tuple[datetime, str]:
         """
         Creates a JWT token for a user session with appropriate access scope
@@ -546,6 +554,10 @@ class TokenManager:
             requested_scope: The ``scope`` the client asked for (RFC 6749 §3.3),
                 applied as a final narrowing bound. ``None`` means "everything
                 this client and user are entitled to".
+            lifetimes: The lifetimes to apply, when the caller has already
+                resolved them (see :meth:`resolve_lifetimes`) so that issuing
+                an access and a refresh token reads the settings provider once.
+                ``None`` resolves them now (or uses the constructor lifetimes).
 
         Returns:
             tuple[datetime, str]: A tuple containing the token's expiration
@@ -571,11 +583,9 @@ class TokenManager:
 
         # Set now
         issued_at = datetime.now(UTC)
-        if self._lifetimes_resolver is not None:
-            lifetimes = self._lifetimes_resolver()
-            access_minutes, refresh_days = lifetimes.access_token_minutes, lifetimes.refresh_token_days
-        else:
-            access_minutes, refresh_days = self.access_token_expire_minutes, self.refresh_token_expire_days
+        lifetimes = lifetimes or self.resolve_lifetimes()
+        access_minutes = lifetimes.access_token_minutes if lifetimes else self.access_token_expire_minutes
+        refresh_days = lifetimes.refresh_token_days if lifetimes else self.refresh_token_expire_days
         lifetime = (
             timedelta(days=refresh_days) if token_type == TokenType.REFRESH else timedelta(minutes=access_minutes)
         )

@@ -24,6 +24,7 @@ import asyncio
 import contextlib
 import logging
 import threading
+import time
 from collections.abc import Coroutine, Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -351,6 +352,25 @@ def session_policy_from_settings() -> SessionPolicy:
     return SessionPolicy(sessions.idle_timeout_enabled, sessions.idle_timeout_hours, sessions.absolute_timeout_hours)
 
 
+#: Seconds between repeats of the same provider diagnostic. Resolvers run several
+#: times per request, so an unthrottled warning or traceback would fill the log
+#: for as long as a provider value stays over its ceiling or the store stays down.
+_LOG_THROTTLE_SECONDS: Final = 60.0
+_log_last_emitted: dict[str, float] = {}
+_log_throttle_lock = threading.Lock()
+
+
+def _should_log(key: str) -> bool:
+    """Return whether the diagnostic ``key`` is due, marking it emitted if so."""
+    now = time.monotonic()
+    with _log_throttle_lock:
+        last = _log_last_emitted.get(key)
+        if last is not None and now - last < _LOG_THROTTLE_SECONDS:
+            return False
+        _log_last_emitted[key] = now
+        return True
+
+
 def _provider_method(name: str) -> Any | None:
     """Return the installed provider's ``name`` method, or ``None`` when absent."""
     if not _settings_provider.is_configured():
@@ -372,10 +392,12 @@ def _call_provider[T](name: str, method: Any, expected: type[T]) -> T:
     try:
         value = method()
     except Exception as err:
-        logger.error("SettingsProvider.%s failed; refusing to fall back to defaults: %s", name, err, exc_info=err)
+        if _should_log(f"failed:{name}"):
+            logger.error("SettingsProvider.%s failed; refusing to fall back to defaults: %s", name, err, exc_info=err)
         raise SettingsUnavailableError() from err
     if not isinstance(value, expected):
-        logger.error("SettingsProvider.%s returned %s, expected %s", name, type(value).__name__, expected.__name__)
+        if _should_log(f"type:{name}"):
+            logger.error("SettingsProvider.%s returned %s, expected %s", name, type(value).__name__, expected.__name__)
         raise SettingsUnavailableError()
     return value
 
@@ -384,13 +406,16 @@ def _clamp(code: str, field_name: str, value: int, ceiling: int | None) -> int:
     """Return ``value`` capped at ``ceiling`` (``None`` = no cap), warning when it is."""
     if ceiling is None or value <= ceiling:
         return value
-    logger.warning(
-        "SettingsProvider value for %s (%d) exceeds the AuthSettings ceiling (%d); using the ceiling.",
-        field_name,
-        value,
-        ceiling,
-        extra={"warning_code": code},
-    )
+    if _should_log(f"clamp:{field_name}:{value}:{ceiling}"):
+        logger.warning(
+            "SettingsProvider value for %s (%d) exceeds the AuthSettings ceiling (%d); using the ceiling. "
+            "Repeats are suppressed for %d seconds.",
+            field_name,
+            value,
+            ceiling,
+            int(_LOG_THROTTLE_SECONDS),
+            extra={"warning_code": code},
+        )
     return ceiling
 
 

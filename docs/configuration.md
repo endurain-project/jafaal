@@ -279,6 +279,7 @@ the settings and invalidates settings-derived caches (e.g. the token manager).
 | `polling` | `"30/minute"` | Budget hint for read-only status polling, including sign-up confirmation. |
 | `trusted_proxies` | `()` | Peers **and forwarding hops** whose `X-Forwarded-For`/`X-Real-IP` are honoured (empty = trust only the direct peer). |
 | `ssrf_allowed_hosts` | `()` | Hosts/CIDRs exempted from the SSRF private-address guard. |
+| `idp_link_browser_binding` | `True` | Bind the identity-provider link-token handoff to the browser that minted the token (a `SameSite=Strict` cookie), so an attacker cannot get a victim to link the victim's provider identity to the attacker's account. A native app that opens a separate system browser has no shared cookie jar and needs this `False`, accepting that attack for every client. |
 | `idp_require_https` | `True` | Require `https` for identity-provider endpoints (authorization, token, userinfo, JWKS, discovery, revocation); set `False` to allow `http://` for local or self-hosted development. |
 | `include_pii` | `True` | Include direct identifiers (username/IP/email) in `jafaal.audit` records; set `False` for PII-minimal retention. |
 
@@ -341,8 +342,16 @@ event is emitted.
   until you drop the hasher and have them reset.
 * **bcrypt truncates at 72 bytes.** That affects only the verification of old
   hashes: a password sharing its first 72 bytes with the real one verifies against
-  such a hash. It never affects new hashes, which are Argon2id and use the whole
-  password.
+  such a hash. (bcrypt 5 refuses a longer input outright, where the systems that
+  made these hashes truncated silently; JAFAAL verifies the first 72 bytes
+  instead, rather than fail the login.) It never affects new hashes: a match is
+  re-hashed from the *whole* password as Argon2id.
+* **Timing.** With verify-only schemes configured, a failed check runs the same
+  number of verifications against every scheme (the one holding the hash for real,
+  the others against dummy hashes), and so does the unknown-user dummy verify.
+  Account existence and which scheme an account still uses are not readable from
+  latency, at the price of roughly the sum of the schemes' costs per failed
+  login while migrating.
 * **Normalization.** JAFAAL NFC-normalizes a password before verifying it. A hash
   made by a system that did not will fail for a non-ASCII password typed in
   another form. `verify_unnormalized_input=True` retries a failed check once with
@@ -377,6 +386,11 @@ overrides. JAFAAL reads them only through `resolve_token_lifetimes()`,
 !!! warning "Hot path"
     The methods run on the request path, and JAFAAL does **not** cache. If your
     source is slow, cache it in the provider. They take no `Session`.
+
+**Log volume.** The resolvers run several times per request, so the clamp
+warning and a failing provider's error are each logged at most once a minute;
+every call still clamps or refuses. Each login reads `get_token_lifetimes()` about
+twice (tokens, session expiry).
 
 **Ceilings.** A provider value above `max_access_token_minutes`,
 `max_refresh_token_days` or `max_absolute_timeout_hours` is clamped to it and
@@ -415,7 +429,7 @@ account and records no failed attempt.
 
 | Flag | Refused when `False` | Never blocked |
 | --- | --- | --- |
-| `password` | `POST /auth/login`, which is also the password step of the `/auth/authorize` handoff | |
+| `password` | `POST /auth/login` (also the password step of the `/auth/authorize` handoff), and the second step of a password login: `/auth/mfa/verify` and `/auth/webauthn/mfa/complete`, so a ticket minted before the flag was switched off cannot finish a login | |
 | `identity_providers` | `/auth/authorize` with `idp` (a redirect with `error=access_denied`), the login callback under `/public/idp/callback/*`; `GET /public/idp` returns `[]` | linking a provider to an existing account, IdP step-up re-authentication |
 | `passkeys` | `/public/webauthn/authenticate/*` | passkeys as a second factor, passkey credential management |
 

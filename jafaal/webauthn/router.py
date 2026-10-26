@@ -285,6 +285,9 @@ def complete_second_factor(
     db: Annotated[Session, Depends(jafaal_orm.get_db)],
 ) -> dict:
     """Verify a second-factor passkey assertion and complete the login."""
+    # The second step of a password login: refuse a ticket minted before
+    # password login was switched off.
+    login_methods.require_password_login()
     client = authorization_code_service.resolve_login_client(data.client_id, request)
     # The ticket is the caller's proof that it satisfied the password factor;
     # resolving the pending login from it (rather than from a public username)

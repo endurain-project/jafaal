@@ -17,6 +17,10 @@ from pwdlib.hashers.argon2 import Argon2Hasher
 import jafaal.settings as jafaal_settings
 from jafaal.exceptions import PasswordPolicyError
 
+#: bcrypt's input limit. A verify-only scheme that refuses a longer password is
+#: asked about its first 72 bytes instead (see ``PasswordHasher._verify_stored``).
+_VERIFY_ONLY_INPUT_LIMIT_BYTES = 72
+
 
 def normalize_password(password: str) -> str:
     """Return ``password`` in Unicode NFC form.
@@ -166,6 +170,14 @@ class PasswordHasher:
         # channel that dummy_verify() exists to close.
         self._dummy_hash = self._password_hash.hash(secrets.token_urlsafe(32))
 
+        # With verify-only schemes configured, one dummy hash per scheme, so a
+        # failed check can cost the same whichever scheme the stored hash uses
+        # (see :meth:`_burn_other_schemes`). Empty, and free, with Argon2id alone.
+        hashers = tuple(self._password_hash.hashers)
+        self._scheme_dummies: tuple[tuple[HasherProtocol, str], ...] = (
+            tuple((hasher, hasher.hash(secrets.token_urlsafe(32))) for hasher in hashers) if len(hashers) > 1 else ()
+        )
+
     def hash_password(self, password: str) -> str:
         """
         Hashes the provided password using the configured password hashing algorithm.
@@ -194,6 +206,40 @@ class PasswordHasher:
         """
         return self._verify_with_raw_retry(plain_password, hashed_password)[0]
 
+    def _verify_stored(self, candidate: str, hashed_password: str) -> tuple[bool, str | None]:
+        """``verify_and_update`` that copes with a verify-only scheme's input cap.
+
+        bcrypt refuses an input over 72 bytes, where the systems that produced
+        such hashes truncated it silently. On that refusal the first 72 bytes are
+        verified instead, and a match is re-hashed from the *full* candidate: the
+        Argon2id replacement must not inherit the truncation.
+        """
+        try:
+            return self._password_hash.verify_and_update(candidate, hashed_password)
+        except ValueError:
+            valid, _ = self._password_hash.verify_and_update(
+                candidate.encode()[:_VERIFY_ONLY_INPUT_LIMIT_BYTES], hashed_password
+            )
+            return (True, self._password_hash.hash(candidate)) if valid else (False, None)
+
+    def _burn_other_schemes(self, used: HasherProtocol | None) -> None:
+        """Pay for the schemes that did *not* verify ``hashed_password``.
+
+        A failed check costs one scheme's real verification, so with verify-only
+        schemes configured an account's scheme would show in its latency, and an
+        unknown username (which pays for the dummy hash alone) would stand out
+        from a migrating account's. Every failed check, and
+        :meth:`dummy_verify`, therefore runs the same number of verifications
+        against every scheme's dummy hash except ``used``, the one whose real or
+        dummy verification the caller already paid for.
+        """
+        candidate = secrets.token_urlsafe(32)
+        for hasher, dummy in self._scheme_dummies:
+            if hasher is used:
+                continue
+            for _ in range(2 if self._verify_unnormalized_input else 1):
+                hasher.verify(candidate, dummy)
+
     def _verify_with_raw_retry(self, plain_password: str, hashed_password: str) -> tuple[bool, str | None]:
         """Verify the NFC form, then (if enabled) the raw input, as one costed path.
 
@@ -205,11 +251,15 @@ class PasswordHasher:
         form so the stored hash is the one NFC input will verify against.
         """
         normalized = normalize_password(plain_password)
-        valid, updated = self._password_hash.verify_and_update(normalized, hashed_password)
-        if valid or not self._verify_unnormalized_input:
+        valid, updated = self._verify_stored(normalized, hashed_password)
+        if valid:
             return valid, updated
-        if self._password_hash.verify(plain_password, hashed_password):
-            return True, self._password_hash.hash(normalized)
+        if self._verify_unnormalized_input:
+            raw_valid, _ = self._verify_stored(plain_password, hashed_password)
+            if raw_valid:
+                return True, self._password_hash.hash(normalized)
+        if self._scheme_dummies:
+            self._burn_other_schemes(next((h for h, _ in self._scheme_dummies if h.identify(hashed_password)), None))
         return False, None
 
     def verify_and_update(self, plain_password: str, hashed_password: str) -> tuple[bool, str | None]:
@@ -251,6 +301,8 @@ class PasswordHasher:
         self._password_hash.verify(candidate, self._dummy_hash)
         if self._verify_unnormalized_input:
             self._password_hash.verify(candidate, self._dummy_hash)
+        if self._scheme_dummies:
+            self._burn_other_schemes(self._password_hash.current_hasher)
 
     @staticmethod
     def generate_password(length: int = 8) -> str:

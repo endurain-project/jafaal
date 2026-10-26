@@ -461,3 +461,70 @@ def test_a_composite_sink_skips_a_sink_that_predates_the_event(caplog):
 
     assert new.events == [event]
     assert not caplog.records
+
+
+# --------------------------------------------------------------------------- #
+# Browser binding (forced-linking protection)
+# --------------------------------------------------------------------------- #
+
+
+def _fresh_client():
+    """A second browser: same app, empty cookie jar."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    app.include_router(jafaal.create_auth_router(app=app), prefix="/api/v1")
+    return TestClient(app)
+
+
+def test_a_victims_browser_cannot_redeem_an_attackers_link_token(client, make_user):
+    make_user(username="attacker")
+    idp = _create_idp()
+    token = _mint(client, _bearer(client, "attacker"), idp, current_password=PASSWORD).json()["token"]
+
+    victim_browser = _fresh_client()
+    assert _claim(victim_browser, token, idp).status_code == 401
+
+    # Refusing did not spend the token: the attacker's own browser still can.
+    assert _claim(client, token, idp).status_code == 302
+
+
+def test_a_cookie_for_another_token_does_not_bind(client, make_user):
+    make_user(username="alice")
+    idp = _create_idp()
+    first = _mint(client, _bearer(client, "alice"), idp, current_password=PASSWORD).json()["token"]
+    second = _mint(client, _bearer(client, "alice"), idp, current_password=PASSWORD).json()["token"]
+
+    # The jar now holds the second token's cookie.
+    assert _claim(client, first, idp).status_code == 401
+    assert _claim(client, second, idp).status_code == 302
+
+
+def test_the_binding_cookie_is_strict_http_only_and_cleared_when_spent(client, make_user):
+    make_user(username="alice")
+    idp = _create_idp()
+    minted = _mint(client, _bearer(client, "alice"), idp, current_password=PASSWORD)
+    cookie = minted.headers["set-cookie"].lower()
+    assert "httponly" in cookie
+    assert "samesite=strict" in cookie
+    assert "max-age=60" in cookie
+
+    claimed = _claim(client, minted.json()["token"], idp)
+    assert claimed.status_code == 302
+    assert "max-age=0" in claimed.headers["set-cookie"].lower()
+
+
+def test_binding_can_be_switched_off_for_clients_that_cannot_hold_a_cookie(client, make_user):
+    make_user(username="alice")
+    idp = _create_idp()
+    original = jafaal.get_settings()
+    from conftest import replace_settings
+
+    jafaal.configure(replace_settings(original, idp_link_browser_binding=False))
+    try:
+        minted = _mint(client, _bearer(client, "alice"), idp, current_password=PASSWORD)
+        assert "set-cookie" not in minted.headers or "_idp_link" not in minted.headers["set-cookie"]
+        assert _claim(_fresh_client(), minted.json()["token"], idp).status_code == 302
+    finally:
+        jafaal.configure(original)
