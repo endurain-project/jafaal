@@ -77,26 +77,6 @@ _MIGRATIONS_DIR = Path(__file__).resolve().parent
 #: The first revision after which every table carries the ``jafaal_`` prefix.
 _PREFIXED_FROM = "0008_prefix_table_names"
 
-#: An unversioned pre-0.4 schema holds every one of these. Several of the names
-#: are generic enough to be the host's own, so two of them together mark one - a
-#: lone ``identity_providers`` is taken to be the host's and left alone.
-_LEGACY_BASELINE_TABLES = frozenset(
-    {
-        "users_local_credentials",
-        "users_sessions",
-        "rotated_refresh_tokens",
-        "users_api_keys",
-        "users_mfa",
-        "mfa_backup_codes",
-        "identity_providers",
-        "users_identity_providers",
-        "idp_link_tokens",
-        "oauth_states",
-        "password_reset_tokens",
-        "sign_up_tokens",
-    }
-)
-
 
 class SchemaCompatibilityError(RuntimeError):
     """An unversioned JAFAAL schema cannot safely be adopted."""
@@ -156,9 +136,10 @@ def _fresh_install_prefix(connection: Any, revision: str) -> str:
     ``jafaal_`` for a fresh database heading to :data:`_PREFIXED_FROM` or later, so
     JAFAAL never creates an unprefixed table that a host's own could already
     occupy; empty everywhere else (see :mod:`jafaal.migrations._names`). Fresh
-    means no recorded revision and no JAFAAL table. A single unprefixed table of
-    the same name proves nothing, since it may be the host's; two of the baseline
-    tables together are an unversioned old schema, which is refused.
+    means no recorded revision and no JAFAAL table. An unprefixed table of the
+    same name proves nothing, since it may be the host's; JAFAAL-specific old
+    names (see :func:`jafaal.orm.is_legacy_schema`) mark an unversioned old
+    schema, which is refused.
 
     Raises:
         SchemaCompatibilityError: If the database holds unversioned JAFAAL
@@ -169,7 +150,7 @@ def _fresh_install_prefix(connection: Any, revision: str) -> str:
     from alembic.script import ScriptDirectory
     from sqlalchemy import inspect
 
-    from jafaal.orm import jafaal_table_names
+    from jafaal.orm import is_legacy_schema, jafaal_table_names
 
     context = MigrationContext.configure(connection, opts={"version_table": VERSION_TABLE})
     if context.get_current_revision() is not None:
@@ -181,7 +162,7 @@ def _fresh_install_prefix(connection: Any, revision: str) -> str:
         raise SchemaCompatibilityError(
             "The database holds unversioned JAFAAL tables; call adopt_existing_schema(engine) before upgrade(engine)"
         )
-    if len(_LEGACY_BASELINE_TABLES & present) >= 2:
+    if is_legacy_schema(present):
         # An unversioned pre-0.4 schema: creating the prefixed tables beside it
         # would leave its data behind.
         raise SchemaCompatibilityError(
@@ -642,7 +623,7 @@ def adopt_existing_schema(engine: Engine) -> bool:
     from alembic.runtime.migration import MigrationContext
     from sqlalchemy import inspect
 
-    from jafaal.orm import jafaal_table_names, legacy_table_names
+    from jafaal.orm import is_legacy_schema, jafaal_table_names, legacy_table_names
 
     with engine.connect() as connection:
         context = MigrationContext.configure(connection, opts={"version_table": VERSION_TABLE})
@@ -653,9 +634,9 @@ def adopt_existing_schema(engine: Engine) -> bool:
         present = set(inspector.get_table_names())
         if present & jafaal_table_names():
             candidate_names = jafaal_table_names()
-        elif len(_LEGACY_BASELINE_TABLES & present) >= 2:
-            # Unprefixed tables from before 0.4. Two baseline tables are needed:
-            # one alone is the host's own.
+        elif is_legacy_schema(present):
+            # Unprefixed tables from before 0.4, recognised by JAFAAL-specific
+            # names: generic ones alone may be the host's own.
             candidate_names = legacy_table_names()
         else:
             return False

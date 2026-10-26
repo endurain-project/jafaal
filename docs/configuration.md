@@ -824,9 +824,11 @@ Migrate before calling `create_all()` with 0.4: on a database that still holds
 the old tables it raises `SchemaCompatibilityError` rather than creating empty
 `jafaal_*` tables beside them.
 
-A single table of yours that happens to carry one of the old names (say your own
-`identity_providers`) is not mistaken for JAFAAL's: an unversioned schema is only
-recognised by two or more of them.
+Tables of yours that happen to carry generic old names (say your own
+`identity_providers`, `password_reset_tokens` or `sign_up_tokens`) are not
+mistaken for JAFAAL's: an unversioned 0.3 schema is only recognised by two or more
+of the names specific to JAFAAL, such as `users_local_credentials`,
+`idp_link_tokens` or `mfa_backup_codes` (see `jafaal.orm.is_legacy_schema`).
 
 Prefer a single, unified Alembic history? Point your `env.py` at your
 `Base.metadata` and add the package's `versions` directory to your

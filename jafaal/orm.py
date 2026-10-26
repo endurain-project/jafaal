@@ -85,6 +85,7 @@ __all__ = [
     "get_db",
     "get_sessionmaker",
     "get_user_model",
+    "is_legacy_schema",
     "is_models_mapped",
     "is_sessionmaker_configured",
     "jafaal_table_names",
@@ -250,8 +251,8 @@ def _refuse_create_beside_legacy_schema(metadata: Any, connection: Any, **kw: An
     would seem gone while the data sat untouched in the old tables. The
     migrations rename the old tables in place instead.
 
-    Two or more of the old names mark an old schema; a single one is taken to be
-    the host's own table, as :func:`jafaal.migrations.adopt_existing_schema` does.
+    An old schema is recognised by :func:`is_legacy_schema`, as the migrations
+    recognise it, so a host's own tables with generic old names never trigger it.
 
     Raises:
         jafaal.migrations.SchemaCompatibilityError: If JAFAAL tables are about to
@@ -261,7 +262,7 @@ def _refuse_create_beside_legacy_schema(metadata: Any, connection: Any, **kw: An
     if not creating:
         return
     present = set(sa_inspect(connection).get_table_names())
-    if present & jafaal_table_names() or len(present & legacy_table_names()) < 2:
+    if present & jafaal_table_names() or not is_legacy_schema(present):
         return
     from jafaal.migrations import SchemaCompatibilityError
 
@@ -619,6 +620,34 @@ def legacy_table_names() -> frozenset[str]:
     tables and adopt an old unversioned schema.
     """
     return _LEGACY_TABLE_NAMES
+
+
+#: The old names specific enough to JAFAAL that a host is unlikely to own one.
+#: Generic ones such as ``password_reset_tokens`` or ``identity_providers`` are
+#: left out: a host may well have both, and must still be able to install JAFAAL.
+_LEGACY_MARKER_TABLES: frozenset[str] = frozenset(
+    {
+        "users_local_credentials",
+        "rotated_refresh_tokens",
+        "users_mfa",
+        "mfa_backup_codes",
+        "users_identity_providers",
+        "idp_link_tokens",
+    }
+)
+
+
+def is_legacy_schema(table_names: set[str] | frozenset[str]) -> bool:
+    """Return whether ``table_names`` hold JAFAAL's tables from before 0.4.
+
+    Two of the JAFAAL-specific old names mark such a schema; a complete one has
+    all of them. The migrations and the ``create_all()`` check use this one test,
+    so a host's own tables with generic old names are never taken for JAFAAL's.
+
+    Args:
+        table_names: The tables present in the database.
+    """
+    return len(_LEGACY_MARKER_TABLES & table_names) >= 2
 
 
 def jafaal_table_names() -> frozenset[str]:

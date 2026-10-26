@@ -460,6 +460,39 @@ def test_create_all_works_beside_a_hosts_own_same_named_table(migration_engine):
     assert jafaal_orm.jafaal_table_names() <= _tables(engine)
 
 
+_GENERIC_OLD_NAMES = ("password_reset_tokens", "sign_up_tokens", "identity_providers", "users_sessions")
+
+
+def _create_hosts_generic_tables(engine):
+    with engine.begin() as connection:
+        for name in _GENERIC_OLD_NAMES:
+            connection.exec_driver_sql(f"CREATE TABLE {name} (host_id INTEGER PRIMARY KEY)")
+
+
+def test_a_host_with_several_generic_old_names_can_migrate(migration_engine):
+    """Generic old names are common in host schemas; only JAFAAL-specific ones
+    mark a 0.3 schema, so neither adoption nor upgrade() mistakes these."""
+    engine = migration_engine
+    _create_host_users(engine)
+    _create_hosts_generic_tables(engine)
+
+    assert migrations.adopt_existing_schema(engine) is False
+    migrations.upgrade(engine)
+
+    assert _differences(engine, _copied_metadata()) == []
+    assert set(_GENERIC_OLD_NAMES) <= _tables(engine)
+
+
+def test_a_host_with_several_generic_old_names_can_create_all(migration_engine):
+    engine = migration_engine
+    _create_host_users(engine)
+    _create_hosts_generic_tables(engine)
+
+    Base.metadata.create_all(engine)
+
+    assert jafaal_orm.jafaal_table_names() <= _tables(engine)
+
+
 def test_create_all_after_the_rename_is_a_no_op(migration_engine):
     engine = migration_engine
     _create_host_users(engine)
