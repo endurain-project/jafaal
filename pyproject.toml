@@ -54,6 +54,12 @@ mfa = [
 sso = [
     "authlib>=1.8.0",
 ]
+# Verify-only bcrypt hashes, for a host migrating from a bcrypt-based scheme.
+# JAFAAL imports no bcrypt code itself: the host passes a ``BcryptHasher()`` as
+# ``PasswordSettings.verify_only_hashers``.
+bcrypt = [
+    "pwdlib[bcrypt]>=0.3.1",
+]
 # WebAuthn / passkeys (registration + authentication ceremonies).
 webauthn = [
     "webauthn>=3.0.1",
@@ -75,6 +81,7 @@ all = [
     "redis>=8.1.0",
     "alembic>=1.20.0",
     "webauthn>=3.0.1",
+    "pwdlib[bcrypt]>=0.3.1",
 ]
 
 [dependency-groups]
@@ -89,6 +96,7 @@ lint = [
     "import-linter>=2.15",
 ]
 test = [
+    "pwdlib[bcrypt]>=0.3.1",
     "httpx>=0.28.1",
     "faker>=40.39.0",
     "hypothesis>=6.168.1",

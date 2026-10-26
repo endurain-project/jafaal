@@ -9,9 +9,12 @@ protections and the deployment steps you are responsible for.
 ### Credentials
 
 - **Argon2id** password hashing (via `pwdlib`), with transparent rehashing on
-  verify when the configured cost parameters change. It is the only supported
-  algorithm: a second one exists only to read hashes you no longer want, and
-  every additional verifier is another way to get a password comparison wrong.
+  verify when the configured cost parameters change. It is the only algorithm
+  that ever *hashes*. A second one can be added for verification only, to read
+  hashes you no longer want (see
+  [Migrating from another hash scheme](configuration.md#migrating-from-another-hash-scheme));
+  every additional verifier is another way to get a password comparison wrong,
+  so remove it once the migration is done.
 - A **timing-equalising dummy verify** on the "user not found" login branch, so
   response time cannot be used to enumerate valid usernames.
 - Password hashes live in JAFAAL's own `jafaal_users_local_credentials` table, never on

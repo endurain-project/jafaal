@@ -262,6 +262,8 @@ the settings and invalidates settings-derived caches (e.g. the token manager).
 | `argon2_time_cost` | `3` | Argon2 time cost (iterations) for password hashing. |
 | `argon2_memory_cost` | `65536` | Argon2 memory cost, in KiB. |
 | `argon2_parallelism` | `4` | Argon2 parallelism (lanes). |
+| `verify_only_hashers` | `()` | pwdlib hasher instances that may verify a stored hash but never create one; see [below](#migrating-from-another-hash-scheme). |
+| `verify_unnormalized_input` | `False` | Retry a failed verification once with the raw, un-normalized input. |
 | `max_length` | `128` | Maximum accepted password length (minimum 64), enforced before hashing. Cannot exceed `jafaal.settings.PASSWORD_FIELD_MAX_LENGTH` (1024), the shared bound every password request field carries. |
 | `totp_replay_fail_open` | `False` | On a state-store outage, accept a TOTP code without replay protection instead of failing closed (503). |
 | `rp_id` | `""` | WebAuthn Relying Party ID (registrable domain, no scheme/port); defaults to the `base_url` host. |
@@ -313,6 +315,41 @@ the settings and invalidates settings-derived caches (e.g. the token manager).
     served from different origins (for example `https://app.example.com` calling
     `https://api.example.com`), list the **frontend** origin in
     `csrf_trusted_origins` or every refresh will be rejected with a 403.
+
+## Migrating from another hash scheme
+
+JAFAAL hashes with Argon2id only. A host adopting it with hashes from another
+scheme (say bcrypt, from `pwdlib[bcrypt]`) lists the hashers that may **verify**:
+
+```python
+from pwdlib.hashers.bcrypt import BcryptHasher  # pip install 'jafaal[bcrypt]'
+
+jafaal.PasswordSettings(verify_only_hashers=(BcryptHasher(),))
+```
+
+You supply the instances, so JAFAAL imports no bcrypt code. Argon2id stays first,
+so it is the only scheme that produces a hash. On a successful verification
+against another scheme the hash is re-created as Argon2id and stored in the same
+transaction as the login. That is not a password change, so no `PasswordChanged`
+event is emitted.
+
+* **Remove them when you are done.** Startup logs a
+  `verify_only_hashers_configured` warning while any are configured.
+  `jafaal.maintenance.count_non_argon2_password_hashes(db)` returns how many
+  credentials still hold a hash that is not Argon2id; it reaches `0` once every
+  active user has signed in once. Accounts that never sign in keep the old hash
+  until you drop the hasher and have them reset.
+* **bcrypt truncates at 72 bytes.** That affects only the verification of old
+  hashes: a password sharing its first 72 bytes with the real one verifies against
+  such a hash. It never affects new hashes, which are Argon2id and use the whole
+  password.
+* **Normalization.** JAFAAL NFC-normalizes a password before verifying it. A hash
+  made by a system that did not will fail for a non-ASCII password typed in
+  another form. `verify_unnormalized_input=True` retries a failed check once with
+  the raw input and, on success, re-hashes from the NFC form. Its failure path
+  always costs two verifications (the second runs even when the raw input equals
+  its NFC form), and the unknown-user dummy verify costs two as well, so timing
+  does not distinguish the cases. Enable it only if you need it.
 
 ## Runtime policy
 

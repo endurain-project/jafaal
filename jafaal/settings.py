@@ -43,6 +43,8 @@ from typing import Any
 from urllib.parse import urlparse
 
 from cryptography.fernet import Fernet
+from pwdlib.hashers import HasherProtocol
+from pwdlib.hashers.argon2 import Argon2Hasher
 
 from jafaal._core import jwk_keys
 from jafaal._core import redirect_uris as redirect_uri_policy
@@ -403,12 +405,34 @@ class PasswordSettings:
             so an unauthenticated caller cannot force unbounded Argon2 work.
             Must be at least 64 so long passphrases are accepted (NIST
             SP 800-63B). Passwords are never truncated.
+        verify_only_hashers: pwdlib hasher instances (e.g.
+            ``BcryptHasher()``) that may *verify* a stored hash but never
+            produce one. For a host migrating from another scheme: Argon2id is
+            always first, so it is the only scheme that hashes, and a successful
+            verification against any other is transparently upgraded to Argon2id
+            in the same transaction (no ``PasswordChanged`` event: it is not a
+            password change). The host supplies the instances, so JAFAAL imports
+            no code for those schemes. Remove them once
+            :func:`jafaal.maintenance.count_non_argon2_password_hashes` reaches
+            zero; a ``verify_only_hashers_configured`` startup warning says so.
+            bcrypt truncates its input at 72 bytes, which affects only the
+            verification of old hashes, never new ones.
+        verify_unnormalized_input: JAFAAL NFC-normalizes a password before
+            verifying it. A hash made by a system that did not will fail for a
+            non-ASCII password typed in another normalization form. When
+            ``True``, a failed verification of the NFC form is retried once with
+            the raw input, and a success is re-hashed from the NFC form. The
+            failure path always costs two verifications, whether or not the raw
+            form differs, so it stays indistinguishable (the unknown-user dummy
+            verify matches it). Off by default.
     """
 
     argon2_time_cost: int = 3
     argon2_memory_cost: int = 65536
     argon2_parallelism: int = 4
     max_length: int = 128
+    verify_only_hashers: tuple[HasherProtocol, ...] = ()
+    verify_unnormalized_input: bool = False
 
     def __post_init__(self) -> None:
         if self.argon2_time_cost <= 0:
@@ -417,6 +441,19 @@ class PasswordSettings:
             raise ValueError("PasswordSettings.argon2_memory_cost must be positive.")
         if self.argon2_parallelism <= 0:
             raise ValueError("PasswordSettings.argon2_parallelism must be positive.")
+        for hasher in self.verify_only_hashers:
+            if not all(
+                callable(getattr(hasher, name, None)) for name in ("identify", "hash", "verify", "check_needs_rehash")
+            ):
+                raise ValueError(
+                    "PasswordSettings.verify_only_hashers must hold pwdlib hasher instances "
+                    f"(identify/hash/verify/check_needs_rehash); got {hasher!r}."
+                )
+            if isinstance(hasher, Argon2Hasher):
+                raise ValueError(
+                    "PasswordSettings.verify_only_hashers must not contain an Argon2 hasher: Argon2id is "
+                    "always the hashing scheme, configured by the argon2_* fields."
+                )
         if self.max_length < 64:
             raise ValueError(
                 "PasswordSettings.max_length must be at least 64 so long passphrases are "

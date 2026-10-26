@@ -5,12 +5,31 @@ single write/read path for the credential table and are consumed by the auth
 boundary (``IdentityService``) rather than directly by non-auth modules.
 """
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 import jafaal.credentials.models as jafaal_credentials_models
 from jafaal._core import db_errors
 from jafaal.orm import UserId
+
+
+@db_errors.handle_db_errors
+def count_non_argon2id_hashes(db: Session) -> int:
+    """Return how many stored password hashes are not Argon2id.
+
+    Args:
+        db: SQLAlchemy database session.
+
+    Returns:
+        The number of credential rows whose hash does not start with
+        ``$argon2id$``.
+    """
+    stmt = (
+        select(func.count())
+        .select_from(jafaal_credentials_models.LocalCredential)
+        .where(jafaal_credentials_models.LocalCredential.password_hash.not_like("$argon2id$%"))
+    )
+    return int(db.execute(stmt).scalar_one())
 
 
 @db_errors.handle_db_errors

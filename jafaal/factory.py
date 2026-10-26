@@ -117,6 +117,24 @@ def _warn_on_insecure_defaults() -> None:
         )
 
     _warn_on_symmetric_signing()
+    _warn_on_verify_only_hashers()
+
+
+def _warn_on_verify_only_hashers() -> None:
+    """Remind the operator to drop verify-only hashers once the migration is done."""
+    if not jafaal_settings.is_configured():
+        return
+    hashers = jafaal_settings.get_settings().passwords.verify_only_hashers
+    if not hashers:
+        return
+    names = ", ".join(type(hasher).__name__ for hasher in hashers)
+    _log_startup_warning(
+        "verify_only_hashers_configured",
+        f"JAFAAL accepts password hashes from other schemes ({names}) and upgrades each to Argon2id on "
+        "that user's next successful login. Remove PasswordSettings.verify_only_hashers once "
+        "jafaal.maintenance.count_non_argon2_password_hashes(db) returns 0; until then those hashes are "
+        "only as strong as their scheme (bcrypt, for one, ignores everything after 72 bytes).",
+    )
 
 
 def _warn_on_symmetric_signing() -> None:

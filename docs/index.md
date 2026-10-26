@@ -131,6 +131,7 @@ you use:
 pip install 'jafaal[mfa]'        # TOTP MFA (pyotp) + QR provisioning (qrcode)
 pip install 'jafaal[webauthn]'   # passkeys / WebAuthn (py_webauthn)
 pip install 'jafaal[sso]'        # OpenID Connect identity providers (authlib)
+pip install 'jafaal[bcrypt]'     # verify-only bcrypt hashes, for migrating into JAFAAL
 pip install 'jafaal[redis]'      # distributed StateStore adapter (redis)
 pip install 'jafaal[migrations]' # packaged Alembic revisions
 pip install 'jafaal[all]'        # everything

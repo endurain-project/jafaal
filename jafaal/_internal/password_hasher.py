@@ -118,6 +118,8 @@ class PasswordHasher:
     def __init__(
         self,
         hasher: (Argon2Hasher | Iterable[object] | PasswordHash | None) = None,
+        *,
+        verify_unnormalized_input: bool = False,
     ):
         """
         Initialize the password hasher configuration.
@@ -128,6 +130,10 @@ class PasswordHasher:
                 - PasswordHash: Uses the provided PasswordHash instance.
                 - Argon2Hasher: Uses the single hasher instance.
                 - Iterable: Uses a list of hasher instances.
+            verify_unnormalized_input: When ``True``, a password that fails
+                verification in NFC form is retried once with the raw input
+                (for hashes made by a system that did not normalize). See
+                :attr:`~jafaal.settings.PasswordSettings.verify_unnormalized_input`.
         Raises:
             TypeError: If the provided hasher is not of a supported type.
         """
@@ -149,6 +155,8 @@ class PasswordHasher:
                 f"Unsupported hasher type: {type(hasher).__name__}. "
                 "Must be Argon2Hasher, Iterable, PasswordHash, or None."
             )
+
+        self._verify_unnormalized_input = verify_unnormalized_input
 
         # Pre-compute the dummy hash now so dummy_verify() costs exactly one
         # verify on every call — including the first. Otherwise the first
@@ -184,7 +192,25 @@ class PasswordHasher:
         Returns:
             bool: True if the plain password matches the hashed password, False otherwise.
         """
-        return self._password_hash.verify(normalize_password(plain_password), hashed_password)
+        return self._verify_with_raw_retry(plain_password, hashed_password)[0]
+
+    def _verify_with_raw_retry(self, plain_password: str, hashed_password: str) -> tuple[bool, str | None]:
+        """Verify the NFC form, then (if enabled) the raw input, as one costed path.
+
+        With ``verify_unnormalized_input`` off this is one ``verify_and_update``.
+        With it on, a failure always pays for exactly two verifications — the
+        second runs even when the raw input equals its NFC form — so a failed
+        login for an ASCII password and for a non-ASCII one cost the same, and
+        :meth:`dummy_verify` matches. A raw-input success is re-hashed from the NFC
+        form so the stored hash is the one NFC input will verify against.
+        """
+        normalized = normalize_password(plain_password)
+        valid, updated = self._password_hash.verify_and_update(normalized, hashed_password)
+        if valid or not self._verify_unnormalized_input:
+            return valid, updated
+        if self._password_hash.verify(plain_password, hashed_password):
+            return True, self._password_hash.hash(normalized)
+        return False, None
 
     def verify_and_update(self, plain_password: str, hashed_password: str) -> tuple[bool, str | None]:
         """
@@ -199,7 +225,7 @@ class PasswordHasher:
             whether the password is correct, and the second element is the updated hash if
             the hash algorithm has changed or None otherwise.
         """
-        return self._password_hash.verify_and_update(normalize_password(plain_password), hashed_password)
+        return self._verify_with_raw_retry(plain_password, hashed_password)
 
     def dummy_verify(self) -> None:
         """Run a constant-time-equivalent password verify against a dummy hash.
@@ -221,7 +247,10 @@ class PasswordHasher:
         """
         # Verify a random string against the pre-computed dummy hash: it is
         # guaranteed to return False but performs the full Argon2 verify work.
-        self._password_hash.verify(secrets.token_urlsafe(32), self._dummy_hash)
+        candidate = secrets.token_urlsafe(32)
+        self._password_hash.verify(candidate, self._dummy_hash)
+        if self._verify_unnormalized_input:
+            self._password_hash.verify(candidate, self._dummy_hash)
 
     @staticmethod
     def generate_password(length: int = 8) -> str:
@@ -374,12 +403,20 @@ def get_password_hasher() -> PasswordHasher:
     generation = jafaal_settings.settings_generation()
     if _settings_password_hasher is None or _settings_password_hasher_generation != generation:
         settings = jafaal_settings.get_settings()
+        # Argon2id first: pwdlib hashes with the first hasher only, and upgrades a
+        # hash verified by any later one on the next ``verify_and_update``.
         _settings_password_hasher = PasswordHasher(
-            hasher=Argon2Hasher(
-                time_cost=settings.passwords.argon2_time_cost,
-                memory_cost=settings.passwords.argon2_memory_cost,
-                parallelism=settings.passwords.argon2_parallelism,
-            )
+            hasher=PasswordHash(
+                [
+                    Argon2Hasher(
+                        time_cost=settings.passwords.argon2_time_cost,
+                        memory_cost=settings.passwords.argon2_memory_cost,
+                        parallelism=settings.passwords.argon2_parallelism,
+                    ),
+                    *settings.passwords.verify_only_hashers,
+                ]
+            ),
+            verify_unnormalized_input=settings.passwords.verify_unnormalized_input,
         )
         _settings_password_hasher_generation = generation
     return _settings_password_hasher

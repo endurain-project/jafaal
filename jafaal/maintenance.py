@@ -32,8 +32,10 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import jafaal._internal.security_stores as jafaal_security_stores
+import jafaal.credentials.crud as jafaal_credentials_crud
 from jafaal.identity_providers.link_tokens.utils import delete_idp_link_expired_tokens_from_db
 from jafaal.oauth_state.utils import delete_expired_oauth_states_from_db
 from jafaal.password_reset_tokens.utils import (
@@ -45,6 +47,29 @@ from jafaal.sign_up_tokens.utils import (
     delete_invalid_tokens_from_db as delete_invalid_sign_up_tokens_from_db,
 )
 
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
+
+def count_non_argon2_password_hashes(db: Session) -> int:
+    """Count stored password hashes that are not Argon2id.
+
+    For a host that adopted JAFAAL with
+    :attr:`~jafaal.settings.PasswordSettings.verify_only_hashers`: each such hash
+    is upgraded on its owner's next successful login, so this reaches ``0`` once
+    every active user has signed in (accounts that never do keep their old hash).
+    Remove the verify-only hashers when it is, or when you are willing to make the
+    remaining users reset their password.
+
+    Args:
+        db: SQLAlchemy database session.
+
+    Returns:
+        The number of credentials whose hash is not Argon2id.
+    """
+    return jafaal_credentials_crud.count_non_argon2id_hashes(db)
+
+
 __all__ = [
     "MAINTENANCE_TASKS",
     "SCHEDULER_TICK_SECONDS",
@@ -52,6 +77,7 @@ __all__ = [
     "cleanup_expired_pending_mfa_logins",
     "cleanup_expired_rotated_tokens",
     "cleanup_idle_sessions",
+    "count_non_argon2_password_hashes",
     "delete_expired_oauth_states_from_db",
     "delete_idp_link_expired_tokens_from_db",
     "delete_invalid_password_reset_tokens_from_db",
